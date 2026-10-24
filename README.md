@@ -1,6 +1,6 @@
-# 篮球少女 OK（ok-hackingGirls）
+# ok-hacking
 
-基于 [ok-script](https://github.com/ok-oldking/ok-script) 的《篮球少女：飞跃巅峰》Windows 客户端自动化项目。
+《篮球少女：飞跃巅峰》Windows 客户端自动化（基于 ok-script）。
 
 ## 当前状态
 
@@ -19,10 +19,10 @@
 ## 环境
 
 - Python 3.12
-- 项目路径：`D:\workspace\ok-hackingGirls`
+- 项目路径：`D:\workspace\ok-hacking`
 
 ```powershell
-cd D:\workspace\ok-hackingGirls
+cd D:\workspace\ok-hacking
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --index-url https://pypi.org/simple/ --no-deps -r requirements.txt
 ```
@@ -34,8 +34,8 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe main_debug.py
 
 # 管理员（能操作游戏）
-Start-Process -FilePath "D:\workspace\ok-hackingGirls\.venv\Scripts\python.exe" `
-  -ArgumentList "main_debug.py" -WorkingDirectory "D:\workspace\ok-hackingGirls" -Verb RunAs
+Start-Process -FilePath "D:\workspace\ok-hacking\.venv\Scripts\python.exe" `
+  -ArgumentList "main_debug.py" -WorkingDirectory "D:\workspace\ok-hacking" -Verb RunAs
 ```
 
 首次启动会初始化 OCR 模型，需要等待一会儿。

@@ -1,66 +1,36 @@
-# ok-script-app
+# ok-hacking
 
 English | [中文](README.md)
 
-ok-script-app is a Python automation project template built on [ok-script](https://github.com/ok-oldking/ok-script). It supports GUI automation apps for native Windows games, Android emulators, and browser games.
+Automation for the Windows client of **Basketball Girls: Leap to the Top** (篮球少女：飞跃巅峰), built on [ok-script](https://github.com/ok-oldking/ok-script).
 
-The template includes task examples, OCR, template matching, configuration widgets, tests, i18n, EXE packaging, and update/release configuration. It is a starter project and feature demo, not a finished automation tool for a specific game.
+## Status
 
-## Documentation
+Work in progress. The ok-script scaffold runs, the game window is detected (`k3_windows_ob.exe` / `UnityWndClass` / 1920x1080), and capture works.
 
-The complete documentation is organized as an MkDocs site:
+## Hard constraints (measured, not assumed)
 
-- [Documentation home](docs/en/index.md)
-- [Quick start](docs/en/getting-started.md)
-- [App and runtime target configuration](docs/en/configuration.md)
-- [Task development](docs/en/tasks.md)
-- [Packaging and release](docs/en/release.md)
-- [Build the documentation site](docs/en/documentation.md)
-- [中文文档](docs/index.md)
+1. **Run as administrator.** The game process is elevated; a non-elevated process cannot post input to it (`PostMessage` returns access denied).
+2. **ASCII-only install path.** ok-script refuses non-ASCII paths.
+3. **The game window must stay visible.** When the window is fully occluded or minimized, WGC stops delivering frames, so the bot has nothing to work with.
 
-## Quick Preview
+## Run
 
 ```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-$PypiIndex = "https://pypi.org/simple/"
-python -m pip install --index-url $PypiIndex --upgrade pip
-python -m pip install --index-url $PypiIndex --no-deps --upgrade -r requirements.txt
-python main_debug.py
+cd D:\workspace\ok-hacking
+Start-Process -FilePath "D:\workspace\ok-hacking\.venv\Scripts\python.exe" `
+  -ArgumentList "main_debug.py" -WorkingDirectory "D:\workspace\ok-hacking" -Verb RunAs
 ```
 
-Direct dependencies are managed in `pyproject.toml`. `requirements.txt` is the
-compiled Qt profile and `requirements-web.txt` is the compiled web profile; do
-not edit these generated lock files directly. For the web profile, replace the
-dependency and launch commands above with `requirements-web.txt` and
-`python web_main_debug.py`, respectively. The official PyPI index URL for pip
-must include `/simple/`; `https://pypi.org/` is not a valid package index URL.
+## Layout
 
-See the [Quick start](docs/en/getting-started.md) for repository initialization, runtime target configuration, the first task, and tag-based packaging.
+| Path | Purpose |
+| --- | --- |
+| `src/config.py` | Window, capture/interaction backend, task registration |
+| `src/tasks/AutoBattleTask.py` | Background combat task (TriggerTask) |
+| `src/tasks/InputTestTask.py` | Input self-test (click + frame diff) |
+| `tools/wgc_capture.py` | Standalone frame grabber (works while occluded) |
 
-## Build the Documentation Site
+## License
 
-```powershell
-python -m pip install --index-url https://pypi.org/simple/ -r requirements-docs.txt
-python -m mkdocs serve
-```
-
-Open `http://127.0.0.1:8000/` to preview the site. Build static HTML with:
-
-```powershell
-python -m mkdocs build --strict
-```
-
-The output is written to `site/`. `.github/workflows/docs.yml` can publish it automatically to GitHub Pages; see the [documentation-site guide](docs/en/documentation.md) for setup.
-
-## Community
-
-- QQ user group: `1097603920`
-- QQ developer group: `938132715`
-- [Discord](https://discord.gg/vVyCatEBgA)
-
-## Credits
-
-- [ok-script](https://github.com/ok-oldking/ok-script)
-- [OnnxOCR](https://github.com/ok-oldking/OnnxOCR)
-- [PyQt-Fluent-Widgets](https://github.com/zhiyiYo/PyQt-Fluent-Widgets)
+ok-script is AGPL-3.0. Automating an online game may violate its terms of service.

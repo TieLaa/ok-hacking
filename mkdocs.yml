@@ -1,7 +1,7 @@
-site_name: ok-script-app
-site_description: Build Windows, Android emulator, and browser automation apps with ok-script.
-repo_name: ok-oldking/ok-script-app
-repo_url: https://github.com/ok-oldking/ok-script-app
+site_name: ok-hacking
+site_description: ok-hacking —— 篮球少女：飞跃巅峰 自动化
+repo_name: ok-hacking
+repo_url: https://github.com/
 edit_uri: edit/master/docs/
 
 docs_dir: docs
