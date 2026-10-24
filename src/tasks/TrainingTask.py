@@ -20,12 +20,14 @@ from ok import ConfigOption  # noqa: F401  (保留给全局配置扩展)
 from src.tasks.BaseGirlsTask import BaseGirlsTask
 from src.tasks.ui import Defs
 
-# 流派 → 周末去哪（按优先级）
+# 流派 → 周末去哪（按优先级，每天一个）
+# 注意顺序：步行街扭蛋「消耗所有精力」，公园野餐「精力++」，
+# 所以先扭蛋再野餐，相当于白拿 +48 属性；反过来就把回复浪费了。
 STYLE_PLACES = {
-    "训练流": ["公园", "餐厅", "游戏厅", "步行街"],   # 体力优先，保证训练不断
-    "商店流": ["餐厅", "步行街", "公园", "游戏厅"],   # 打工赚钱 → 商店消费
-    "扭蛋流": ["步行街", "公园", "餐厅", "游戏厅"],   # 扭蛋
-    "小游戏流": ["游戏厅", "公园", "餐厅", "步行街"],  # 小游戏
+    "训练流": ["步行街", "公园"],
+    "扭蛋流": ["步行街", "公园"],
+    "商店流": ["餐厅", "公园"],
+    # 游戏厅的小游戏需要实时打篮球/拼图，OCR 跟不上，这个流派不做了
 }
 
 
@@ -40,6 +42,9 @@ class TrainingTask(BaseGirlsTask):
             "训练科目优先级": ["投射", "防守", "弹跳", "运控", "体能", "意识"],
             "失败率上限(%)": 50,
             "失败率超限改休息": True,
+            "餐厅选项": "当服务员",
+            "公园选项": "野餐",
+            "扭蛋优先属性": ["投射", "体能", "运控"],
             "比赛日处理": "自动（先跳过，跳不了就进比赛加速）",
             "体力低于多少改休息": 30,
             "单局最大操作数": 400,
@@ -48,6 +53,8 @@ class TrainingTask(BaseGirlsTask):
         })
         self.config_type.update({
             "流派": {"type": "drop_down", "options": list(STYLE_PLACES.keys())},
+            "餐厅选项": {"type": "drop_down", "options": ["当服务员", "桌游GM"]},
+            "公园选项": {"type": "drop_down", "options": ["野餐", "划船", "散步"]},
             "比赛日处理": {
                 "type": "drop_down",
                 "options": ["自动（先跳过，跳不了就进比赛加速）", "总是跳过", "总是进比赛（外部战斗脚本）"],
@@ -56,6 +63,9 @@ class TrainingTask(BaseGirlsTask):
         self.config_description.update({
             "训练科目优先级": "按顺序候选；失败率超上限就自动换下一个",
             "失败率上限(%)": "当前科目失败率高于这个值就换科目，全部超限才休息",
+            "餐厅选项": "当服务员 = 零用钱++；桌游GM = 零用钱+",
+            "公园选项": "野餐 = 精力++；划船 = 属性+；散步 = 零用钱+",
+            "扭蛋优先属性": "步行街扭蛋三选一，按顺序找第一个存在的（会消耗所有精力）",
             "比赛日处理": "没打赢过的比赛不能跳过，只能进比赛后点左下角快进",
             "快进重复间隔(秒)": "快进点一次管一段时间，1 秒补点一次即可；0 = 只点一次",
             "单局最大操作数": "防止卡死无限点，超过后自动停止",
@@ -232,6 +242,46 @@ class TrainingTask(BaseGirlsTask):
         self.log_info(f"结算页「{target.name}」")
         return True
 
+    def choose_option(self, texts, names, after_sleep=0.9):
+        """在周末子页面的选项区里选一个，并处理可能的「确定」。"""
+        opts = self.texts_in_region(texts, "weekend_options")
+        target = self.match_text(opts, names)
+        if target is None:
+            return False
+        self.click_box(target, after_sleep=after_sleep)
+        self.log_info(f"选择「{target.name}」")
+        confirm = self.match_text(self._ocr_region("confirm_bar"), Defs.CONFIRM_TEXTS)
+        if confirm is not None:
+            self.click_box(confirm, after_sleep=1.2)
+            self.log_info("确定")
+        return True
+
+    def handle_restaurant(self, texts):
+        """餐厅内页：桌游GM（零用钱+）/ 当服务员（零用钱++）。"""
+        if self.match_text(texts, Defs.RESTAURANT_TITLE) is None:
+            return False
+        pref = self.config.get("餐厅选项", "当服务员")
+        order = (pref,) + tuple(x for x in Defs.RESTAURANT_OPTIONS if x != pref)
+        return self.choose_option(texts, order)
+
+    def handle_park(self, texts):
+        """公园内页：散步（零用钱+）/ 划船（属性+）/ 野餐（精力++）。"""
+        if self.match_text(texts, Defs.PARK_TITLE) is None:
+            return False
+        pref = self.config.get("公园选项", "野餐")
+        order = (pref,) + tuple(x for x in Defs.PARK_OPTIONS if x != pref)
+        return self.choose_option(texts, order)
+
+    def handle_street(self, texts):
+        """步行街扭蛋：三选一（会消耗所有精力），选完按确定。"""
+        if self.match_text(texts, Defs.STREET_TITLE) is None:
+            return False
+        names = []
+        for attr in self.config.get("扭蛋优先属性", list(Defs.GACHA_OPTIONS)):
+            names.append(f"{attr}专注")
+            names.append(attr)
+        return self.choose_option(texts, tuple(names), after_sleep=1.0)
+
     def handle_weekend(self, texts):
         """周末地图：按流派优先级选地点。"""
         if not self.match_text(texts, Defs.WEEKEND_PLACES):
@@ -353,6 +403,9 @@ class TrainingTask(BaseGirlsTask):
         handle_in_match,
         handle_prepare,
         handle_result,
+        handle_restaurant,
+        handle_park,
+        handle_street,
         handle_weekend,
         handle_subject_select,
         handle_vacation,
