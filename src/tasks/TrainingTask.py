@@ -27,7 +27,9 @@ STYLE_PLACES = {
     "训练流": ["步行街", "公园"],
     "扭蛋流": ["步行街", "公园"],
     "商店流": ["餐厅", "公园"],
-    # 游戏厅的小游戏需要实时打篮球/拼图，OCR 跟不上，这个流派不做了
+    # 游戏厅只在「强化」里解锁了「可跳过已三星小游戏」之后才有意义，
+    # 需要配置里显式打开「允许进游戏厅」；没三星的游戏仍需要真人打。
+    "小游戏流": ["游戏厅", "公园"],
 }
 
 
@@ -45,6 +47,7 @@ class TrainingTask(BaseGirlsTask):
             "餐厅选项": "当服务员",
             "公园选项": "野餐",
             "扭蛋优先属性": ["投射", "体能", "运控"],
+            "允许进游戏厅": False,
             "比赛日处理": "自动（先跳过，跳不了就进比赛加速）",
             "体力低于多少改休息": 30,
             "单局最大操作数": 400,
@@ -84,7 +87,10 @@ class TrainingTask(BaseGirlsTask):
         return self.config.get("流派", "训练流")
 
     def weekend_priority(self):
-        return STYLE_PLACES.get(self.style, STYLE_PLACES["训练流"])
+        places = list(STYLE_PLACES.get(self.style, STYLE_PLACES["训练流"]))
+        if not self.config.get("允许进游戏厅", False):
+            places = [p for p in places if p != "游戏厅"]
+        return places or ["公园"]
 
     def low_stamina(self, stamina_state):
         current = stamina_state.get("stamina")
@@ -282,6 +288,29 @@ class TrainingTask(BaseGirlsTask):
             names.append(attr)
         return self.choose_option(texts, tuple(names), after_sleep=1.0)
 
+    def handle_arcade(self, texts):
+        """游戏厅：只处理「已三星 → 可跳过」的小游戏。
+
+        「强化」里解锁后，游戏厅可以跳过已三星的游戏，但仍会触发地狱游戏。
+        没三星的小游戏需要真人打（打篮球/拼图），OCR 跟不上，遇到就立刻退出，
+        避免白费一个周末日。
+        """
+        if self.match_text(texts, Defs.ARCADE_TITLE) is None:
+            return False
+        skip = self.match_text(self.texts_in_region(texts, "weekend_options"), Defs.ARCADE_SKIP)
+        if skip is None:
+            skip = self.match_text(texts, Defs.ARCADE_SKIP)
+        if skip is not None:
+            self.click_box(skip, after_sleep=1.0)
+            confirm = self.match_text(self._ocr_region("confirm_bar"), Defs.CONFIRM_TEXTS)
+            if confirm is not None:
+                self.click_box(confirm, after_sleep=1.2)
+            self.log_info("游戏厅：跳过已三星小游戏")
+            return True
+        self.log_warning("游戏厅：没有可跳过的小游戏（未三星），退出")
+        self.back(after_sleep=1.2)
+        return True
+
     def handle_weekend(self, texts):
         """周末地图：按流派优先级选地点。"""
         if not self.match_text(texts, Defs.WEEKEND_PLACES):
@@ -406,6 +435,7 @@ class TrainingTask(BaseGirlsTask):
         handle_restaurant,
         handle_park,
         handle_street,
+        handle_arcade,
         handle_weekend,
         handle_subject_select,
         handle_vacation,
