@@ -1,0 +1,114 @@
+# ok-hacking 技术方案
+
+> 基于 ok-script 生态 8 个成熟项目的源码调研（见 `D:\workspace\_okrefs\`）＋ 本机对《篮球少女：飞跃巅峰》的实测结论。
+
+## 一、三条已成事实的边界
+
+| 事实 | 证据 | 影响 |
+| --- | --- | --- |
+| 游戏进程是管理员权限 | 非管理员 `OpenProcess` 失败、`PostMessage` 返回「拒绝访问」 | 本程序必须管理员启动 |
+| 窗口完全遮挡/最小化时没有新帧 | 日志连续 `no frame for 10 sec`，恢复可见后立刻出帧 | 「完全后台」不成立，窗口至少保持可见 |
+| 裸 `PostMessage` 点击只在游戏前台时成功过 | 大厅→训练界面成功 1 次；后台点击 4 次均无反应 | 输入层需要 Unity 专用处理 |
+
+## 二、四层架构
+
+```
+L1 接入层   窗口识别 / 抓帧 / 输入        ← 已落地，待实测
+L2 界面层   单帧单动作 + 优先级链          ← 下一步
+L3 流程层   比赛生命周期 + 一条龙 Runner    ← 之后
+L4 对抗层   比赛内实时操作                 ← 最后，且取决于游戏是否有内置托管
+```
+
+### L1 接入层（已完成 80%）
+
+- 抓帧：`WGC` → `BitBlt_RenderFull` 兜底。
+- 输入：`src/interaction/GirlsInteraction.py`，继承框架 `PostMessageInteraction`，做三件事：
+  1. `WM_ACTIVATE(WA_ACTIVE)` 伪激活（不抢前台焦点）；
+  2. `SetCursorPos` 把系统光标移到目标点，再 `PostMessage(WM_LBUTTONDOWN/UP)`，最后还原光标；
+  3. 检测并解除 Unity 的 `ClipCursor` 光标锁定。
+
+  这套写法直接对应 ok-end-field 的 `EfInteraction`（同为 Unity 客户端），是目前证据最充分的方案。
+- 键盘：先走 `PostMessage`；无效则改为「临时置顶 + pynput 真实按键」，参考 ok-end-field `send_key_down`。
+
+**判定方式**：跑 `src/tasks/InputTestTask.py`，它点一次指定坐标并对比前后帧差异。
+
+| 结果 | 结论 |
+| --- | --- |
+| 差异 > 阈值 | 输入通道可用，进入 L2 |
+| 差异 ≈ 0 且游戏在前台 | 坐标或目标按钮错，换目标重测 |
+| 前台有效、后台无效 | 降级为「伪后台」：临时置顶后输入，再还原 |
+| 全部无效 | 换 `Pynput`（管理员下可用），接受窗口必须前台 |
+
+### L2 界面层
+
+抄 ok-kes 的结构：
+
+```python
+def run(self):
+    self.all_texts = _simplify_texts(self.ocr())      # 每拍只 OCR 一次
+    for handle_page in PAGE_HANDLERS:                  # 顺序即优先级
+        if handle_page(self):
+            return                                     # 第一个命中者消费本拍
+```
+
+- 全局保险排最前：自动停止、卡死兜底、关弹窗、退出未知页面。
+- 状态判定优先级：**颜色 > 模板（限定 ROI）> OCR > YOLO**。颜色抗分辨率、比模板快；模板必须传 `box`；OCR 只用于数字与文案。
+- 每个界面判定给三态（True / False / None）：`None` 表示「看不见/不确定」，调用方必须区分「没开」和「看不见」。
+- 判据与坐标集中在一个 `Defs.py`（label + 搜索框 + 坐标，1920x1080 基准），不要在任务里散落硬编码。
+
+### L3 流程层
+
+- 比赛生命周期：`MATCH_START → LOADING → PLAY → RESULT → REWARD → 下一局`。
+- 一条龙用 Runner 模式（ok-gf2 / ok-end-field）：任务清单 + 开关谓词 + 四态汇总（success / failed / skipped / 待核查）；关键任务失败中止本账号，其余失败截图后继续。
+- 每次点击都写成「点到出结果为止」：`wait_until(条件, post_action=点击, time_out=...)`，因为点击丢失是常态。
+
+### L4 对抗层
+
+只有确认游戏没有内置托管才做。
+
+- `TriggerTask` + `trigger_interval = 0.05`（20Hz）。
+- `run()` 里：判「人类接管 / 暂停 / 不在比赛」→ 直接 return；否则把状态快照成 dict，交给 `@classmethod select_action(snapshot)` 纯函数决策，再执行。
+- 每帧最多一个动作，避免同帧多键冲突。
+- 结束判定要「连续两次确认 + 演出保护窗」（进球回放、暂停、换人都会让 HUD 短暂消失）。
+
+## 三、关键设计决策
+
+| 决策 | 选择 | 理由 |
+| --- | --- | --- |
+| 输入 | 伪后台（动光标，不抢焦点） | Unity 读 `GetCursorPos`，不动光标点不中 |
+| 键盘 | PostMessage 优先，失败改前台 pynput | ok-end-field 实测键盘必须前台 |
+| 降级顺序 | GirlsInteraction → PostMessage → Pynput | 从「不打扰用户」到「必须前台」 |
+| 识别 | 颜色 → 模板(ROI) → OCR → YOLO | 成本与稳定性排序，8 个项目一致 |
+| 节奏 | 单帧单动作 | 避免同帧多动作互相干扰 |
+| 错误 | 三态 + 有限重试 + 卡死兜底 | 无限重试会被弹窗卡死（ok-wuthering-waves #1649） |
+| 测试 | 截图回放（`TaskTestCase.set_image`） | 不开游戏就能回归识别逻辑 |
+
+## 四、目录规划
+
+```
+src/
+├─ config.py                    # 唯一注册中心（窗口/截图/输入/任务）
+├─ interaction/
+│  └─ GirlsInteraction.py       # Unity 输入后端（已完成）
+├─ tasks/
+│  ├─ BaseGirlsTask.py          # 基类：ensure_main / is_main / 等待与重试
+│  ├─ ui/Defs.py                # 判据 label + 搜索框 + 坐标（1920x1080 基准）
+│  ├─ MatchTask.py              # 比赛生命周期（L3）
+│  ├─ InputTestTask.py          # 输入自检（已完成）
+│  ├─ AutoBattleTask.py         # 实时战斗骨架（L4）
+│  └─ trigger/                  # 常驻触发任务
+└─ tools/wgc_capture.py         # 独立抓帧工具（已完成）
+```
+
+## 五、实施顺序
+
+1. **P0 输入验证**（半小时）：跑 `InputTestTask`，按上表判定。
+2. **P1 界面地图**（1 天）：截大厅/训练/赛事/编队/比赛/结算 6 张图，建 `Defs.py`，写 `is_main()` 等 6 个判据，每个用截图回放测试。
+3. **P2 比赛闭环**（2 天）：能从大厅自动开一局、打完、领奖、再来一局。**到这一步，如果游戏有内置托管，需求已经完成。**
+4. **P3 实时操作**（按需）：只有没有内置托管才做，先做「暂停/换人/领奖」等低频操作，最后才碰移动与投篮。
+
+## 六、风险
+
+- **最大分叉**：游戏是否有「自动比赛 / 托管」。有 → 工作量减少约 70%；没有 → 实时对抗要自己做视觉与策略，且 3D 场景的后台输入大概率失效（ok-gf2 文档明确：3D 自由场景只认真实输入）。
+- **封号风险**：游戏自动化通常违反用户协议，是否上号自行评估。
+- **维护成本**：模板与坐标随游戏 UI 更新而失效，必须靠截图回放测试兜住。
