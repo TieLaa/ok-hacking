@@ -27,10 +27,12 @@ class InputTestTask(BaseGirlsTask):
             "差异阈值(%)": 1.0,
             "坐标模式X": 0,
             "坐标模式Y": 0,
+            "打印所有OCR": True,
         })
         self.config_description.update({
             "目标文字": "留空则改用下面的坐标点击；推荐用文字，能同时验证 OCR 和点击",
             "坐标模式X": "只在目标文字为空时生效（客户区像素坐标）",
+            "打印所有OCR": "把这一帧识别到的所有文字和它们的框打到日志，用来核对坐标",
         })
 
     def run(self):
@@ -50,7 +52,11 @@ class InputTestTask(BaseGirlsTask):
             pass
 
         if text:
-            target = self.find_text(text)
+            texts = self._ocr_region()
+            if self.config.get("打印所有OCR", True):
+                for t in sorted(texts, key=lambda b: (b.y, b.x)):
+                    self.log_info(f"OCR: 「{t.name}」 @({t.x},{t.y},{t.width},{t.height})")
+            target = self.match_text(texts, text)
             if target is None:
                 self.log_info(f"没找到文字「{text}」，检查游戏是否停在对应界面", notify=True)
                 self.screenshot("input_test_not_found", before)

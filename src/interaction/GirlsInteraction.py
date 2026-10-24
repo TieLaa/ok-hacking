@@ -71,7 +71,9 @@ class GirlsInteraction(BaseInteraction):
         time.sleep(FOREGROUND_WAIT)
         ok = win32gui.GetForegroundWindow() == hwnd
         if not ok:
-            logger.warning("游戏未能置前，点击可能落空")
+            logger.warning(f"游戏未能置前（目标 {hwnd}，当前前台 {win32gui.GetForegroundWindow()}），点击可能落空")
+        else:
+            logger.info(f"游戏已置前 {hwnd}")
         return ok
 
     def is_foreground(self):
