@@ -66,3 +66,14 @@ def region(name):
     if name not in REGIONS:
         raise KeyError(f"未知区域: {name}")
     return REGIONS[name]
+
+
+# ---------- 已实测验证的点击坐标（客户区 1920x1080）----------
+# 全部用 tools/click.py 实际点过、确认能进下一界面。
+VERIFIED_COORDS = {
+    "back": (70, 55),            # 左上角返回 <<（大厅/玩法目录/训练剧本通用）
+    "lobby_training": (1638, 902),   # 大厅 右下「训练」→ 训练剧本
+    "lobby_match": (1527, 750),      # 大厅「赛事」→ 玩法目录
+    "training_start": (1440, 855),   # 训练剧本页 右下「启程」→ 下一个界面
+}
+

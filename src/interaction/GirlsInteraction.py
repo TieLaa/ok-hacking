@@ -128,6 +128,9 @@ class GirlsInteraction(BaseInteraction):
         self.ensure_foreground()
         if move:
             self._move_cursor(x, y)
+        # 按住时间不能太短：实测「启程」这类按钮 70ms 的点击会被丢弃，
+        # 人手点击一般在 80~150ms，这里统一抬到 100ms 起步。
+        down_time = max(float(down_time), 0.10)
         down, up = self._EVENTS.get(key, self._EVENTS["left"])
         try:
             win32api.mouse_event(down, 0, 0, 0, 0)
