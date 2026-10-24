@@ -23,6 +23,7 @@ class InputTestTask(BaseGirlsTask):
         self.description = "OCR 找到指定文字并点击，对比前后画面，验证输入链路"
         self.default_config.update({
             "目标文字": "赛事",
+            "期望出现文字": "玩法目录",
             "点击后等待(秒)": 1.5,
             "差异阈值(%)": 1.0,
             "坐标模式X": 0,
@@ -76,6 +77,17 @@ class InputTestTask(BaseGirlsTask):
             self.log_info("点击后拿不到画面", notify=True)
             return False
         self.screenshot("input_test_after", after)
+
+        # 首选判据：点完之后**该出现的文字**出现了（3D 大厅一直在动，靠像素差会误判）
+        expect = str(self.config.get("期望出现文字", "")).strip()
+        if expect:
+            if self.find_text(expect) is not None:
+                self.info_set("输入测试", f"生效（出现「{expect}」）")
+                self.log_info(f"点击生效：界面出现「{expect}」", notify=True)
+                return True
+            self.info_set("输入测试", "无效（未出现预期文字）")
+            self.log_info(f"点击无效：没等到「{expect}」", notify=True)
+            return False
 
         if before.shape != after.shape:
             self.log_info("分辨率变化，点击大概率生效", notify=True)
