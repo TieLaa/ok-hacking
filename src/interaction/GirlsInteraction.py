@@ -1,95 +1,94 @@
-"""Unity 客户端输入后端。
+"""Unity 客户端输入后端（真实输入版）。
 
-为什么要自定义而不是直接用框架的 PostMessage：
+2026-10-25 实测结论（《篮球少女：飞跃巅峰》Windows 客户端）：
 
-1. **命中判定读的是系统光标**。Unity 处理 WM_LBUTTONDOWN 时，很多版本不看
-   lParam 里的客户区坐标，而是读 `GetCursorPos()`。只发消息不移动光标，
-   点击就会落在用户鼠标实际所在的位置（游戏里表现为「点了没反应」或点错）。
-   参考实现：ok-end-field `src/interaction/EfInteraction.py`、ok-nte
-   `src/interaction/NTEInteraction.py`，两者都是「SetCursorPos → PostMessage → 还原光标」。
-2. **窗口要先「激活」一次**。后台窗口不接鼠标消息；发一条 WM_ACTIVATE(WA_ACTIVE)
-   即可让 Unity 认为自己是活动窗口，不需要真的抢前台。
-3. **光标必须还原**。否则脚本跑完会把用户的鼠标丢在游戏里的某个坐标上。
+1. `PostMessage(WM_LBUTTONDOWN/UP)` **完全无效**：调用返回成功，游戏毫无反应。
+   试过的组合：裸消息 / 加 WM_ACTIVATE / 同步移动光标 / 游戏前台，全部无效。
+2. 真实 `mouse_event(LEFTDOWN/LEFTUP)` **有效**：能点开菜单。
+3. 因此坐标不能靠猜像素——一律用 OCR/模板拿到的框换算出屏幕坐标再点。
 
-所以这里的 click 是「真光标 + 假消息」的混合模式：不改前台焦点，但保证命中点正确。
+实现要点：
+- 点击前必须 `SetForegroundWindow`（游戏不在前台时真实点击会落到别的窗口）。
+- 点击前把光标移到目标并留一点时间，点完还原光标，避免打扰用户。
+- `mouse_down/mouse_up` 成对，异常也要抬起，否则会卡住鼠标键。
 """
 
-import ctypes
-import ctypes.wintypes
 import time
 
 import win32api
 import win32con
 import win32gui
 
-from ok.device.interaction_methods.post_message import PostMessageInteraction
+from ok.device.interaction_methods.base import BaseInteraction
+from ok.device.interaction_methods.keys import vk_key_dict
 from ok.util.logger import Logger
 
 logger = Logger.get_logger(__name__)
 
-CURSOR_SETTLE = 0.012  # 移动光标后等待系统/引擎采样（实测 5ms 偶发丢点，12ms 稳定）
+CURSOR_SETTLE = 0.12   # 光标到位后等待引擎采样（实测 20ms 偶发丢点，120ms 稳定）
+FOREGROUND_WAIT = 0.35
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008
+MOUSEEVENTF_RIGHTUP = 0x0010
+MOUSEEVENTF_MIDDLEDOWN = 0x0020
+MOUSEEVENTF_MIDDLEUP = 0x0040
 
 
-class GirlsInteraction(PostMessageInteraction):
-    """PostMessage + 真实光标定位，适用于 Unity 窗口类游戏。"""
+class GirlsInteraction(BaseInteraction):
+    """真实鼠标 + 真实键盘，必要时要先把游戏窗口置前。"""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, capture, hwnd_window, foreground=True):
+        super().__init__(capture)
+        self.hwnd_window = hwnd_window
+        self.foreground = foreground
         self._saved_cursor = None
-        self._activated = False
+        self._down_pos = None
+        self._pressed_keys = {}
 
-    # ---------- 激活 ----------
+    # ---------- 窗口 ----------
 
-    def try_activate(self):
-        """只在需要时激活一次，且不改动真正的窗口焦点顺序。"""
+    @property
+    def hwnd(self):
+        return self.hwnd_window.top_hwnd or self.hwnd_window.hwnd
+
+    def ensure_foreground(self):
+        """把游戏窗口置前；已经是前台就直接返回。"""
         hwnd = self.hwnd
         if not hwnd:
-            return
+            return False
+        if win32gui.GetForegroundWindow() == hwnd:
+            return True
+        if not self.foreground:
+            return False
         try:
-            if win32gui.GetForegroundWindow() == hwnd:
-                self._activated = False
-                return
-            if not self._activated:
-                self._activated = True
-                self.post(win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
-                time.sleep(0.01)
-            self._unclip_cursor(hwnd)
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                time.sleep(0.2)
+            win32gui.SetForegroundWindow(hwnd)
         except Exception as e:
-            logger.warning(f"try_activate failed: {e}")
+            logger.warning(f"SetForegroundWindow failed: {e}")
+        time.sleep(FOREGROUND_WAIT)
+        ok = win32gui.GetForegroundWindow() == hwnd
+        if not ok:
+            logger.warning("游戏未能置前，点击可能落空")
+        return ok
 
-    @staticmethod
-    def _unclip_cursor(hwnd):
-        """Unity 3D 场景会把光标锁在窗口内（ClipCursor）。
-
-        后台点击时如果光标仍被裁剪，会被强行拉回游戏中心，命中点就偏了。
-        检测到裁剪就解除（参考 ok-end-field EfInteraction.try_unclip）。
-        """
-        try:
-            if win32gui.GetForegroundWindow() == hwnd:
-                return
-            rect = ctypes.wintypes.RECT()
-            ctypes.windll.user32.GetClipCursor(ctypes.byref(rect))
-            screen_w = win32api.GetSystemMetrics(0)
-            screen_h = win32api.GetSystemMetrics(1)
-            if (rect.right - rect.left) < screen_w or (rect.bottom - rect.top) < screen_h:
-                ctypes.windll.user32.ClipCursor(None)
-                logger.debug("cursor clip released")
-        except Exception:
-            pass
+    def is_foreground(self):
+        return win32gui.GetForegroundWindow() == self.hwnd
 
     # ---------- 光标 ----------
 
+    def _to_screen(self, x, y):
+        left, top = win32gui.ClientToScreen(self.hwnd, (int(x), int(y)))
+        return left, top
+
     def _move_cursor(self, x, y):
-        """把系统光标移到客户区坐标 (x, y)，返回是否移动过。"""
-        try:
-            abs_x, abs_y = self.capture.get_abs_cords(int(x), int(y))
-        except Exception as e:
-            logger.warning(f"get_abs_cords failed: {e}")
-            return False
         self._saved_cursor = win32api.GetCursorPos()
-        win32api.SetCursorPos((int(abs_x), int(abs_y)))
+        sx, sy = self._to_screen(x, y)
+        win32api.SetCursorPos((sx, sy))
         time.sleep(CURSOR_SETTLE)
-        return True
+        return sx, sy
 
     def _restore_cursor(self):
         if self._saved_cursor:
@@ -102,66 +101,103 @@ class GirlsInteraction(PostMessageInteraction):
 
     # ---------- 鼠标 ----------
 
-    def click(self, x=-1, y=-1, move_back=False, name=None, down_time=0.02, move=True, key="left"):
+    _EVENTS = {
+        "left": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+        "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+        "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
+    }
+
+    def click(self, x=-1, y=-1, move_back=False, name=None, down_time=0.03, move=True, key="left"):
         if x < 0 or y < 0:
             x = round(self.capture.width * 0.5)
             y = round(self.capture.height * 0.5)
 
-        self.try_activate()
-        moved = self._move_cursor(x, y) if move else False
-        lparam = win32api.MAKELONG(int(x), int(y))
-
-        buttons = {
-            "left": (win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, win32con.WM_LBUTTONUP),
-            "middle": (win32con.WM_MBUTTONDOWN, win32con.MK_MBUTTON, win32con.WM_MBUTTONUP),
-            "right": (win32con.WM_RBUTTONDOWN, win32con.MK_RBUTTON, win32con.WM_RBUTTONUP),
-        }
-        down, flag, up = buttons.get(key, buttons["left"])
-
+        self.ensure_foreground()
+        if move:
+            self._move_cursor(x, y)
+        down, up = self._EVENTS.get(key, self._EVENTS["left"])
         try:
-            # 先补一条移动消息，让引擎更新 hover 状态，再按下
-            self.post(win32con.WM_MOUSEMOVE, 0, lparam)
-            time.sleep(0.008)
-            self.post(down, flag, lparam)
+            win32api.mouse_event(down, 0, 0, 0, 0)
             time.sleep(down_time)
         finally:
-            # 无论按下是否抛异常，都必须抬起，否则会卡住鼠标键
-            self.post(up, 0, lparam)
-        if moved:
+            win32api.mouse_event(up, 0, 0, 0, 0)
+        if move:
             self._restore_cursor()
-        return True
 
     def mouse_down(self, x=-1, y=-1, name=None, key="left"):
         if x < 0 or y < 0:
             x = round(self.capture.width * 0.5)
             y = round(self.capture.height * 0.5)
-        self.try_activate()
+        self.ensure_foreground()
         self._move_cursor(x, y)
-        self._down_pos = win32api.MAKELONG(int(x), int(y))
-        action, flag = (
-            (win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON)
-            if key == "left"
-            else (win32con.WM_RBUTTONDOWN, win32con.MK_RBUTTON)
-        )
-        self.post(action, flag, self._down_pos)
+        self._down_key = key
+        win32api.mouse_event(self._EVENTS.get(key, self._EVENTS["left"])[0], 0, 0, 0, 0)
 
     def mouse_up(self, name=None, key="left"):
-        pos = getattr(self, "_down_pos", 0)
-        _, _, action = (
-            (0, 0, win32con.WM_LBUTTONUP) if key == "left" else (0, 0, win32con.WM_RBUTTONUP)
-        )
-        self.post(action, 0, pos)
+        key = getattr(self, "_down_key", key)
+        win32api.mouse_event(self._EVENTS.get(key, self._EVENTS["left"])[1], 0, 0, 0, 0)
         self._restore_cursor()
-        self._down_pos = 0
+
+    def scroll(self, x, y, scroll_amount):
+        self.ensure_foreground()
+        self._move_cursor(x, y)
+        win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0, int(scroll_amount) * 120, 0)
+        self._restore_cursor()
+
+    def move(self, x, y, down_btn=0):
+        self.ensure_foreground()
+        self._move_cursor(int(x), int(y))
+
+    def swipe(self, x1, y1, x2, y2, duration=0.3, settle_time=0):
+        """按住拖动（真实鼠标），用于列表/视角。"""
+        self.ensure_foreground()
+        self._saved_cursor = win32api.GetCursorPos()
+        sx, sy = self._to_screen(x1, y1)
+        win32api.SetCursorPos((sx, sy))
+        time.sleep(CURSOR_SETTLE)
+        win32api.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        steps = 12
+        try:
+            for i in range(1, steps + 1):
+                nx = int(x1 + (x2 - x1) * i / steps)
+                ny = int(y1 + (y2 - y1) * i / steps)
+                px, py = self._to_screen(nx, ny)
+                win32api.SetCursorPos((px, py))
+                time.sleep(max(duration, 0.05) / steps)
+        finally:
+            win32api.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            self._restore_cursor()
 
     # ---------- 键盘 ----------
 
-    def send_key(self, key, down_time=0.02, after_sleep=0):
-        """键盘仍走 PostMessage（Unity 对 WM_KEYDOWN 的接受度较高，且不抢焦点）。
+    def _vk(self, key):
+        name = str(key).upper()
+        if name in vk_key_dict:
+            return vk_key_dict[name]
+        return win32api.VkKeyScan(str(key)) & 0xFF
 
-        若实测无效，改成 ok-end-field 的做法：先激活窗口再用 pynput 真键盘。
-        """
-        self.try_activate()
-        super().send_key(key, down_time=down_time)
-        if after_sleep:
-            time.sleep(after_sleep)
+    def send_key_down(self, key):
+        self.ensure_foreground()
+        vk = self._vk(key)
+        win32api.keybd_event(vk, 0, 0, 0)
+        self._pressed_keys[str(key).lower()] = self._pressed_keys.get(str(key).lower(), 0) + 1
+
+    def send_key_up(self, key):
+        name = str(key).lower()
+        if self._pressed_keys.get(name, 0) <= 0:
+            return
+        self._pressed_keys[name] -= 1
+        vk = self._vk(key)
+        win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
+
+    def send_key(self, key, down_time=0.02):
+        self.send_key_down(key)
+        time.sleep(down_time)
+        self.send_key_up(key)
+
+    def input_text(self, text, **kwargs):
+        for ch in str(text):
+            vk = win32api.VkKeyScan(ch) & 0xFF
+            win32api.keybd_event(vk, 0, 0, 0)
+            time.sleep(0.01)
+            win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
