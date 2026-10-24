@@ -53,7 +53,12 @@ class GirlsInteraction(BaseInteraction):
         return self.hwnd_window.top_hwnd or self.hwnd_window.hwnd
 
     def ensure_foreground(self):
-        """把游戏窗口置前；已经是前台就直接返回。"""
+        """把游戏窗口真正置前。
+
+        Windows 默认禁止后台进程抢前台：`SetForegroundWindow` 会**静默失败**（返回成功但
+        窗口没上来），于是鼠标/键盘事件全打到别的窗口。实测这是本项目点击无效的真正原因。
+        标准绕过：先模拟按一下 Alt，让系统认为"用户有输入意图"，再置顶。
+        """
         hwnd = self.hwnd
         if not hwnd:
             return False
@@ -61,19 +66,25 @@ class GirlsInteraction(BaseInteraction):
             return True
         if not self.foreground:
             return False
+
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            time.sleep(0.2)
+
+        win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+        time.sleep(0.01)
         try:
-            if win32gui.IsIconic(hwnd):
-                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                time.sleep(0.2)
             win32gui.SetForegroundWindow(hwnd)
         except Exception as e:
             logger.warning(f"SetForegroundWindow failed: {e}")
+        finally:
+            # Alt 必须抬起，否则后续所有按键都会变成 Alt 组合键
+            win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
         time.sleep(FOREGROUND_WAIT)
+
         ok = win32gui.GetForegroundWindow() == hwnd
         if not ok:
             logger.warning(f"游戏未能置前（目标 {hwnd}，当前前台 {win32gui.GetForegroundWindow()}），点击可能落空")
-        else:
-            logger.info(f"游戏已置前 {hwnd}")
         return ok
 
     def is_foreground(self):
