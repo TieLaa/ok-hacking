@@ -37,12 +37,14 @@ class TrainingTask(BaseGirlsTask):
         self.description = "自动跑完一局养成：训练 / 周末活动 / 比赛日跳过，循环到赛季结束"
         self.default_config.update({
             "流派": "训练流",
-            "训练科目优先级": ["投射训练", "防守训练", "弹跳训练", "运控训练", "体能训练", "意识训练"],
+            "训练科目优先级": ["投射", "防守", "弹跳", "运控", "体能", "意识"],
+            "失败率上限(%)": 50,
+            "失败率超限改休息": True,
             "比赛日处理": "自动（先跳过，跳不了就进比赛加速）",
             "体力低于多少改休息": 30,
             "单局最大操作数": 400,
             "操作间隔(秒)": 0.8,
-            "快进重复间隔(秒)": 0,
+            "快进重复间隔(秒)": 1.0,
         })
         self.config_type.update({
             "流派": {"type": "drop_down", "options": list(STYLE_PLACES.keys())},
@@ -52,13 +54,17 @@ class TrainingTask(BaseGirlsTask):
             },
         })
         self.config_description.update({
-            "训练科目优先级": "按顺序找第一个可点的训练科目；体力不足时自动改休息",
-            "比赛日处理": "没打赢过的比赛不能跳过，只能进比赛后点左下角加速",
+            "训练科目优先级": "按顺序候选；失败率超上限就自动换下一个",
+            "失败率上限(%)": "当前科目失败率高于这个值就换科目，全部超限才休息",
+            "比赛日处理": "没打赢过的比赛不能跳过，只能进比赛后点左下角快进",
+            "快进重复间隔(秒)": "快进点一次管一段时间，1 秒补点一次即可；0 = 只点一次",
             "单局最大操作数": "防止卡死无限点，超过后自动停止",
         })
         self._steps = 0
         self._skip_tries = 0
         self._last_state = None
+        self._picked_subject = False
+        self._picked_index = 0
         self._match_flags = {"manual_fixed": False, "fast_clicked": False, "last_fast_at": 0.0}
 
     # ---------- 策略 ----------
@@ -119,6 +125,9 @@ class TrainingTask(BaseGirlsTask):
                         self._skip_tries = 0
                     if handler is not TrainingTask.handle_in_match:
                         self._match_flags = {"manual_fixed": False, "fast_clicked": False, "last_fast_at": 0.0}
+                    if handler is not TrainingTask.handle_subject_select:
+                        self._picked_subject = False
+                        self._picked_index = 0
                     return True
             except Exception as e:
                 self.log_error(f"{handler.__name__} 异常: {type(e).__name__}: {e}")
@@ -235,43 +244,108 @@ class TrainingTask(BaseGirlsTask):
                 return True
         return False
 
-    def handle_subject_select(self, texts):
-        """训练科目选择页：按配置优先级选，体力不足改休息。"""
-        subject = None
-        for name in self.config.get("训练科目优先级", []):
-            found = self.match_text(texts, name)
-            if found:
-                subject = found
-                break
-        if subject is None:
-            rest = self.match_text(texts, ("休息", "恢复体力"))
-            if rest is None:
-                return False
-            self.click_box(rest, after_sleep=1.2)
-            self.log_info("没有可训练科目，选择休息")
-            return True
+    def read_fail_rate(self, texts):
+        """读取当前选中科目的失败率（0~100），读不到返回 None。"""
+        joined = "".join(t.name for t in self.texts_in_region(texts, "fail_rate")).replace(" ", "")
+        if m := Defs.FAIL_RATE_RE.search(joined):
+            return int(m.group(1))
+        return None
 
-        state = self.top_bar()
-        if self.low_stamina(state):
-            rest = self.match_text(texts, ("休息", "恢复体力"))
-            if rest:
-                self.click_box(rest, after_sleep=1.2)
-                self.log_info(f"体力 {state.get('stamina')} 过低，改为休息")
+    def handle_subject_select(self, texts):
+        """训练科目选择页：右侧 6 个科目 → 选一个 → 右上「决定」。
+
+        失败率是这里唯一的决策信号：
+        - 失败率高于上限时，优先换下一个科目（换科目会改变失败率）；
+        - 全部超限才考虑休息；
+        - 都不行就直接决定，交给游戏结算（至少不卡死）。
+        """
+        subjects = self.texts_in_region(texts, "subject_list")
+        if self.match_text(subjects, Defs.TRAINING_SUBJECTS) is None:
+            return False
+
+        priority = list(self.config.get("训练科目优先级", Defs.TRAINING_SUBJECTS))
+        limit = int(self.config.get("失败率上限(%)", 50))
+        fail = self.read_fail_rate(texts)
+        if fail is not None:
+            self.info_set("当前失败率", f"{fail}%")
+
+        # 还没选科目：先按优先级点第一个
+        if not self._picked_subject:
+            for name in priority:
+                target = self.match_text(subjects, name)
+                if target is not None:
+                    self._picked_subject = True
+                    self._picked_index = priority.index(name)
+                    self.click_box(target, after_sleep=0.6)
+                    self.log_info(f"选择训练科目「{name}」")
+                    return True
+            return False
+
+        # 已选科目：看失败率是否可接受
+        if fail is not None and fail > limit and self._picked_index + 1 < len(priority):
+            nxt = priority[self._picked_index + 1]
+            target = self.match_text(subjects, nxt)
+            if target is not None:
+                self._picked_index += 1
+                self.click_box(target, after_sleep=0.6)
+                self.log_info(f"失败率 {fail}% > {limit}%，换科目「{nxt}」")
                 return True
 
-        self.click_box(subject, after_sleep=1.5)
-        self.log_info(f"训练「{subject.name}」")
+        if fail is not None and fail > limit:
+            rest = self.match_text(texts, Defs.REST_TEXTS)
+            if rest is not None and self.config.get("失败率超限改休息", True):
+                self._picked_subject = False
+                self.click_box(rest, after_sleep=1.0)
+                self.log_info(f"失败率 {fail}% 过高且无可换科目，改为休息")
+                return True
+            self.log_warning(f"失败率 {fail}% 超过上限 {limit}%，但仍要继续训练")
+
+        confirm = self.match_text(self.texts_in_region(texts, "confirm"), Defs.CONFIRM_TEXTS)
+        if confirm is None:
+            confirm = self.match_text(self._ocr_region("confirm"), Defs.CONFIRM_TEXTS)
+        if confirm is None:
+            self.log_warning("找不到「决定」按钮，放弃本次选择")
+            self._picked_subject = False
+            return False
+
+        self._picked_subject = False
+        self._picked_index = 0
+        self.click_box(confirm, after_sleep=1.5)
+        self.log_info(f"决定（失败率 {fail}%）")
         return True
 
     def handle_training_hub(self, texts):
-        """训练日主界面：六维属性 + 右下角主按钮。"""
-        if not self.match_text(texts, ("投射", "弹跳", "运控")):
+        """训练日主界面：六维属性 + 右下角主按钮。
+
+        只有右下角真的写着「比赛 / VS / 训练」时才点，避免在科目选择页误触。
+        """
+        action = self.texts_in_region(texts, "main_action")
+        if self.match_text(action, ("VS", "比赛", "训练")) is None:
             return False
-        # 今天有比赛 → 主按钮是「VS 比赛」，交给 prepare 页处理
-        if self.match_text(texts, ("今天", "VS")):
-            self.click_main_action(after_sleep=1.5)
+        self.click_main_action(after_sleep=1.5)
+        return True
+
+    def handle_vacation(self, texts):
+        """度假 / 海边合宿：第 4 周期有 4 天高加成训练，界面与平时不同。
+
+        只做最保守的推进：确认/开始训练/主按钮。遇到日历页（带「训练计划」）直接跳过，
+        避免在行程表上乱点。
+        """
+        if self.match_text(texts, "训练计划") is not None:
+            return False
+        if self.match_text(texts, Defs.VACATION_TEXTS) is None:
+            return False
+
+        confirm = self.match_text(self._ocr_region("confirm"), Defs.CONFIRM_TEXTS)
+        if confirm is not None:
+            self.click_box(confirm, after_sleep=1.5)
+            self.log_info("度假：决定")
+            return True
+        if self.click_text(("开始训练", "出发", "训练"), after_sleep=1.5, must=False):
+            self.log_info("度假：开始训练")
             return True
         self.click_main_action(after_sleep=1.5)
+        self.log_info("度假：点主按钮")
         return True
 
     HANDLERS = (
@@ -281,5 +355,6 @@ class TrainingTask(BaseGirlsTask):
         handle_result,
         handle_weekend,
         handle_subject_select,
+        handle_vacation,
         handle_training_hub,
     )
