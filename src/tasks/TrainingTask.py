@@ -48,6 +48,8 @@ class TrainingTask(BaseGirlsTask):
             "公园选项": "野餐",
             "扭蛋优先属性": ["投射", "体能", "运控"],
             "允许进游戏厅": False,
+            "允许开始训练": True,
+            "休息体力阈值": 20,
             "比赛日处理": "自动（先跳过，跳不了就进比赛加速）",
             "体力低于多少改休息": 30,
             "单局最大操作数": 400,
@@ -331,66 +333,35 @@ class TrainingTask(BaseGirlsTask):
         return None
 
     def handle_subject_select(self, texts):
-        """训练科目选择页：右侧 6 个科目 → 选一个 → 右上「决定」。
+        """训练科目页：**同一个科目点两下 = 确定训练**（实机验证）。
 
-        失败率是这里唯一的决策信号：
-        - 失败率高于上限时，优先换下一个科目（换科目会改变失败率）；
-        - 全部超限才考虑休息；
-        - 都不行就直接决定，交给游戏结算（至少不卡死）。
+        点一下只是预览（显示失败率、属性增量、道具卡），点第二下才真正执行。
+        所以这里不做「选完再点决定」那套，直接双击同一个位置。
         """
         subjects = self.texts_in_region(texts, "subject_list")
         if self.match_text(subjects, Defs.TRAINING_SUBJECTS) is None:
             return False
 
-        priority = list(self.config.get("训练科目优先级", Defs.TRAINING_SUBJECTS))
-        limit = int(self.config.get("失败率上限(%)", 50))
         fail = self.read_fail_rate(texts)
         if fail is not None:
             self.info_set("当前失败率", f"{fail}%")
-
-        # 还没选科目：先按优先级点第一个
-        if not self._picked_subject:
-            for name in priority:
-                target = self.match_text(subjects, name)
-                if target is not None:
-                    self._picked_subject = True
-                    self._picked_index = priority.index(name)
-                    self.click_box(target, after_sleep=0.6)
-                    self.log_info(f"选择训练科目「{name}」")
-                    return True
-            return False
-
-        # 已选科目：看失败率是否可接受
-        if fail is not None and fail > limit and self._picked_index + 1 < len(priority):
-            nxt = priority[self._picked_index + 1]
-            target = self.match_text(subjects, nxt)
-            if target is not None:
-                self._picked_index += 1
-                self.click_box(target, after_sleep=0.6)
-                self.log_info(f"失败率 {fail}% > {limit}%，换科目「{nxt}」")
-                return True
-
+        limit = int(self.config.get("失败率上限(%)", 50))
         if fail is not None and fail > limit:
-            rest = self.match_text(texts, Defs.REST_TEXTS)
-            if rest is not None and self.config.get("失败率超限改休息", True):
-                self._picked_subject = False
-                self.click_box(rest, after_sleep=1.0)
-                self.log_info(f"失败率 {fail}% 过高且无可换科目，改为休息")
-                return True
-            self.log_warning(f"失败率 {fail}% 超过上限 {limit}%，但仍要继续训练")
+            self.log_warning(f"失败率 {fail}% 超过上限 {limit}%（仍继续，休息需要回主界面）")
 
-        confirm = self.match_text(self.texts_in_region(texts, "confirm"), Defs.CONFIRM_TEXTS)
-        if confirm is None:
-            confirm = self.match_text(self._ocr_region("confirm"), Defs.CONFIRM_TEXTS)
-        if confirm is None:
-            self.log_warning("找不到「决定」按钮，放弃本次选择")
-            self._picked_subject = False
+        name = None
+        for cand in self.config.get("训练科目优先级", list(Defs.TRAINING_SUBJECTS)):
+            if self.match_text(subjects, cand) is not None:
+                name = cand
+                break
+        if name is None:
+            self.log_warning("认不出任何训练科目")
             return False
 
-        self._picked_subject = False
-        self._picked_index = 0
-        self.click_box(confirm, after_sleep=1.5)
-        self.log_info(f"决定（失败率 {fail}%）")
+        x, y = Defs.SUBJECT_COORDS.get(name, (1440, 345))
+        self.click(x, y, after_sleep=0.9)    # 第一下：选中并预览
+        self.click(x, y, after_sleep=2.5)    # 第二下：确认训练
+        self.log_info(f"训练「{name}」（失败率 {fail}%）")
         return True
 
     def handle_training_hub(self, texts):
@@ -427,11 +398,109 @@ class TrainingTask(BaseGirlsTask):
         self.log_info("度假：点主按钮")
         return True
 
+    # ---------- 进入养成流程（大厅 → 训练 → 选队长 → 组队 → 器材 → 开始）----------
+
+    def handle_dialog_continue(self, texts):
+        """剧情/提示：有「跳过」就点，否则靠点击推进。"""
+        skip = self.match_text(texts, ("跳过", "点击屏幕继续"))
+        if skip is not None:
+            self.click_box(skip, after_sleep=0.8)
+            return True
+        return False
+
+    def handle_lobby(self, texts):
+        if self.match_text(texts, ("赛事", "社团GO")) is None:
+            return False
+        x, y = Defs.FLOW_COORDS["lobby_training"]
+        ok = self.click_and_expect(x, y, ("训练剧本",), timeout=8)
+        self.log_info("进入训练剧本" if ok else "点「训练」没反应")
+        return True
+
+    def handle_training_entry(self, texts):
+        if self.match_text(texts, "训练剧本") is None:
+            return False
+        x, y = Defs.FLOW_COORDS["training_start"]
+        ok = self.click_and_expect(x, y, ("训练核心",), timeout=10)
+        self.log_info("进入训练核心" if ok else "点「启程」没反应")
+        return True
+
+    def handle_captain(self, texts):
+        if self.match_text(texts, "训练核心") is None:
+            return False
+        x, y = Defs.FLOW_COORDS["captain_card"]
+        self.click(x, y, after_sleep=0.8)
+        self.log_info("选第一位队长（列表按等级降序，第一张最强）")
+        nx, ny = Defs.FLOW_COORDS["next_step"]
+        ok = self.click_and_expect(nx, ny, ("选择队友",), timeout=8)
+        self.log_info("进入选择队友" if ok else "点「下一步」没反应")
+        return True
+
+    def handle_team(self, texts):
+        if self.match_text(texts, "选择队友") is None:
+            return False
+        ax, ay = Defs.FLOW_COORDS["auto_select"]
+        self.click(ax, ay, after_sleep=1.0)
+        self.log_info("队友：自动选择")
+        nx, ny = Defs.FLOW_COORDS["next_step"]
+        ok = self.click_and_expect(nx, ny, ("选择器材",), timeout=8)
+        self.log_info("进入选择器材" if ok else "点「下一步」没反应")
+        return True
+
+    def handle_equipment(self, texts):
+        if self.match_text(texts, "选择器材") is None:
+            return False
+        ax, ay = Defs.FLOW_COORDS["auto_select"]
+        self.click(ax, ay, after_sleep=1.0)
+        self.log_info("器材：自动选择")
+        nx, ny = Defs.FLOW_COORDS["next_step"]
+        ok = self.click_and_expect(nx, ny, ("确认编队",), timeout=8)
+        self.log_info("进入确认编队" if ok else "点「下一步」没反应")
+        return True
+
+    def handle_confirm_team(self, texts):
+        """确认编队：开始训练会扣体力且中途取消不返还，默认要用户先允许。"""
+        if self.match_text(texts, "确认编队") is None:
+            return False
+        if not self.config.get("允许开始训练", True):
+            self.log_info("已禁用自动开始训练，停在这里等你确认")
+            return True
+        x, y = Defs.FLOW_COORDS["confirm_start"]
+        self.click(x, y, after_sleep=3.0)
+        self.log_info("开始训练（已扣体力，不可退）")
+        return True
+
+    def handle_training_day(self, texts):
+        """训练日主界面：右下「训练 / 休息」。"""
+        if self.match_text(texts, "星期") is None:
+            return False
+        if self.match_text(texts, "休息") is None:
+            return False
+        state = self.top_bar()
+        cur = state.get("stamina")
+        limit = int(self.config.get("休息体力阈值", 20))
+        if cur is not None and cur < limit:
+            x, y = Defs.FLOW_COORDS["day_rest"]
+            self.click(x, y, after_sleep=2.0)
+            self.log_info(f"体力 {cur} 偏低，休息")
+        else:
+            x, y = Defs.FLOW_COORDS["day_train"]
+            self.click(x, y, after_sleep=2.0)
+            self.log_info(f"体力 {cur}，进入训练科目")
+        return True
+
     HANDLERS = (
         handle_popup,
         handle_in_match,
         handle_prepare,
         handle_result,
+        handle_dialog_continue,
+        handle_lobby,
+        handle_training_entry,
+        handle_captain,
+        handle_team,
+        handle_equipment,
+        handle_confirm_team,
+        handle_training_day,
         handle_restaurant,
         handle_park,
         handle_street,

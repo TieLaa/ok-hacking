@@ -7,6 +7,7 @@
 
 import random
 import re
+import time
 
 from ok import BaseTask
 
@@ -70,6 +71,21 @@ class BaseGirlsTask(BaseTask):
         self.click_box(target, after_sleep=after_sleep)
         self.log_info(f"点击「{target.name}」")
         return True
+
+    def click_and_expect(self, x, y, expect, timeout=5.0, poll=0.5):
+        """点一下，然后等「下一页该出现的文字」出现。
+
+        点击丢失是这个游戏的常态（启程就丢过），所以每次点击都要有反馈校验。
+        不能用像素差判断——3D 大厅一直在动，随便两帧都不一样。
+        返回 True 表示界面确实变了。
+        """
+        self.click(int(x), int(y))
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self.sleep(poll)
+            if self.match_text(self._ocr_region(), expect) is not None:
+                return True
+        return False
 
     # ---------- 顶栏状态 ----------
 

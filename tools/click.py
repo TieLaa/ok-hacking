@@ -61,7 +61,7 @@ def move_to(sx, sy, step=10, delay=0.012):
     return cursor()
 
 
-def click(down=0.07):
+def click(down=0.12):
     user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, None)
     time.sleep(down)
     user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, None)
