@@ -90,17 +90,28 @@ class BaseGirlsTask(BaseTask):
     # ---------- 顶栏状态 ----------
 
     def top_bar(self):
-        """解析顶栏：周数 / 星期几 / 体力 / 金币。解析不到的字段为 None。"""
+        """解析顶栏：周数 / 星期几 / 体力 / 金币。解析不到的字段为 None。
+
+        体力**只在含「/」的那个文本框里找**：OCR 常把「第1周」的「1」和体力粘在一起
+        （曾出现 3 + 101/115 → 31101），整段拼接再匹配必错。
+        """
         texts = self._ocr_region("top_bar")
         joined = " ".join(t.name for t in texts)
         state = {"week": None, "day": None, "stamina": None, "stamina_max": None, "coin": None}
 
-        if m := Defs.WEEK_RE.search(joined):
+        if m := Defs.WEEK_RE.search(joined.replace(" ", "")):
             state["week"] = int(m.group(1))
-        if m := Defs.DAY_RE.search(joined):
+        if m := Defs.DAY_RE.search(joined.replace(" ", "")):
             state["day"] = "日" if m.group(1) == "天" else m.group(1)
-        if m := Defs.STAMINA_RE.search(joined.replace(" ", "")):
-            state["stamina"], state["stamina_max"] = int(m.group(1)), int(m.group(2))
+        for t in texts:
+            name = t.name.replace(" ", "")
+            if "/" not in name:
+                continue
+            if m := Defs.STAMINA_RE.search(name):
+                cur, mx = int(m.group(1)), int(m.group(2))
+                if 0 < cur <= mx:      # 过滤「3101/115」这种前面粘了周数的脏数据
+                    state["stamina"], state["stamina_max"] = cur, mx
+                    break
         return state
 
     # ---------- 大按钮 / 区域点击 ----------

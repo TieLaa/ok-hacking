@@ -33,6 +33,9 @@ MOUSEEVENTF_RIGHTDOWN = 0x0008
 MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_MIDDLEDOWN = 0x0020
 MOUSEEVENTF_MIDDLEUP = 0x0040
+MOUSEEVENTF_MOVE = 0x0001
+MOVE_STEP = 12        # 每次相对移动的最大像素
+MOVE_STEP_DELAY = 0.010
 
 
 class GirlsInteraction(BaseInteraction):
@@ -96,17 +99,40 @@ class GirlsInteraction(BaseInteraction):
         left, top = win32gui.ClientToScreen(self.hwnd, (int(x), int(y)))
         return left, top
 
+    @staticmethod
+    def _glide_to(sx, sy):
+        """用**相对位移**分小步移动光标。
+
+        实测：这游戏按 raw input 的相对位移跟踪鼠标，直接 SetCursorPos 瞬移它感知不到，
+        后续点击就会落在它「以为」光标所在的位置（表现为点了没反应或点错东西）。
+        """
+        cx, cy = win32api.GetCursorPos()
+        dx, dy = int(sx) - cx, int(sy) - cy
+        if dx == 0 and dy == 0:
+            return
+        steps = max(1, (abs(dx) + abs(dy)) // MOVE_STEP)
+        prev_x = prev_y = 0
+        for i in range(1, steps + 1):
+            want_x, want_y = round(dx * i / steps), round(dy * i / steps)
+            mx, my = want_x - prev_x, want_y - prev_y
+            if mx or my:
+                win32api.mouse_event(MOUSEEVENTF_MOVE, mx, my, 0, 0)
+            prev_x, prev_y = want_x, want_y
+            time.sleep(MOVE_STEP_DELAY)
+        # 少量累计误差用一次绝对定位收尾（此时游戏已跟到附近）
+        win32api.SetCursorPos((int(sx), int(sy)))
+
     def _move_cursor(self, x, y):
         self._saved_cursor = win32api.GetCursorPos()
         sx, sy = self._to_screen(x, y)
-        win32api.SetCursorPos((sx, sy))
+        self._glide_to(sx, sy)
         time.sleep(CURSOR_SETTLE)
         return sx, sy
 
     def _restore_cursor(self):
         if self._saved_cursor:
             try:
-                win32api.SetCursorPos(self._saved_cursor)
+                self._glide_to(*self._saved_cursor)
             except Exception as e:
                 logger.warning(f"restore cursor failed: {e}")
             finally:

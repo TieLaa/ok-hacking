@@ -251,14 +251,21 @@ class TrainingTask(BaseGirlsTask):
         return True
 
     def choose_option(self, texts, names, after_sleep=0.9):
-        """在周末子页面的选项区里选一个，并处理可能的「确定」。"""
+        """在周末子页面的选项区里选一个，并处理可能的「确定」。
+
+        确定按钮位置不固定（扭蛋页在底部中间，餐厅/公园可能在别处），
+        先看底部条，再看整屏，避免只在固定区域找不到就反复点同一张卡。
+        """
         opts = self.texts_in_region(texts, "weekend_options")
         target = self.match_text(opts, names)
         if target is None:
             return False
         self.click_box(target, after_sleep=after_sleep)
         self.log_info(f"选择「{target.name}」")
-        confirm = self.match_text(self._ocr_region("confirm_bar"), Defs.CONFIRM_TEXTS)
+
+        confirm = self.match_text(self._ocr_region("confirm_bar"), ("确定", "确认"))
+        if confirm is None:
+            confirm = self.match_text(self._ocr_region(), ("确定", "确认"))
         if confirm is not None:
             self.click_box(confirm, after_sleep=1.2)
             self.log_info("确定")
@@ -408,6 +415,39 @@ class TrainingTask(BaseGirlsTask):
             return True
         return False
 
+    def handle_story_arrow(self, texts):
+        """剧情对话：右下角有白色 ▼ 就点它推进。
+
+        判定要同时满足两条，否则周末地图这种浅色背景会误判：
+        1) 小区域内近白像素占比够高（▼ 本身）；
+        2) 周围一圈偏暗（对话条是深色底）。
+        """
+        frame = self.frame
+        if frame is None:
+            return False
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = Defs.region("story_arrow")
+        roi = frame[int(h * y1):int(h * y2), int(w * x1):int(w * x2)]
+        if roi.size == 0:
+            return False
+        white_ratio = float((roi.min(axis=2) > 200).mean())
+        if white_ratio < 0.08:
+            return False
+
+        # 周围环境必须偏暗，排除浅色地图/白底界面
+        bx1, by1, bx2, by2 = Defs.region("story_area")
+        around = frame[int(h * by1):int(h * by2), int(w * bx1):int(w * bx2)]
+        if around.size == 0:
+            return False
+        if float(around.mean()) > 135:
+            return False
+
+        cx = int(w * (x1 + x2) / 2)
+        cy = int(h * (y1 + y2) / 2)
+        self.click(cx, cy, after_sleep=1.0)
+        self.log_info(f"剧情对话：点 ▼ 推进（白 {white_ratio:.2f} 背景 {around.mean():.0f}）")
+        return True
+
     def handle_lobby(self, texts):
         if self.match_text(texts, ("赛事", "社团GO")) is None:
             return False
@@ -494,6 +534,7 @@ class TrainingTask(BaseGirlsTask):
         handle_prepare,
         handle_result,
         handle_dialog_continue,
+        handle_story_arrow,
         handle_lobby,
         handle_training_entry,
         handle_captain,

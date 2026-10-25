@@ -14,7 +14,7 @@ import re
 # ---------- 文本正则 ----------
 WEEK_RE = re.compile(r"第\s*(\d+)\s*周")
 DAY_RE = re.compile(r"星期\s*([一二三四五六日天])")
-STAMINA_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
+STAMINA_RE = re.compile(r"(\d{1,3})\s*/\s*(\d{1,3})")
 FAIL_RATE_RE = re.compile(r"失败率\s*(\d+)")
 LEVEL_RE = re.compile(r"Lv\.?\s*(\d+)", re.IGNORECASE)
 NUMBER_RE = re.compile(r"\d+")
@@ -58,6 +58,8 @@ REGIONS = {
     "result_page": (0.10, 0.10, 0.90, 0.90),      # 结算/奖励
     "top_right": (0.60, 0.00, 1.00, 0.12),        # 1x / 日历 / 菜单 / 返回
     "match_hud": (0.00, 0.84, 0.24, 1.00),        # 比赛内左下角 快进/倍速/自动
+    "story_arrow": (0.80, 0.82, 0.88, 0.92),      # 剧情对话右下角的白色 ▼
+    "story_area": (0.55, 0.72, 0.95, 0.98),       # 对话条整体（判深浅用）
 }
 
 
