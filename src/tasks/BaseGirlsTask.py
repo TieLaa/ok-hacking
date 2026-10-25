@@ -123,6 +123,18 @@ class BaseGirlsTask(BaseTask):
                     break
         return state
 
+    # ---------- 流程按钮（相对坐标，随窗口缩放） ----------
+
+    def flow_point(self, key):
+        """FLOW_COORDS 里的相对坐标 -> 当前客户区像素。"""
+        r = Defs.FLOW_COORDS[key]
+        return int(self.width_of_screen(r[0])), int(self.height_of_screen(r[1]))
+
+    def flow_click(self, key, after_sleep=1.5):
+        x, y = self.flow_point(key)
+        self.click(x, y, after_sleep=after_sleep)
+        return True
+
     # ---------- 大按钮 / 区域点击 ----------
 
     def click_region(self, region_name, after_sleep=0.8):
@@ -139,12 +151,20 @@ class BaseGirlsTask(BaseTask):
 
     # ---------- 通用 ----------
 
-    def is_loading(self):
-        """加载/过场：出现百分比或「加载」字样时不要乱点。"""
-        texts = self._ocr_region()
-        for t in texts:
-            if "加载" in t.name or re.search(r"^\d{1,3}%$", t.name.strip()):
-                return True
+    def is_loading(self, texts=None):
+        """加载/过场：出现「加载」字样，或**整屏只剩一个百分比**（加载进度）。
+
+        坑：加强训练界面有「100%」「80%」两个成功率，绝不能当成加载进度，
+        否则每个决策周期都 sleep(1) 空转、没有任何日志（实训 2026-10-25 卡了 3 分钟）。
+        """
+        if texts is None:
+            texts = self._ocr_region()
+        if self.match_text(texts, "加载") is not None:
+            return True
+        if len(texts) <= 2:
+            for t in texts:
+                if re.fullmatch(r"\d{1,3}%", t.name.strip()):
+                    return True
         return False
 
     def dismiss_popup(self):
