@@ -50,6 +50,7 @@ class TrainingTask(BaseGirlsTask):
             "允许进游戏厅": False,
             "允许开始训练": True,
             "休息体力阈值": 40,
+            "技能标签优先": ["得分手"],
             "比赛日处理": "自动（先跳过，跳不了就进比赛加速）",
             "体力低于多少改休息": 30,
             "单局最大操作数": 400,
@@ -560,9 +561,95 @@ class TrainingTask(BaseGirlsTask):
             self.log_info(f"体力 {cur}，进入训练科目")
         return True
 
+    def handle_in_match(self, texts):
+        """比赛内：先把手动切成自动，再连点「快进」。
+
+        实机验证：左下角三个控件 —— 快进(图标) / 1x(倍率) / 手动·自动(文字)。
+        切到自动后整场不需要人，连点快进约 12 次就能打完。
+        """
+        hud = self.texts_in_region(texts, "match_hud")
+        if not hud:
+            return False
+        manual = self.match_text(hud, "手动")
+        if manual is not None:
+            self.click_box(manual, after_sleep=0.8)
+            self.log_info("比赛：手动 → 自动")
+            return True
+        if self.match_text(hud, "自动") is None:
+            return False
+        x = int(self.width_of_screen(Defs.MATCH_FAST_FORWARD[0]))
+        y = int(self.height_of_screen(Defs.MATCH_FAST_FORWARD[1]))
+        self.click(x, y, after_sleep=0.6)
+        return True
+
+    def handle_match_result(self, texts):
+        """比赛结算 / 赛程页 / 目标达成：一路点「下一步」或屏幕。"""
+        if self.match_text(texts, ("胜利", "失败", "结算", "赛程已完成", "目标达成")) is None:
+            return False
+        nxt = self.match_text(texts, "下一步")
+        if nxt is not None:
+            self.click_box(nxt, after_sleep=1.5)
+            self.log_info("结算：下一步")
+            return True
+        if self.match_text(texts, "点击屏幕继续") is not None:
+            self.click(int(self.width_of_screen(0.5)), int(self.height_of_screen(0.9)), after_sleep=1.5)
+            self.log_info("结算：点击继续")
+            return True
+        self.click(int(self.width_of_screen(0.5)), int(self.height_of_screen(0.5)), after_sleep=1.2)
+        return True
+
+    def handle_skill_select(self, texts):
+        """技能三选一：橙色优先 → 标签与队长匹配 → 否则第一张。"""
+        if self.match_text(texts, "请选择1个技能") is None:
+            return False
+
+        pref = list(self.config.get("技能标签优先", ["得分手"]))
+        frame = self.frame
+
+        best_idx, best_score = 0, -1
+        detail = []
+        for i in range(3):
+            card_texts = self._card_texts(texts, i)
+            has_pref = 1 if self.match_text(card_texts, tuple(pref)) is not None else 0
+            orange = 1 if self._card_is_orange(frame, i) else 0
+            score = orange * 2 + has_pref
+            detail.append(f"{i + 1}:橙{orange}/标签{has_pref}")
+            if score > best_score:
+                best_idx, best_score = i, score
+        self.log_info("技能评分 " + " ".join(detail) + f" → 选第 {best_idx + 1} 张")
+
+        cx, cy = Defs.SKILL_CARDS[best_idx]
+        self.click(int(self.width_of_screen(cx)), int(self.height_of_screen(cy)), after_sleep=0.9)
+        confirm = self.find_text(("确定", "确认"))
+        if confirm is not None:
+            self.click_box(confirm, after_sleep=1.5)
+            self.log_info("技能：确定")
+        return True
+
+    def _card_texts(self, texts, idx):
+        x1 = 0.05 + idx * 0.31
+        x2 = x1 + 0.28
+        return [t for t in texts if x1 <= (t.x + t.width / 2) / self.width <= x2]
+
+    def _card_is_orange(self, frame, idx):
+        if frame is None:
+            return False
+        h, w = frame.shape[:2]
+        x1 = int(w * (0.07 + idx * 0.32))
+        x2 = int(w * (0.07 + idx * 0.32 + 0.24))
+        y1, y2 = int(h * 0.20), int(h * 0.34)
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return False
+        b, g, r = roi[:, :, 0].astype(int), roi[:, :, 1].astype(int), roi[:, :, 2].astype(int)
+        orange = (r > 190) & (g > 110) & (g < 215) & (b < 110)
+        return float(orange.mean()) > 0.25
+
     HANDLERS = (
         handle_popup,
         handle_in_match,
+        handle_match_result,
+        handle_skill_select,
         handle_prepare,
         handle_result,
         handle_dialog_continue,
