@@ -49,7 +49,16 @@ class BaseGirlsTask(BaseTask):
         return None
 
     def find_text(self, names, region_name=None, box=None):
-        return self.match_text(self._ocr_region(region_name, box), names)
+        """找文字并返回**真实文本框**。
+
+        注意：不能直接用 `ocr(box=区域)` —— 那样返回的是「区域本身」这个框
+        （实测 x=576,y=886,w=768,h=173），点它的中心会落在按钮外面。
+        正确做法：全屏 OCR，再按区域过滤文本框。
+        """
+        texts = self._ocr_region()
+        if region_name is not None:
+            texts = self.texts_in_region(texts, region_name)
+        return self.match_text(texts, names)
 
     def texts_in_region(self, texts, region_name):
         """把整帧 OCR 结果过滤到某个区域内（按文本框中心点）。"""

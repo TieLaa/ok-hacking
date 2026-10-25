@@ -263,12 +263,10 @@ class TrainingTask(BaseGirlsTask):
         self.click_box(target, after_sleep=after_sleep)
         self.log_info(f"选择「{target.name}」")
 
-        confirm = self.match_text(self._ocr_region("confirm_bar"), ("确定", "确认"))
-        if confirm is None:
-            confirm = self.match_text(self._ocr_region(), ("确定", "确认"))
+        confirm = self.find_text(("确定", "确认"))
         if confirm is not None:
             self.click_box(confirm, after_sleep=1.2)
-            self.log_info("确定")
+            self.log_info(f"确定 @({confirm.x},{confirm.y})")
         return True
 
     def handle_restaurant(self, texts):
