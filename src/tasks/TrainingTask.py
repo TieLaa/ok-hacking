@@ -1183,6 +1183,21 @@ class TrainingTask(BaseGirlsTask):
         """
         if self.match_text(texts, ("失败率", "决定", "休息")) is not None:
             return False
+        # 锦标赛对阵图：只有「赛程已完成 / 距离下场比赛 / 下一场」和学校名，
+        # 没有「结算/赛程」这种整词标题，旧判据认不出来会被事件 handler 当成竖排选项。
+        if self.match_text(texts, ("赛程已完成", "距离下场比赛", "挑战中")) is not None:
+            nxt = self.match_text(texts, "下一步")
+            if nxt is None:
+                nxt = self.match_text(texts, "下一场")
+            if nxt is not None:
+                self.click_box(nxt, after_sleep=0.6)
+                self.log_info("赛程：下一步")
+            return True
+        nxt_match = self.match_text(texts, "下一场")
+        if nxt_match is not None:
+            self.click_box(nxt_match, after_sleep=0.6)
+            self.log_info("赛程：下一场")
+            return True
         if self.match_text(texts, (Defs.RESULT_TITLE_RE,)) is None:
             return False
         nxt = self.match_text(texts, "下一步")
@@ -1266,11 +1281,15 @@ class TrainingTask(BaseGirlsTask):
                         self.texts_in_region(texts, "top_right"), "跳过") is not None)
 
         if has_skip:
+            ui_words = {"下一场", "下一步", "跳过", "确定", "取消",
+                        "关闭", "继续", "领取", "开始训练"}
             vopts = []
             for t in texts:
                 cx = (t.x + t.width / 2) / self.width
                 cy = (t.y + t.height / 2) / self.height
                 s = t.name.strip()
+                if s in ui_words:
+                    continue
                 if not (0.30 <= cx <= 0.70 and 0.20 <= cy <= 0.70):
                     continue
                 if not (2 <= len(s) <= 10) or not all(
