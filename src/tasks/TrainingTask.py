@@ -12,6 +12,7 @@
 每拍只 OCR 一次，然后按优先级依次交给 handler，第一个返回 True 的消费本拍。
 """
 
+import os
 import random
 import time
 
@@ -115,6 +116,8 @@ class TrainingTask(BaseGirlsTask):
         self._steps = 0
         max_steps = int(self.config.get("单局最大操作数", 400))
         interval = float(self.config.get("操作间隔(秒)", 0.8))
+        stuck_limit = int(self.config.get("卡住多少拍算卡死", 12))   # 12 x 0.8s ≈ 10 秒
+        last_sig, stuck = None, 0
 
         while self._steps < max_steps:
             if not self._enabled:
@@ -132,16 +135,60 @@ class TrainingTask(BaseGirlsTask):
                 self.sleep(1)
                 continue
 
+            # 界面指纹：同一页面每拍都一样，用来判「卡住了没」
+            sig = self._signature(texts)
+            if sig == last_sig:
+                stuck += 1
+            else:
+                stuck, last_sig = 0, sig
+
             if self._handle_any(texts):
                 self.sleep(interval)
                 continue
-            # 一帧没认出来：先看看是不是卡在某个界面，按返回兜底
-            self.log_info("未识别的界面，尝试返回")
-            self.back(after_sleep=interval)
-            self.sleep(interval)
+
+            # ---- 兜底：不认识的界面也**让流程继续走**，不要卡死 ----
+            # 原则（用户要求）：先存证截图，再随便点一下往下走，回头复盘时再补判据。
+            if stuck == 0:
+                self.dump_unknown(texts, "unknown")
+                self.log_warning("没见过这个界面 → 已存证，点一下继续")
+            elif stuck >= stuck_limit:
+                self.dump_unknown(texts, "stuck")
+                self.log_warning(f"连续 {stuck + 1} 拍没变化 → 已存证，点一下继续")
+                stuck = 0
+
+            # 点画面中央：对话页能推进、空白处能关弹窗、大部分过场也吃这一下
+            self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=interval)
 
         self.log_warning(f"达到最大操作数 {max_steps}，停止")
         return False
+
+    @staticmethod
+    def _signature(texts):
+        """界面指纹：文字内容 + 粗位置。同一页每拍一致，换页就变。"""
+        return hash("|".join(
+            f"{t.name}@{round(t.x / 20)},{round(t.y / 20)}"
+            for t in sorted(texts, key=lambda t: (t.y, t.x))))
+
+    def dump_unknown(self, texts, tag):
+        """把不认识的界面存证下来：截图 + OCR 文本，事后复盘补判据用。
+
+        产物在 logs/unknown/（logs 已被 .gitignore 忽略，不会污染仓库）。
+        """
+        try:
+            folder = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "logs", "unknown")
+            os.makedirs(folder, exist_ok=True)
+            name = f"{time.strftime('%m%d-%H%M%S')}_{tag}_s{self._steps}"
+            frame = self.frame
+            if frame is not None:
+                cv2.imwrite(os.path.join(folder, name + ".png"), frame)
+            with open(os.path.join(folder, name + ".txt"), "w", encoding="utf-8") as f:
+                f.write("\n".join(
+                    f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
+            self.log_info(f"存证 logs/unknown/{name}.png")
+        except Exception as e:
+            self.log_debug(f"存证失败: {type(e).__name__}: {e}")
 
     def _handle_any(self, texts):
         for handler in self.HANDLERS:
