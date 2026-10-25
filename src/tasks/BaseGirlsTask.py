@@ -103,6 +103,10 @@ class BaseGirlsTask(BaseTask):
 
         体力**只在含「/」的那个文本框里找**：OCR 常把「第1周」的「1」和体力粘在一起
         （曾出现 3 + 101/115 → 31101），整段拼接再匹配必错。
+
+        2026-10-26 补：还会出现 `369/115`（周数 3 粘在 69 前面）。做法是把前面的
+        数字逐位去掉，取第一个 `0 < cur <= max` 的组合；多个候选时取最右边那个
+        （体力条在周数右边）。
         """
         texts = self._ocr_region("top_bar")
         joined = " ".join(t.name for t in texts)
@@ -112,15 +116,29 @@ class BaseGirlsTask(BaseTask):
             state["week"] = int(m.group(1))
         if m := Defs.DAY_RE.search(joined.replace(" ", "")):
             state["day"] = "日" if m.group(1) == "天" else m.group(1)
+
+        best = None
         for t in texts:
             name = t.name.replace(" ", "")
             if "/" not in name:
                 continue
-            if m := Defs.STAMINA_RE.search(name):
-                cur, mx = int(m.group(1)), int(m.group(2))
-                if 0 < cur <= mx:      # 过滤「3101/115」这种前面粘了周数的脏数据
-                    state["stamina"], state["stamina_max"] = cur, mx
-                    break
+            if not (m := Defs.STAMINA_RE.search(name)):
+                continue
+            digits, mx = m.group(1), int(m.group(2))
+            cur = int(digits)
+            if cur > mx:
+                # 逐位去掉粘连的前缀：369/115 → 69/115
+                for i in range(1, len(digits)):
+                    cand = int(digits[i:])
+                    if 0 < cand <= mx:
+                        cur = cand
+                        break
+            if 0 < cur <= mx:
+                # 取最右边的候选（体力在周数右边；金币没有斜杠）
+                if best is None or t.x >= best[0]:
+                    best = (t.x, cur, mx)
+        if best is not None:
+            state["stamina"], state["stamina_max"] = best[1], best[2]
         return state
 
     # ---------- 流程按钮（相对坐标，随窗口缩放） ----------

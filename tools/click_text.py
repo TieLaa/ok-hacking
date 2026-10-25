@@ -12,23 +12,18 @@ import sys
 import time
 
 import cv2
-import win32api
 import win32gui
 
 sys.path.insert(0, __file__.rsplit("tools", 1)[0].rstrip("\\/"))
 
+from tools.abs_mouse import (  # noqa: E402
+    click_screen, ensure_foreground, find_game_hwnd, move_to_screen)
 from tools.wgc_capture import MockWindow  # noqa: E402
 
 
 def game_hwnd():
-    found = []
-
-    def cb(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd) and "篮球少女" in win32gui.GetWindowText(hwnd):
-            found.append(hwnd)
-
-    win32gui.EnumWindows(cb, None)
-    return max(found, key=lambda h: (lambda l, t, r, b: (r - l) * (b - t))(*win32gui.GetWindowRect(h))) if found else 0
+    # 必须校验 UnityWndClass：浏览器攻略帖标题里也有「篮球少女」（实训 2026-10-26）
+    return find_game_hwnd()
 
 
 def grab():
@@ -94,28 +89,16 @@ def main():
 
     text, x, y, w, h = match
     cx, cy = x + w // 2, y + h // 2
-    sx, sy = win32gui.ClientToScreen(hwnd, (cx, cy))
+    if not ensure_foreground(hwnd):
+        raise SystemExit("游戏窗口未能置前，放弃点击")
 
-    # 真实点击：小步移动 + 按下/抬起
-    cur = win32api.GetCursorPos()
-    dx, dy = sx - cur[0], sy - cur[1]
-    steps = max(1, (abs(dx) + abs(dy)) // 12)
-    prev_x = prev_y = 0
-    for i in range(1, steps + 1):
-        wx, wy = round(dx * i / steps), round(dy * i / steps)
-        win32api.mouse_event(0x0001, wx - prev_x, wy - prev_y, 0, 0)
-        prev_x, prev_y = wx, wy
-        time.sleep(0.012)
-    win32api.SetCursorPos((sx, sy))
-    time.sleep(0.12)
+    # 真实点击：绝对坐标一步到位，点完不还原光标
+    if hover:
+        move_to_screen(*win32gui.ClientToScreen(hwnd, (cx, cy)))
+    else:
+        click_screen(*win32gui.ClientToScreen(hwnd, (cx, cy)))
 
-    if not hover:
-        win32api.mouse_event(0x0002, 0, 0, 0, 0)
-        time.sleep(0.12)
-        win32api.mouse_event(0x0004, 0, 0, 0, 0)
-        time.sleep(0.3)
-
-    print(f"「{text}」 box=({x},{y},{w},{h}) -> client=({cx},{cy}) screen=({sx},{sy}) hover={hover}")
+    print(f"「{text}」 box=({x},{y},{w},{h}) -> client=({cx},{cy}) hover={hover}")
 
 
 if __name__ == "__main__":

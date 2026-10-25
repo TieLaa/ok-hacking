@@ -16,12 +16,24 @@ user32.GetClientRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long *
 user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # PER_MONITOR_AWARE_V2
 
 
-def find_hwnd(keyword):
+def find_hwnd(keyword, hwnd_class="UnityWndClass"):
+    """按标题找窗口。
+
+    坑（2026-10-25）：浏览器开着 TapTap 攻略页时，标题是
+    「赛篮娘开服流派详解 - 篮球少女：飞跃巅峰攻略 - TapTap ...」，
+    子串匹配会**优先抓浏览器**（面积更大），截出来的全是网页。
+    所以默认再按窗口类名过滤：游戏是 UnityWndClass。
+    """
     out = []
 
     def cb(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd) and keyword in win32gui.GetWindowText(hwnd):
-            out.append(hwnd)
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        if keyword not in win32gui.GetWindowText(hwnd):
+            return
+        if hwnd_class and win32gui.GetClassName(hwnd) != hwnd_class:
+            return
+        out.append(hwnd)
 
     win32gui.EnumWindows(cb, None)
     if not out:

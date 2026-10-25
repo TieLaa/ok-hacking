@@ -6,6 +6,8 @@
 输出：每次点击后的前台窗口 + 截图，由人工比对界面是否切换。
 """
 
+import os
+import sys
 import time
 
 import win32api
@@ -13,42 +15,13 @@ import win32con
 import win32gui
 from PIL import ImageGrab
 
-GAME = 28182908
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from tools.abs_mouse import click_client, find_game_hwnd, find_window  # noqa: E402
+
 OUT = r"C:\Users\tiela\AppData\Local\Temp\opencode"
 SUBJECT = {"投射": (1440, 215), "弹跳": (1440, 345), "防守": (1440, 475)}
-
-
-def find_window(title_part):
-    found = []
-
-    def cb(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd) and title_part in win32gui.GetWindowText(hwnd):
-            found.append(hwnd)
-
-    win32gui.EnumWindows(cb, None)
-    return found[0] if found else None
-
-
-def glide(sx, sy, step=10):
-    cx, cy = win32api.GetCursorPos()
-    dx, dy = sx - cx, sy - cy
-    steps = max(1, int(max(abs(dx), abs(dy)) / step))
-    px = py = 0
-    for i in range(1, steps + 1):
-        wx, wy = round(dx * i / steps), round(dy * i / steps)
-        win32api.mouse_event(0x0001, wx - px, wy - py, 0, 0)
-        px, py = wx, wy
-        time.sleep(0.008)
-    win32api.SetCursorPos((sx, sy))
-
-
-def click_client(x, y, hold=0.12):
-    sx, sy = win32gui.ClientToScreen(GAME, (int(x), int(y)))
-    glide(sx, sy)
-    time.sleep(0.12)
-    win32api.mouse_event(0x0002, 0, 0, 0, 0)
-    time.sleep(hold)
-    win32api.mouse_event(0x0004, 0, 0, 0, 0)
+GAME = find_game_hwnd()
 
 
 def shoot(tag):
@@ -77,17 +50,17 @@ def main():
     shoot("0_before")
 
     print("点击「弹跳」（第一下=预览）")
-    click_client(*SUBJECT["弹跳"])
+    click_client(GAME, *SUBJECT["弹跳"])
     time.sleep(1.0)
     shoot("1_dantiao")
 
     print("点击「投射」（第一下=预览）")
-    click_client(*SUBJECT["投射"])
+    click_client(GAME, *SUBJECT["投射"])
     time.sleep(1.0)
     shoot("2_toushe")
 
     print("点击「防守」（第一下=预览）")
-    click_client(*SUBJECT["防守"])
+    click_client(GAME, *SUBJECT["防守"])
     time.sleep(1.0)
     shoot("3_fangshou")
 

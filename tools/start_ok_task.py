@@ -22,6 +22,10 @@ import win32con
 import win32gui
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+from tools.abs_mouse import click_screen, ensure_foreground  # noqa: E402
+
 LOG = os.path.join(ROOT, "logs", "ok-script.log")
 
 # 相对于 ok-script 主窗口左上角的「开始」按钮候选位置（窗口固定 1200x800）
@@ -51,25 +55,9 @@ def find_game_window():
     return found[0] if found else None
 
 
-def glide(x, y, step=12):
-    cx, cy = win32api.GetCursorPos()
-    dx, dy = x - cx, y - cy
-    steps = max(1, int(max(abs(dx), abs(dy)) / step))
-    px = py = 0
-    for i in range(1, steps + 1):
-        wx, wy = round(dx * i / steps), round(dy * i / steps)
-        win32api.mouse_event(0x0001, wx - px, wy - py, 0, 0)
-        px, py = wx, wy
-        time.sleep(0.008)
-    win32api.SetCursorPos((x, y))
-    time.sleep(0.1)
-
-
 def real_click(x, y):
-    glide(x, y)
-    win32api.mouse_event(0x0002, 0, 0, 0, 0)
-    time.sleep(0.12)
-    win32api.mouse_event(0x0004, 0, 0, 0, 0)
+    # 绝对坐标一步到位（与 GirlsInteraction 相同），不再滑行 / SetCursorPos
+    click_screen(x, y)
 
 
 def log_tail(n=200):

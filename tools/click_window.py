@@ -6,60 +6,19 @@
 
 为什么单独写：ok-script 的 Qt 窗口对 PostMessage 时灵时不灵，真实点击才稳；
 点完必须把游戏切回前台，否则 ok-script 会认为窗口不可见而暂停执行器。
-"""
-import ctypes
-import sys
-import time
-from ctypes import wintypes
 
-import win32api
-import win32con
+移动统一走 `tools/abs_mouse.py`（绝对坐标一步到位）。找游戏窗口时必须校验
+`UnityWndClass`，否则浏览器攻略帖标题里的「篮球少女」会被误认（实训 2026-10-26）。
+"""
+import os
+import sys
+
 import win32gui
 
-user32 = ctypes.windll.user32
-MOUSEEVENTF_LEFTDOWN = 0x0002
-MOUSEEVENTF_LEFTUP = 0x0004
-VK_MENU = 0x12
-KEYEVENTF_KEYUP = 0x0002
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-
-def find_window(title_part):
-    found = []
-
-    def cb(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd) and title_part in win32gui.GetWindowText(hwnd):
-            found.append(hwnd)
-
-    win32gui.EnumWindows(cb, None)
-    if not found:
-        return 0
-    return max(found, key=lambda h: (lambda l, t, r, b: (r - l) * (b - t))(*win32gui.GetWindowRect(h)))
-
-
-def force_foreground(hwnd):
-    if win32gui.GetForegroundWindow() == hwnd:
-        return True
-    win32api.keybd_event(VK_MENU, 0, 0, 0)
-    time.sleep(0.01)
-    try:
-        win32gui.SetForegroundWindow(hwnd)
-    except Exception:
-        pass
-    finally:
-        win32api.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
-    time.sleep(0.35)
-    return win32gui.GetForegroundWindow() == hwnd
-
-
-def game_hwnd():
-    found = []
-
-    def cb(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd) and "篮球少女" in win32gui.GetWindowText(hwnd):
-            found.append(hwnd)
-
-    win32gui.EnumWindows(cb, None)
-    return max(found, key=lambda h: (lambda l, t, r, b: (r - l) * (b - t))(*win32gui.GetWindowRect(h))) if found else 0
+from tools.abs_mouse import (  # noqa: E402
+    click_screen, ensure_foreground, find_game_hwnd, find_window)
 
 
 def main():
@@ -67,23 +26,20 @@ def main():
     x, y = int(sys.argv[2]), int(sys.argv[3])
     restore = "--restore" in sys.argv
 
-    hwnd = find_window(title)
+    # 游戏标题只认 UnityWndClass；其它窗口（ok-script GUI）按标题找即可
+    hwnd = find_game_hwnd() if "篮球少女" in title else find_window(title)
     if not hwnd:
         raise SystemExit(f"找不到窗口: {title}")
-    force_foreground(hwnd)
+    if not ensure_foreground(hwnd):
+        raise SystemExit("窗口未能置前，放弃点击")
     sx, sy = win32gui.ClientToScreen(hwnd, (x, y))
-    win32api.SetCursorPos((sx, sy))
-    time.sleep(0.2)
-    win32api.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-    time.sleep(0.12)
-    win32api.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    click_screen(sx, sy)
     print(f"clicked {title} at ({x},{y}) screen=({sx},{sy})")
 
     if restore:
-        time.sleep(0.4)
-        g = game_hwnd()
+        g = find_game_hwnd()
         if g:
-            print("game foreground:", force_foreground(g))
+            print("game foreground:", ensure_foreground(g))
 
 
 if __name__ == "__main__":
