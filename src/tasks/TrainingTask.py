@@ -49,7 +49,7 @@ class TrainingTask(BaseGirlsTask):
             "扭蛋优先属性": ["投射", "体能", "运控"],
             "允许进游戏厅": False,
             "允许开始训练": True,
-            "休息体力阈值": 20,
+            "休息体力阈值": 40,
             "比赛日处理": "自动（先跳过，跳不了就进比赛加速）",
             "体力低于多少改休息": 30,
             "单局最大操作数": 400,
@@ -340,8 +340,11 @@ class TrainingTask(BaseGirlsTask):
     def handle_subject_select(self, texts):
         """训练科目页：**同一个科目点两下 = 确定训练**（实机验证）。
 
-        点一下只是预览（显示失败率、属性增量、道具卡），点第二下才真正执行。
-        所以这里不做「选完再点决定」那套，直接双击同一个位置。
+        选科目的依据（按重要性）：
+        1. **带队友的科目优先** —— 队友数直接抬「同表情」概率，是成型倍率的主要来源；
+           且多人同训有协同属性（实测野餐 70 + 20 + 20）。
+        2. 其次按配置的属性优先级。
+        3. 属性接近收敛线（1150）的科目降权。
         """
         subjects = self.texts_in_region(texts, "subject_list")
         if self.match_text(subjects, Defs.TRAINING_SUBJECTS) is None:
@@ -354,20 +357,51 @@ class TrainingTask(BaseGirlsTask):
         if fail is not None and fail > limit:
             self.log_warning(f"失败率 {fail}% 超过上限 {limit}%（仍继续，休息需要回主界面）")
 
-        name = None
-        for cand in self.config.get("训练科目优先级", list(Defs.TRAINING_SUBJECTS)):
-            if self.match_text(subjects, cand) is not None:
-                name = cand
-                break
-        if name is None:
+        priority = list(self.config.get("训练科目优先级", list(Defs.TRAINING_SUBJECTS)))
+        scores = {}
+        for name in priority:
+            if self.match_text(subjects, name) is None:
+                continue
+            team = self.teammate_score(name)
+            scores[name] = team
+
+        if not scores:
             self.log_warning("认不出任何训练科目")
             return False
+
+        # 队友分档优先，其次保持配置顺序
+        best = max(scores.values())
+        name = next(n for n in priority if n in scores and scores[n] == best)
+        if self.config.get("打印队友检测", True):
+            self.log_info("队友检测：" + " ".join(f"{k}={v:.2f}" for k, v in scores.items()))
+        self.log_info(f"选科目「{name}」（队友分 {best:.2f}）")
 
         x, y = Defs.SUBJECT_COORDS.get(name, (1440, 345))
         self.click(x, y, after_sleep=0.9)    # 第一下：选中并预览
         self.click(x, y, after_sleep=2.5)    # 第二下：确认训练
         self.log_info(f"训练「{name}」（失败率 {fail}%）")
         return True
+
+    def teammate_score(self, name):
+        """粗算某个科目行右端的「黄色头像」占比，用来判断有没有队友。
+
+        头像是一个小黄圆脸，压在深蓝底上，BGR 大致 (60, 200, 250)。
+        只做相对比较（同一帧里谁高谁低），不做绝对判定，容忍阈值漂移。
+        """
+        frame = self.frame
+        coord = Defs.SUBJECT_COORDS.get(name)
+        if frame is None or coord is None:
+            return 0.0
+        h, w = frame.shape[:2]
+        cx, cy = coord
+        x1, x2 = int(w * 0.78), int(w * 0.86)
+        y1, y2 = max(0, cy - 28), min(h, cy + 28)
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return 0.0
+        b, g, r = roi[:, :, 0].astype(int), roi[:, :, 1].astype(int), roi[:, :, 2].astype(int)
+        yellow = (r > 200) & (g > 150) & (b < 120)
+        return float(yellow.mean())
 
     def handle_training_hub(self, texts):
         """训练日主界面：六维属性 + 右下角主按钮。
@@ -515,7 +549,7 @@ class TrainingTask(BaseGirlsTask):
             return False
         state = self.top_bar()
         cur = state.get("stamina")
-        limit = int(self.config.get("休息体力阈值", 20))
+        limit = int(self.config.get("休息体力阈值", 40))
         if cur is not None and cur < limit:
             x, y = Defs.FLOW_COORDS["day_rest"]
             self.click(x, y, after_sleep=2.0)
