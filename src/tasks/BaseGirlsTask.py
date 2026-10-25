@@ -30,7 +30,7 @@ class BaseGirlsTask(BaseTask):
     @staticmethod
     def match_text(texts, names):
         """在一批 OCR 结果里找名字匹配的框。names 支持字符串 / 元组 / 正则。"""
-        if isinstance(names, str):
+        if isinstance(names, str) or hasattr(names, "search"):
             names = (names,)
         for name in names:
             if hasattr(name, "search"):
@@ -95,6 +95,20 @@ class BaseGirlsTask(BaseTask):
             if self.match_text(self._ocr_region(), expect) is not None:
                 return True
         return False
+
+    def click_text_and_expect(self, texts, names, expect, region_name=None, timeout=8.0):
+        """按当前帧的 OCR 文本框点击，再等下一页文字出现。
+
+        比写死相对坐标稳：同一个「下一步」按钮在「队伍未满 / 已满」两种状态下
+        位置会差 40~50px（实训 2026-10-26），固定坐标会点到按钮上方的属性栏。
+        """
+        pool = self.texts_in_region(texts, region_name) if region_name else texts
+        target = self.match_text(pool, names)
+        if target is None:
+            return False
+        x = int(target.x + target.width / 2)
+        y = int(target.y + target.height / 2)
+        return self.click_and_expect(x, y, expect, timeout=timeout)
 
     # ---------- 顶栏状态 ----------
 

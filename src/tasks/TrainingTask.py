@@ -97,6 +97,7 @@ class TrainingTask(BaseGirlsTask):
         self._match_flags = {"manual_fixed": False, "fast_clicked": False, "last_fast_at": 0.0}
         # 周末状态：按「第N周+星期X」区分，跨天自动重置
         self._weekend = {"date": None, "shop_checked": False, "bought": False, "park_choice": None}
+        self._shop_week = None          # 同一周只逛一次商店（顶栏星期 OCR 抖动时防止重复进店）
         # 倍速：每周只尝试一次，避免在未解锁时每拍狂点
         self._speed_week = None
         self._speed_locked = False
@@ -424,24 +425,116 @@ class TrainingTask(BaseGirlsTask):
         return self._weekend
 
     def handle_shop(self, texts):
-        """商店：第一次进只存证、不盲买，随后退出。
+        """商店：买得起的里面优先「器材手册+」，否则买最贵的，买完退出。
 
-        购买逻辑要等看到真实界面再写 —— 商店里误点「购买」会直接花钱，
-        所以第一版只做「看一眼 + 存证」，绝不猜着点。
+        实机界面（2026-10-26）：
+        - 左侧商品卡：名称 + 剩余数量 + 价格（100 / 60 / 45）；
+        - 右侧是选中商品的详情和**黄色购买条**（价格就在条上）；
+        - 右上角 X 关闭；顶栏金币是体力条右边那个独立数字。
+
+        训练流只看不买是浪费：器材熟练度直接关系到满经验暴击，
+        所以有钱就买，没钱就退出，绝不允许把金币买成负数。
         """
         # 周末首页也有「商店」两个字，但同时有「出行」，那是按钮不是商店页
         if self.match_text(texts, "出行") is not None:
             return False
-        if self.match_text(texts, ("购买", "出售", "货架", "商品", "道具店")) is None:
+        if self.match_text(texts, "商店") is None:
             return False
-        if not self._shop_seen:
-            self._shop_seen = True
-            self.dump_unknown(texts, "shop")
-            self.log_warning("第一次进商店 → 已存证 logs/unknown/shop_*.png，先退出（暂不购买）")
-        else:
-            self.log_info("商店：暂未实现购买，退出")
-        self.exit_page(after_sleep=0.8)
+        if self.match_text(texts, ("上新时间", "剩余", "能力详情")) is None:
+            return False
+
+        money = self.read_money(texts)
+        items = self.read_shop_items(texts)
+        self.log_info("商店：" + "、".join(f"{i['name']}({i['price']})" for i in items)
+                      + f"｜零用钱 {money}")
+        affordable = [i for i in items if money is not None and i["price"] <= money]
+        if not affordable:
+            self.log_info("商店：没有买得起的商品，退出")
+            self.close_shop(texts)
+            return True
+
+        pick = max(affordable, key=lambda i: (
+            1 if "器材手册" in i["name"] else 0, i["price"]))
+        self.click(pick["x"], pick["y"], after_sleep=0.6)
+        # 右侧黄色购买条（实机相对位置 0.79, 0.84）
+        self.click(int(self.width * 0.79), int(self.height * 0.84), after_sleep=0.8)
+        self.log_info(f"商店：买「{pick['name']}」{pick['price']}（零用钱 {money}）")
+
+        confirm = self.find_text(("确定", "确认"), region_name="confirm_bar")
+        if confirm is not None:
+            self.click_box(confirm, after_sleep=0.6)
+            self.log_info("商店：确认购买")
+        self._weekend["bought"] = True
+        self.close_shop()
         return True
+
+    def read_money(self, texts):
+        """顶栏金币：体力条右边的独立数字（不含斜杠）。"""
+        best = None
+        for t in texts:
+            s = t.name.strip()
+            if not s.isdigit() or len(s) > 5:
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if 0.50 <= cx <= 0.62 and cy < 0.09:
+                best = int(s)
+        return best
+
+    def read_shop_items(self, texts):
+        """解析商店左侧商品：名称 + 价格 + 卡片中心点击坐标。"""
+        prices = []
+        for t in texts:
+            s = t.name.strip()
+            if not s.isdigit() or not (1 <= int(s) <= 9999):
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if 0.15 <= cx <= 0.58 and 0.38 <= cy <= 0.75:
+                prices.append((int(s), t))
+
+        names = []
+        for t in texts:
+            s = t.name.strip()
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if not (0.15 <= cx <= 0.58 and 0.18 <= cy <= 0.62):
+                continue
+            if "剩余" in s or "时间" in s or "商店" in s:
+                continue
+            if not (2 <= len(s) <= 12):
+                continue
+            if not any("\u4e00" <= ch <= "\u9fff" for ch in s):
+                continue
+            names.append(t)
+
+        items = []
+        for price, pt in prices:
+            px = pt.x + pt.width / 2
+            near = [n for n in names
+                    if n.y + n.height / 2 < pt.y + pt.height / 2
+                    and abs((n.x + n.width / 2) - px) < self.width * 0.10]
+            if not near:
+                continue
+            name = max(near, key=lambda n: n.y)
+            items.append({
+                "name": name.name.strip(),
+                "price": price,
+                # 点名称和价格之间的卡片图，避免点到价格/数量
+                "x": int(name.x + name.width / 2),
+                "y": int((name.y + name.height / 2 + pt.y) / 2),
+            })
+        return items
+
+    def close_shop(self, texts=None):
+        """点右上角 X 关商店。"""
+        texts = texts or self._ocr_region()
+        target = self.match_text(self.texts_in_region(texts, "top_right"), "X")
+        if target is not None:
+            self.click_box(target, after_sleep=0.8)
+        else:
+            self.click(int(self.width * 0.94), int(self.height * 0.11), after_sleep=0.8)
+        self.log_info("商店：关闭")
 
     def handle_street(self, texts):
         """步行街扭蛋：三选一（会消耗所有精力），选完按确定。
@@ -505,9 +598,12 @@ class TrainingTask(BaseGirlsTask):
         if self.style == "训练流" and self.config.get("周末先看商店", True):
             st = self.weekend_state()
             day = st["date"][1] if st["date"] else None
+            week = st["date"][0] if st["date"] else None
             shop = self.match_text(texts, "商店")
-            if shop is not None and day != "日" and not st["shop_checked"]:
+            if (shop is not None and day != "日" and not st["shop_checked"]
+                    and self._shop_week != week):
                 st["shop_checked"] = True
+                self._shop_week = week
                 self.click_box(shop, after_sleep=0.9)
                 self.log_info("周末：先看一眼商店有没有买得起的高级器材")
                 return True
@@ -552,6 +648,12 @@ class TrainingTask(BaseGirlsTask):
         subjects = self.texts_in_region(texts, "subject_list")
         if self.match_text(subjects, Defs.TRAINING_SUBJECTS) is None:
             return False
+        # 训练科目页铁定有「失败率」；商店右栏也有「防守秘籍+/防守+40」，
+        # 只按科目名匹配会把商店当成科目页（实训 2026-10-26，400 步全耗在商店里）。
+        if self.match_text(texts, "失败率") is None:
+            return False
+        if self.match_text(texts, ("上新时间", "能力详情")) is not None:
+            return False
         # 扭蛋/加成页的说明文字里也会出现「体能」「投射」等词（例：「所有小游戏额外获得20点体能」），
         # 不排除掉就会被当成科目页，然后疯狂点卡片、点确定（实训 2026-10-25 死循环）。
         if self.match_text(texts, ("扭蛋", "本局训练中", "小游戏强化", "器材熟练度", "熟练度。")) is not None:
@@ -593,7 +695,7 @@ class TrainingTask(BaseGirlsTask):
         if current in boxes:
             names = self.scene_names(texts)
             equip, full = self.read_equipment(texts)
-            crit = self.has_crit_border()
+            crit = self.has_crit_border(texts)
             results[current] = {
                 "mates": max(0, len(names) - 1), "names": names,
                 "equip": equip, "full": full, "crit": crit,
@@ -618,7 +720,9 @@ class TrainingTask(BaseGirlsTask):
 
         def rank(name):
             r = results.get(name)
-            base = (r["mates"] + r["equip"] + 2 * r["full"] + 2 * int(r["crit"])) if r else 0
+            # 队友数 + 装备数 是主项；满经验（MAX）是暴击，额外 +2；
+            # 彩虹边框只作 +1 的辅助（颜色判据偶尔会被科目图标干扰）。
+            base = (r["mates"] + r["equip"] + 2 * r["full"] + int(r["crit"])) if r else 0
             return (base, 1 if name in recommended else 0, -priority.index(name))
 
         name = max(boxes, key=rank)
@@ -695,19 +799,24 @@ class TrainingTask(BaseGirlsTask):
         return icons
 
     def has_teammate_icon(self, box, icons):
-        """这个科目的右上角有没有小人头像。
+        """这个科目的右边有没有小人头像。
 
-        坑（2026-10-26）：图标中心比文字中心**高约 55px**（1080p），旧代码用
-        `abs(iy - cy) < 80`，结果一个图标能同时命中上下两行，5 个科目全被当成
-        「有队友」，于是每个标签都点了一遍。现在按 55px 的固定偏移 + 20px 容差。
+        两代 UI 都支持（2026-10-26 实测）：
+        - 旧版：头像在按钮**右上角**，中心比文字中心高约 55px；
+        - 新版：头像在按钮**右侧居中**，和文字中心几乎同高。
+        不能用 ±80 的大范围：相邻两行只差 100px，会同时命中两个科目
+        （旧代码就是这么把 5 个科目全当成「有队友」的）。
         """
         if not icons or box is None:
             return False
         cx = box.x + box.width / 2
         cy = box.y + box.height / 2
-        expect_y = cy - 55 * self.height / 1080.0
-        tol = 20 * self.height / 1080.0
-        return any(ix > cx and abs(iy - expect_y) < tol for ix, iy in icons)
+        old_ui_y = cy - 55 * self.height / 1080.0
+        tol_old = 20 * self.height / 1080.0
+        tol_new = 35 * self.height / 1080.0
+        return any(
+            ix > cx and (abs(iy - old_ui_y) < tol_old or abs(iy - cy) < tol_new)
+            for ix, iy in icons)
 
     def probe_subject(self, box):
         """点开一个科目，返回预览信息：队友数 / 装备数 / 满经验数 / 彩虹边框。"""
@@ -715,7 +824,7 @@ class TrainingTask(BaseGirlsTask):
         texts = self._ocr_region()
         names = self.scene_names(texts)
         equip, full = self.read_equipment(texts)
-        crit = self.has_crit_border()
+        crit = self.has_crit_border(texts)
         self.log_debug(f"场上角色名：{names}")
         return {
             "mates": max(0, len(names) - 1),      # 减去队长（队长总在场）
@@ -766,28 +875,44 @@ class TrainingTask(BaseGirlsTask):
             full += max_count
         return equip, full
 
-    def has_crit_border(self):
-        """右上角选中科目的大按钮有没有彩虹边框（= 有满经验器材，训练会暴击）。
+    def has_crit_border(self, texts=None):
+        """选中的科目大按钮有没有彩虹边框（= 有满经验器材，训练会暴击）。
 
-        正常 UI 是蓝白配色；彩虹边框里有高饱和的绿(H≈35~90)和品红(H≈125~175)，
-        这两个色相在正常界面几乎不出现，所以按占比判定。阈值保守，日志会打印实测值。
+        注意：大按钮的位置随科目行变化（选中的科目会停在它原来的行），
+        所以不能写死 y=0.12~0.30；要用「决定」按钮的 y 找到它所在的那一行。
+        只采样按钮**边缘一圈**：按钮内部的科目图标（西瓜/鞋）有绿色/红色，
+        采样整块会把普通科目误判成彩虹（实训 2026-10-26）。
         """
         frame = self.frame
         if frame is None:
             return False
+        texts = texts if texts is not None else self._ocr_region()
+        decide = self.match_text(texts, "决定")
+        if decide is None:
+            return False
         h, w = frame.shape[:2]
-        x1, y1, x2, y2 = Defs.region("subject_header")
-        roi = frame[int(h * y1):int(h * y2), int(w * x1):int(w * x2)]
+        cy = decide.y + decide.height / 2
+        x1, x2 = int(w * 0.66), int(w * 0.93)
+        y1 = max(0, int(cy - h * 0.06))
+        y2 = min(h, int(cy + h * 0.06))
+        roi = frame[y1:y2, x1:x2]
         if roi.size == 0:
             return False
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         hue, sat, val = cv2.split(hsv)
         magenta = (sat > 90) & (val > 120) & (hue >= 125) & (hue <= 175)
         green = (sat > 90) & (val > 120) & (hue >= 35) & (hue <= 90)
-        ratio = float((magenta | green).mean())
-        if ratio > 0.005:
+        ring = np.zeros(roi.shape[:2], dtype=bool)
+        t = max(4, int(h * 0.008))
+        ring[:t, :] = True
+        ring[-t:, :] = True
+        ring[:, :t] = True
+        ring[:, -t:] = True
+        hit = (magenta | green) & ring
+        ratio = float(hit.sum()) / max(int(ring.sum()), 1)
+        if ratio > 0.02:
             self.log_debug(f"科目大按钮彩虹占比 {ratio:.3f}")
-        return ratio > 0.015
+        return ratio > 0.06
 
     def scene_names(self, texts):
         """过滤出训练场景里飘在角色头顶的名字。"""
@@ -864,6 +989,13 @@ class TrainingTask(BaseGirlsTask):
         if self.match_text(texts, ("失败率", "决定", "休息", "赢得比赛", "VS")) is not None:
             return False
 
+        # 训练事件 / 只有 ▼ 的剧情页（实机 2026-10-26）：右下角白色 ▼ 是最可靠的信号。
+        # 这类页面没有长台词，旧判据认不出来，会一直卡在「没见过」。
+        if self.match_text(texts, "训练事件") is not None or self.has_story_arrow():
+            self.click(int(self.width * 0.96), int(self.height * 0.93), after_sleep=0.5)
+            self.log_info("训练事件/剧情：点右下角 ▼")
+            return True
+
         x1, y1, x2, y2 = Defs.region("dialog_text")
         lines = []
         for t in texts:
@@ -893,49 +1025,88 @@ class TrainingTask(BaseGirlsTask):
         self.log_info(f"剧情对话：连点 3 下推进（白 {white_ratio:.3f} 背景 {around.mean():.0f}）")
         return True
 
+    def has_story_arrow(self):
+        """右下角有没有白色 ▼（剧情/训练事件的推进箭头）。"""
+        frame = self.frame
+        if frame is None:
+            return False
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = Defs.region("story_arrow")
+        roi = frame[int(h * y1):int(h * y2), int(w * x1):int(w * x2)]
+        if roi.size == 0:
+            return False
+        b = roi[:, :, 0].astype(int)
+        g = roi[:, :, 1].astype(int)
+        r = roi[:, :, 2].astype(int)
+        white = (b > 225) & (g > 225) & (r > 225)
+        return int(white.sum()) > 30
+
     def handle_lobby(self, texts):
         if self.match_text(texts, ("赛事", "社团GO")) is None:
             return False
-        x, y = self.flow_point("lobby_training")
-        ok = self.click_and_expect(x, y, ("训练剧本",), timeout=8)
+        action = self.texts_in_region(texts, "main_action")
+        target = self.match_text(action, "训练")
+        if target is not None:
+            ok = self.click_and_expect(
+                int(target.x + target.width / 2),
+                int(target.y + target.height / 2), ("训练剧本",), timeout=8)
+        else:
+            x, y = self.flow_point("lobby_training")
+            ok = self.click_and_expect(x, y, ("训练剧本",), timeout=8)
         self.log_info("进入训练剧本" if ok else "点「训练」没反应")
         return True
 
     def handle_training_entry(self, texts):
         if self.match_text(texts, "训练剧本") is None:
             return False
-        x, y = self.flow_point("training_start")
-        ok = self.click_and_expect(x, y, ("训练核心",), timeout=10)
+        ok = self.click_text_and_expect(texts, "启程", ("训练核心",), timeout=10)
+        if not ok:
+            # 兜底：万一 OCR 没认出「启程」，再用实测固定坐标
+            x, y = self.flow_point("training_start")
+            ok = self.click_and_expect(x, y, ("训练核心",), timeout=6)
         self.log_info("进入训练核心" if ok else "点「启程」没反应")
         return True
 
     def handle_captain(self, texts):
         if self.match_text(texts, "训练核心") is None:
             return False
-        self.flow_click("captain_card", after_sleep=0.35)
+        self.flow_click("captain_card", after_sleep=0.5)
         self.log_info("选第一位队长（列表按等级降序，第一张最强）")
-        x, y = self.flow_point("next_step")
-        ok = self.click_and_expect(x, y, ("选择队友",), timeout=8)
+        # 选完队长后按钮可能移动，重新 OCR 再点「下一步」
+        ok = self.click_text_and_expect(
+            self._ocr_region(), "下一步", ("选择队友",), timeout=8)
         self.log_info("进入选择队友" if ok else "点「下一步」没反应")
         return True
 
     def handle_team(self, texts):
         if self.match_text(texts, "选择队友") is None:
             return False
-        self.flow_click("auto_select", after_sleep=0.4)
-        self.log_info("队友：自动选择")
-        x, y = self.flow_point("next_step")
-        ok = self.click_and_expect(x, y, ("选择器材",), timeout=8)
+        auto = self.match_text(texts, "自动选择")
+        if auto is not None:
+            self.click_box(auto, after_sleep=0.7)
+            self.log_info("队友：自动选择")
+        # 自动选择后队伍从 1 人变 5 人，底部面板会整体下移 40~50px，
+        # 必须重新 OCR「下一步」，不能复用点击前的坐标（实训 2026-10-26）。
+        ok = self.click_text_and_expect(
+            self._ocr_region(), "下一步", ("选择器材",), timeout=8)
+        if not ok:
+            x, y = self.flow_point("next_step")
+            ok = self.click_and_expect(x, y, ("选择器材",), timeout=5)
         self.log_info("进入选择器材" if ok else "点「下一步」没反应")
         return True
 
     def handle_equipment(self, texts):
         if self.match_text(texts, "选择器材") is None:
             return False
-        self.flow_click("auto_select", after_sleep=0.4)
-        self.log_info("器材：自动选择")
-        x, y = self.flow_point("next_step")
-        ok = self.click_and_expect(x, y, ("确认编队",), timeout=8)
+        auto = self.match_text(texts, "自动选择")
+        if auto is not None:
+            self.click_box(auto, after_sleep=0.7)
+            self.log_info("器材：自动选择")
+        ok = self.click_text_and_expect(
+            self._ocr_region(), "下一步", ("确认编队",), timeout=8)
+        if not ok:
+            x, y = self.flow_point("next_step")
+            ok = self.click_and_expect(x, y, ("确认编队",), timeout=5)
         self.log_info("进入确认编队" if ok else "点「下一步」没反应")
         return True
 
@@ -946,7 +1117,13 @@ class TrainingTask(BaseGirlsTask):
         if not self.config.get("允许开始训练", True):
             self.log_info("已禁用自动开始训练，停在这里等你确认")
             return True
-        self.flow_click("confirm_start", after_sleep=0.8)
+        # 注意：确认框正文里也有「开始训练」四个字（整句会被 OCR 成一个框），
+        # 必须用**整词**匹配，否则会点到正文中间 (511,923)，按钮反而没点到。
+        target = next((t for t in texts if t.name.strip() == "开始训练"), None)
+        if target is not None:
+            self.click_box(target, after_sleep=0.8)
+        else:
+            self.flow_click("confirm_start", after_sleep=0.8)
         self.log_info("开始训练（已扣体力，不可退）")
         return True
 
@@ -961,11 +1138,20 @@ class TrainingTask(BaseGirlsTask):
         state = self.top_bar()
         cur = state.get("stamina")
         limit = int(self.config.get("休息体力阈值", 40))
+        action = self.texts_in_region(texts, "main_action")
         if cur is not None and cur < limit:
-            self.flow_click("day_rest", after_sleep=0.6)
+            target = self.match_text(action, "休息")
+            if target is not None:
+                self.click_box(target, after_sleep=0.6)
+            else:
+                self.flow_click("day_rest", after_sleep=0.6)
             self.log_info(f"体力 {cur} 偏低，休息")
         else:
-            self.flow_click("day_train", after_sleep=0.6)
+            target = self.match_text(action, "训练")
+            if target is not None:
+                self.click_box(target, after_sleep=0.6)
+            else:
+                self.flow_click("day_train", after_sleep=0.6)
             self.log_info(f"体力 {cur}，进入训练科目")
         return True
 
@@ -1057,9 +1243,63 @@ class TrainingTask(BaseGirlsTask):
         if self.match_text(texts, ("在公园", "在餐厅", "野餐", "散步", "划船",
                                    "当服务员", "桌游", "扭蛋")) is not None:
             return False
+        # 训练科目页也有黄色卡片（器材卡）和底部属性面板，但它们不是选项。
+        # 科目页必有「失败率」和「决定」，事件页没有（实训 2026-10-26）。
+        if self.match_text(texts, ("失败率", "决定")) is not None:
+            return False
+        if self.match_text(texts, ("上新时间", "能力详情")) is not None:
+            return False
         if self.match_text(self.texts_in_region(texts, "main_action"),
                            ("VS", "比赛", "训练")) is not None:
             return False
+
+        # ---- 竖向 3 选 1（白色圆角按钮）----
+        # 用户规则：默认选第一个。实测 2026-10-26：三个选项文字居中竖排，
+        # x 几乎相同、y 间隔 0.1~0.2，按钮本身是白底彩边，不是黄色。
+        #
+        # 必须要求右上角有「跳过」：训练动画页的「训练加成/表情加成/…」、
+        # 训练计划日历的「星期天/星期六/…」也是竖排文字，但它们没有跳过按钮。
+        # 注意：不满足条件时**不能直接 return False**，否则会连黄色二选一事件
+        # 一起拒掉（旧事件页的「跳过」是灰的，OCR 有时识别不到）。
+        has_skip = (self.match_text(texts, "训练计划") is None
+                    and self.match_text(
+                        self.texts_in_region(texts, "top_right"), "跳过") is not None)
+
+        if has_skip:
+            vopts = []
+            for t in texts:
+                cx = (t.x + t.width / 2) / self.width
+                cy = (t.y + t.height / 2) / self.height
+                s = t.name.strip()
+                if not (0.30 <= cx <= 0.70 and 0.20 <= cy <= 0.70):
+                    continue
+                if not (2 <= len(s) <= 10) or not all(
+                        "\u4e00" <= ch <= "\u9fff" for ch in s):
+                    continue
+                if not self._has_white_band(t):
+                    continue
+                vopts.append(t)
+
+            groups = []
+            for t in sorted(vopts, key=lambda x: x.y):
+                cx = (t.x + t.width / 2) / self.width
+                placed = False
+                for g in groups:
+                    gx = (g[-1].x + g[-1].width / 2) / self.width
+                    if abs(gx - cx) < 0.08 and 0 < (t.y - g[-1].y) / self.height < 0.22:
+                        g.append(t)
+                        placed = True
+                        break
+                if not placed:
+                    groups.append([t])
+            groups = [g for g in groups if len(g) >= 3]
+            if groups:
+                group = max(groups, key=len)
+                pick = min(group, key=lambda t: t.y)
+                self.log_info("事件选项（竖向）：" + "、".join(t.name for t in group)
+                              + f" → 选第一个「{pick.name}」")
+                self.click_box(pick, after_sleep=0.45)
+                return True
 
         buttons = self._yellow_buttons()
         if len(buttons) < 2:
@@ -1185,6 +1425,28 @@ class TrainingTask(BaseGirlsTask):
                 best = ev
         return best
 
+    def _has_white_band(self, t):
+        """文字所在的那条横带是不是白底（事件选项按钮）。
+
+        竖向 3 选 1 的真按钮是「白底彩边」；训练动画的「训练加成/表情加成」
+        是深色背景上的文字，白底占比很低。用这一条把两者分开。
+        """
+        frame = self.frame
+        if frame is None:
+            return False
+        h, w = frame.shape[:2]
+        cy = int(t.y + t.height / 2)
+        y1, y2 = max(0, cy - 10), min(h, cy + 10)
+        x1, x2 = int(w * 0.22), int(w * 0.78)
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return False
+        b = roi[:, :, 0].astype(int)
+        g = roi[:, :, 1].astype(int)
+        r = roi[:, :, 2].astype(int)
+        bright = (b > 195) & (g > 190) & (r > 180)
+        return float(bright.mean()) > 0.50
+
     def handle_boost_training(self, texts):
         """加强训练二选一（蓝 100%/+12 vs 紫 80%/+36）。
 
@@ -1265,6 +1527,7 @@ class TrainingTask(BaseGirlsTask):
         handle_match_result,
         handle_skill_select,
         handle_boost_training,
+        handle_subject_select,
         handle_event_choice,
         handle_prepare,
         handle_dialog_continue,
@@ -1283,7 +1546,6 @@ class TrainingTask(BaseGirlsTask):
         handle_shop,
         handle_go_out,
         handle_weekend,
-        handle_subject_select,
         handle_vacation,
         handle_result,
         handle_story_arrow,
