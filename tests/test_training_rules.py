@@ -198,28 +198,17 @@ class TopBarRules(unittest.TestCase):
 
 
 class StoryArrowClicks(unittest.TestCase):
-    """剧情页只点必要的下数：界面变了就停，没变才补（2026-10-26 用户观察）。
+    """剧情页一次只点一下，重试交给主循环（2026-10-26 用户观察）。
 
     旧实现无条件连点 3 下，对话一下就能推进时，第 2、3 下会点在空处或下一层 UI 上。
     """
 
     DIALOG = "训练辛苦了，尝试一下最新的特殊训练吧，大家都等着你"
 
-    def make(self, next_texts):
+    def test_clicks_once_per_tick(self):
         task = FakeTask([box(400, 850, self.DIALOG, 900, 50)])
-        task._ocr_region = lambda region_name=None, box=None: next_texts
-        return task
-
-    def test_stops_after_one_click_when_screen_changes(self):
-        task = self.make([box(400, 850, "请选择一种加强训练", 400, 50)])
         self.assertTrue(task.handle_story_arrow(task._texts))
         self.assertEqual(len(task.actions), 1)
-
-    def test_retries_up_to_three_when_screen_stuck(self):
-        texts = [box(400, 850, self.DIALOG, 900, 50)]
-        task = self.make(texts)
-        self.assertTrue(task.handle_story_arrow(texts))
-        self.assertEqual(len(task.actions), 3)
 
 
 class StallWatchdog(unittest.TestCase):

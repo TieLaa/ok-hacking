@@ -87,19 +87,14 @@ class EntryHandlers:
 
         if not lines:
             return False
-        # 旧做法是无条件连点 3 下。对话一下就能推进时，第 2、3 下会点在空处，
+        # 一次只点一下。主循环 ~0.4 秒后就会回来重新 OCR、重新判断，
+        # 本身就是重试器；在 handler 里连点反而会把「点不动」藏起来，
+        # 让 run() 的「点 3 次没变化 → debug」看门狗发现不了。
+        # 旧版无条件连点 3 下，对话一下就能推进时，第 2、3 下会点在空处，
         # 甚至点到刚弹出来的下一层 UI（加固训练卡片 / 确定）上
-        # （2026-10-26 用户观察：屏幕中间多点两下）。现在改成
-        # 「点一下 → 看界面变没变 → 没变才补」，最多 3 次。
-        sig = self._signature(texts)
-        clicks = 0
-        for _ in range(3):
-            self.click(int(self.width * 0.5), int(self.height * 0.70), after_sleep=0.45)
-            clicks += 1
-            if self._signature(self._ocr_region()) != sig:
-                break
-        self.log_info(
-            f"剧情对话：点 {clicks} 下推进（{lines[0][:16] if lines else '白字兜底'}）")
+        # （2026-10-26 用户观察：屏幕中间多点两下）。
+        self.click(int(self.width * 0.5), int(self.height * 0.70), after_sleep=0.45)
+        self.log_info(f"剧情对话：点一下推进（{lines[0][:16] if lines else '白字兜底'}）")
         return True
 
     def has_story_arrow(self):
