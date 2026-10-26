@@ -84,14 +84,20 @@ class WeekendHandlers:
         self._weekend.setdefault("visited", set()).add(place)
 
     def leave_street(self, after_sleep=0.5):
-        """退出扭蛋页：底部「放弃」才是出口，右上角 ↩ 在这页点不动。
+        """退出扭蛋页：先找文字退路，再点右上角 ↩，最后才用底部兜底。
 
-        2026-10-26 实测（1349x759）：点右上角 ↩ 十几次页面不动，点「放弃」
-        立即回到周末首页。「放弃」中心约 (0.346w, 0.896h)。
+        2026-10-26 实测（1349x759）：**买完卡的详情页**底部有「放弃」，
+        点它立即回到周末首页，「放弃」中心约 (0.346w, 0.896h)。
+
+        2026-10-27 实测（logs/debug/1027-000428_nochange3）：第一次进店的
+        「请选择1个扭蛋」页底部只有「能力详情 / 确定」，**没有「放弃」**，
+        旧兜底坐标 (0.346w, 0.896h) 正好落在两个按钮中间的空白，
+        连续 9 拍点不动 → 任务被判「连续 3 轮点不动」停止。
+        这一页右上角 ↩ (0.957w, 0.047h) 实测有效，退回周末地图页。
         """
-        if self.click_text(("放弃",), after_sleep=after_sleep, must=False):
+        if self.click_text(("放弃", "取消", "关闭"), after_sleep=after_sleep, must=False):
             return
-        self.click(int(self.width * 0.346), int(self.height * 0.896), after_sleep=after_sleep)
+        self.click(int(self.width * 0.957), int(self.height * 0.047), after_sleep=after_sleep)
 
     def handle_restaurant(self, texts):
         """餐厅内页：桌游GM（零用钱+）/ 当服务员（零用钱++）。"""
@@ -115,14 +121,23 @@ class WeekendHandlers:
         现在改成：标题只当**判据**（有「公园」相关字样 + 有三个圆形选项就处理），
         实际点击永远走选项文字框（散步/划船/野餐）。
         """
+        # 周末首页/地图上有「出行」按钮，公园内页没有（与 handle_shop 同一招）。
+        # 2026-10-27 事故：地图页的对白「小澪奈总是吵着要去野餐…」包含「野餐」，
+        # Defs.PARK_TITLE 里的「野餐」直接把地图页判成公园内页 →
+        # mark_visited("公园") 后 handle_weekend 认为「都去过了」，
+        # 反复点返回循环 9 拍，任务被判卡死停止。
+        if self.match_text(texts, "出行") is not None:
+            return False
         if self.match_text(texts, Defs.PARK_TITLE) is None:
             return False
-        self.mark_visited("公园")
 
         if self.style != "训练流":
             pref = self.config.get("公园选项", "野餐")
             order = (pref,) + tuple(x for x in Defs.PARK_OPTIONS if x != pref)
-            return self.choose_option(texts, order)
+            ok = self.choose_option(texts, order)
+            if ok:
+                self.mark_visited("公园")
+            return ok
 
         st = self.weekend_state()
         day = st["date"][1] if st["date"] else None
@@ -142,7 +157,10 @@ class WeekendHandlers:
 
         order = (st["park_choice"],) + tuple(
             x for x in Defs.PARK_OPTIONS if x != st["park_choice"])
-        return self.choose_option(texts, order)
+        ok = self.choose_option(texts, order)
+        if ok:
+            self.mark_visited("公园")
+        return ok
 
     def handle_shop(self, texts):
         """商店：按「购买策略」买；买得起就多买几件，买不动了才关店。
@@ -271,7 +289,9 @@ class WeekendHandlers:
             self.leave_street()
             return True
 
-        stamina = self.top_bar().get("stamina")
+        bar = self.top_bar()
+        stamina = bar.get("stamina")
+        stamina_max = bar.get("stamina_max") or 130
         money = self.read_money(texts)
         if money is None:
             # 读不到零用钱就不能判断买不买得起：点「确定」买不起时游戏不会扣钱，
@@ -284,7 +304,16 @@ class WeekendHandlers:
 
         def score(c):
             base = {"金": 100, "紫": 60, "蓝": 20}.get(c["quality"], 0)
-            return base + (40 if c["mate"] else 0) + (1 if "+" in c["name"] else 0)
+            s = base + (40 if c["mate"] else 0) + (1 if "+" in c["name"] else 0)
+            # 2026-10-27（用户截图 45/130 三选一）：「精力恢复++」
+            # （立刻恢复90，之后每天30×4天，金卡+队友）和「运控增加++」
+            # 同为 141 分，max() 取第一个把恢复卡丢掉了。
+            # 恢复量按「这次真能补上的体力」折半计分：满体力时 room=0 不加分，
+            # 不会为了满体力白花钱。
+            if c.get("recover") and stamina is not None:
+                room = max(stamina_max - stamina, 0)
+                s += int(min(c["recover"], room) * 0.5)
+            return s
 
         ok = []
         for c in cards:
@@ -303,6 +332,7 @@ class WeekendHandlers:
 
         detail = "、".join(
             f"{c['name']}({c['quality']}{'+队友' if c['mate'] else ''}"
+            f"{'·恢复' + str(c['recover']) if c.get('recover') else ''}"
             f"{'·清空' if c['clear'] else ''}/{c['price']}币/{score(c)})" for c in cards)
         if not ok:
             self.log_info(f"扭蛋：{detail} → 没有可买的"
@@ -354,8 +384,9 @@ class WeekendHandlers:
         实机（2026-10-25 周六）：出行页只有「出行」两个字，没有任何地点名，
         所以 handle_weekend 认不出来，必须先点这一下。
         """
-        if self.match_text(texts, Defs.WEEKEND_PLACES) is not None:
-            return False          # 已经在地图上了，交给 handle_weekend
+        # 地图上没有「出行」按钮（2026-10-27 修正）：旧判据是「有地点名就是地图」，
+        # 但周末首页的台词也含地点名（「告诉她公园的草坪是假的」），
+        # 结果首页被判成地图、永远不点「出行」。现在统一用「有出行 = 首页」。
         if self.match_text(texts, "出行") is None:
             return False
 
@@ -387,6 +418,12 @@ class WeekendHandlers:
         找「有队友加成的黄色道具」；周日再回公园补精力。
         `允许进步行街 / 允许进游戏厅` 没开时这两个地点会被过滤掉，退化成公园。
         """
+        # 周末首页有「出行」大按钮，地图上没有（2026-10-27 核对 run2 地图页三帧 OCR：
+        # 地图只有「公园/公园+」「游戏厅/属性+」「步行街/零用钱+」，无「出行」）。
+        # 台词常含地点名（「告诉她公园的草坪是假的」「游戏厅地狱挑战开始了！」），
+        # 只靠地点名会把首页当地图：点中台词 → 误 mark_visited → todo 空 → 点右上角。
+        if self.match_text(texts, "出行") is not None:
+            return False
         if not self.match_text(texts, Defs.WEEKEND_PLACES):
             return False
         st = self.weekend_state()
@@ -412,7 +449,14 @@ class WeekendHandlers:
 
         self.log_info(f"周末{'日' if day == '日' else '六'}：待去 {todo}（已去 {sorted(visited)}）")
         for place in todo:
-            target = self.match_text(texts, place)
+            # 只认「公园」「餐厅」这种**整框就是地点名**的按钮。
+            # 2026-10-27 事故：地图页有对白「告诉她公园的草坪是假的」「要去野餐」，
+            # match_text 的包含匹配会命中长句，click_box 点到句子中间（图上什么都没发生），
+            # 下一拍又判「都去过了」→ 返回死循环。
+            target = self.exact_text(texts, (place,))
+            if target is None:
+                target = next((t for t in texts
+                               if place in t.name and len(t.name.strip()) <= 4), None)
             if target:
                 # 不在这里记 visited：要等地点的内页 handler 真认到标题才登记，
                 # 否则「点了没打开」也会被当成去过（2026-10-26 公园没打开就被跳过）。

@@ -64,6 +64,43 @@ def gacha_texts(cards, stamina=None, money=None, price="60"):
 
 class GachaRules(unittest.TestCase):
 
+    def test_stamina_recover_parse(self):
+        """2026-10-27 用户截图：精力恢复++ 的两种写法要能算出总量。"""
+        self.assertEqual(FakeTask.stamina_recover(
+            "立刻恢复90精力，之后每天恢复30点，持续4天，队友属性大幅提升"), 210)
+        self.assertEqual(FakeTask.stamina_recover("立刻恢复40精力"), 40)
+        self.assertEqual(FakeTask.stamina_recover("每天恢复10点，持续4天"), 40)
+        # 相反效果不能当成恢复
+        self.assertEqual(FakeTask.stamina_recover("消耗所有精力，意识训练"), 0)
+        self.assertEqual(FakeTask.stamina_recover("清空精力，运气+30"), 0)
+        self.assertEqual(FakeTask.stamina_recover("主力运控+72，队友属性大幅提升"), 0)
+
+    def test_recover_card_beats_equal_quality(self):
+        """2026-10-27 用户截图（45/130，金卡+队友 ×2）：
+
+        运控增加++ 与 精力恢复++ 同为基础 141 分，旧 max() 取第一个 → 买错。
+        恢复 210 点（上限 130-45=85 有效）折半 +42 → 恢复卡必须胜出。
+        """
+        task = FakeTask(gacha_texts([
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+            ("投射增加+", "主力投射+48，队友属性中幅提升"),
+            ("精力恢复++", "立刻恢复90精力，之后每天恢复30点，持续4天，队友属性大幅提升"),
+        ], stamina="45/130", money="106", price=["100", "80", "100"]),
+            qualities=["金", "紫", "金"], mates=[True, False, True])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions[0][0], "click")
+        self.assertGreaterEqual(task.actions[0][1], 1300)   # 点第三张卡，不是第一张
+
+    def test_recover_card_not_bought_at_full_stamina(self):
+        """体力满时恢复卡不加分：别为了回不上的精力白花钱。"""
+        task = FakeTask(gacha_texts([
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+            ("精力恢复++", "立刻恢复90精力，之后每天恢复30点，持续4天，队友属性大幅提升"),
+        ], stamina="130/130", money="300", price=["100", "100"]),
+            qualities=["金", "金"], mates=[True, True])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertLess(task.actions[0][1], 1300)           # 仍选第一张运控卡
+
     def test_all_blue_should_exit_without_buying(self):
         """三张全蓝：直接退出，不能买（用户规则：只买黄紫）。"""
         task = FakeTask(gacha_texts([
@@ -72,8 +109,8 @@ class GachaRules(unittest.TestCase):
             ("投射增加", "主力投射+30"),
         ], stamina="72/121"), qualities=["蓝", "蓝", "蓝"])
         self.assertTrue(task.handle_street(task._texts))
-        # leave_street -> 底部「放弃」(0.346w, 0.896h)
-        self.assertEqual(task.actions, [("click", 664, 967)])
+        # leave_street -> 文字退路都没有时点右上角 ↩ (0.957w, 0.047h)
+        self.assertEqual(task.actions, [("click", 1837, 50)])
 
     def test_clear_card_rejected_when_stamina_high(self):
         """体力 72 时，金卡但清空精力 → 拒绝，退出。"""
@@ -83,7 +120,7 @@ class GachaRules(unittest.TestCase):
             ("投射增加", "主力投射+30"),
         ], stamina="72/121"), qualities=["金", "蓝", "蓝"])
         self.assertTrue(task.handle_street(task._texts))
-        self.assertEqual(task.actions, [("click", 664, 967)])
+        self.assertEqual(task.actions, [("click", 1837, 50)])
 
     def test_unknown_money_exits_without_buying(self):
         """读不到零用钱时不能盲买：买不起会卡在扭蛋页（2026-10-26 实测）。"""
@@ -93,7 +130,7 @@ class GachaRules(unittest.TestCase):
             ("体能增加+", "主力体能+48"),
         ], stamina="52/121"), qualities=["金", "蓝", "紫"])
         self.assertTrue(task.handle_street(task._texts))
-        self.assertEqual(task.actions, [("click", 664, 967)])
+        self.assertEqual(task.actions, [("click", 1837, 50)])
 
     def test_clear_card_allowed_when_stamina_low(self):
         """体力 10 < 阈值 30：允许买清空卡（拿体力换属性）。"""
@@ -104,7 +141,7 @@ class GachaRules(unittest.TestCase):
         ], stamina="10/121", money="200"), qualities=["蓝", "蓝", "蓝"])
         self.assertTrue(task.handle_street(task._texts))
         self.assertEqual(task.actions[0][0], "click")      # 点卡片
-        self.assertNotEqual(task.actions[0][1], 664)       # 不是退出
+        self.assertNotEqual(task.actions[0][1], 1837)      # 不是退出
 
     def test_cannot_afford_should_exit(self):
         """零用钱 50、卡片 60：买不起就退出，不能点确定卡在扭蛋页。"""
@@ -114,7 +151,7 @@ class GachaRules(unittest.TestCase):
             ("投射增加", "主力投射+30"),
         ], stamina="72/121", money="50", price="60"), qualities=["蓝", "紫", "蓝"])
         self.assertTrue(task.handle_street(task._texts))
-        self.assertEqual(task.actions, [("click", 664, 967)])
+        self.assertEqual(task.actions, [("click", 1837, 50)])
 
     def test_affordable_pick_next(self):
         """前两张买不起时，选买得起的第三张（不是直接退出）。"""
@@ -306,6 +343,63 @@ class WeekendMapRules(unittest.TestCase):
         task.leave_street()
         self.assertEqual(task.actions[-1][0], "click_box")
         self.assertEqual(task.actions[-1][1], "放弃")
+
+    def test_street_exit_without_give_up_clicks_back_arrow(self):
+        """2026-10-27：第一次进店的扭蛋页底部只有「能力详情/确定」，没有「放弃」。
+
+        旧兜底点 (0.346w, 0.896h) 落在两个按钮中间的空白，连续 9 拍点不动。
+        没有文字退路时必须点右上角 ↩ (0.957w, 0.047h)。
+        """
+        texts = [box(700, 100, "请选择1个扭蛋", 300, 50),
+                 box(640, 950, "确定", 120, 60),
+                 box(30, 990, "能力详情", 150, 40)]
+        task = FakeTask(texts)
+        task.leave_street()
+        self.assertEqual(task.actions[-1][0], "click")
+        ax, ay = task.actions[-1][1], task.actions[-1][2]
+        self.assertGreaterEqual(ax, int(task.width * 0.94))
+        self.assertLessEqual(ay, int(task.height * 0.08))
+
+    def test_map_dialogue_is_not_a_park_page(self):
+        """2026-10-27：地图页对白「…要去野餐」「…公园的草坪是假的」含判据词。
+
+        旧逻辑把地图页当成公园内页并 mark_visited，之后「都去过了 → 返回」
+        死循环 9 拍、任务被判卡死。有「出行」按钮就必须不是公园内页。
+        """
+        texts = self.MAP + [
+            box(400, 260, "小澪奈总是吵着要去野餐，我", 700, 40),
+            box(400, 320, "告诉她公园的草坪是假的，她", 700, 40),
+            box(1700, 930, "出行", 160, 60),
+        ]
+        task = FakeTask(texts)
+        task.weekend_state()
+        self.assertFalse(task.handle_park(texts))
+        self.assertEqual(task._weekend["visited"], set())
+
+    def test_place_click_ignores_dialogue_text(self):
+        """地图上点地点必须点地点名那一整框，不能点含「公园」的对白长句。"""
+        texts = self.MAP + [box(400, 260, "告诉她公园的草坪是假的，她", 700, 40)]
+        task = FakeTask(texts)
+        task.weekend_state()
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertEqual(task.actions[-1][0], "click_box")
+        self.assertNotIn("告诉她", task.actions[-1][1])
+        self.assertIn(task.actions[-1][1], ("公园", "步行街", "游戏厅", "餐厅"))
+
+    def test_weekend_home_is_not_map(self):
+        """2026-10-27 实机：首页台词含「公园」+ 商店按钮 + 出行按钮。
+
+        旧判据把首页当地图，台词被点、公园被误记已去，todo 空 → 点右上角。
+        首页独有「出行」，地图上没有 → 有出行就不是地图。
+        """
+        texts = [box(1700, 930, "出行", 160, 60),
+                 box(1700, 300, "商店", 60, 30),
+                 box(400, 260, "告诉她公园的草坪是假的，她", 700, 40)]
+        task = FakeTask(texts)
+        task.weekend_state()
+        task._weekend["visited"] = {"公园"}
+        self.assertFalse(task.handle_weekend(texts))
+        self.assertEqual(task.actions, [])
 
     def test_map_is_not_treated_as_dialog(self):
         task = FakeTask(list(self.MAP))

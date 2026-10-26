@@ -140,6 +140,38 @@ class TrainingParsersMixin:
             return False
         return any(p in s for p in Defs.GACHA_CLEAR_PHRASES)
 
+    @staticmethod
+    def stamina_recover(text):
+        """从扭蛋效果文本里算这张卡**总共能补多少精力**。
+
+        2026-10-27 用户截图（第6周周六 45/130，三选一）：
+            精力恢复++  立刻恢复90精力，之后每天恢复30点，持续4天，队友属性大幅提升
+            金卡 / 100 币 / 带队友
+        拆成 90 + 30×4 = 210 点。当时它和「运控增加++」同为 141 分，
+        max() 取第一个把恢复卡丢掉了 —— 所以恢复量必须进评分。
+
+        只认「恢复N精力」「恢复N点」两种写法，并且先排除清空/消耗型
+        （那是相反效果，见 `is_stamina_clear`）。
+        """
+        s = (text or "").replace(" ", "").replace("　", "")
+        # 「每天恢复N点，持续D天」这种写法不带「精力」二字，也要认。
+        if "精力" not in s and "每天恢复" not in s:
+            return 0
+        # 注意不能复用 GACHA_CLEAR_EXCLUDE：那份列表含「恢复」，是给「清空卡」
+        # 判断用的反向词表；恢复卡本身就带「恢复」。
+        if "清空" in s or "消耗" in s:
+            return 0
+        total = 0
+        # 持续型：每天恢复 N 点，持续 D 天
+        m = re.search(r"每天恢复(\d+)点.*?持续(\d+)天", s)
+        if m:
+            total += int(m.group(1)) * int(m.group(2))
+            s = s.replace(m.group(0), "")
+        # 一次性：立刻恢复 N 精力 / 恢复 N 点
+        if mm := re.search(r"恢复(\d+)(?:精力|点)", s):
+            total += int(mm.group(1))
+        return total
+
     def read_gacha_cards(self, texts):
         """解析扭蛋三选一：卡名 / 品质色 / 是否有队友加成 / 分值 / 点击坐标。
 
@@ -186,6 +218,7 @@ class TrainingParsersMixin:
                 "sat": sat,
                 "effect": effect,
                 "clear": self.is_stamina_clear(effect),
+                "recover": self.stamina_recover(effect),
                 "score": score,
                 "x": int(title.x + title.width / 2),
                 "y": int(title.y + title.height / 2),
