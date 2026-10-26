@@ -130,6 +130,9 @@ class GirlsInteraction(BaseInteraction):
             if win32gui.GetForegroundWindow() == hwnd:
                 return True
 
+        # 不要用「最小化再恢复」抢前台：前台是管理员进程时恢复会失败，
+        # 窗口会反复 visible=False，WGC 抓不到帧、点击也会全部落空
+        # （实训 2026-10-26）。抢不到就明确放弃，让上层报错/等用户点一下游戏。
         fg_name = win32gui.GetWindowText(win32gui.GetForegroundWindow())
         logger.warning(f"游戏未能置前（目标 {hwnd}，当前前台「{fg_name}」），本次操作放弃")
         return False

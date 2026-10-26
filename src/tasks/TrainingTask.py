@@ -253,6 +253,12 @@ class TrainingTask(BaseGirlsTask):
             self.click_box(target, after_sleep=0.35)
             self.log_info(f"关闭弹窗「{target.name}」")
             return True
+        # 抽卡/活动横幅：只有「立即前往」和右上角一个 X，没有「关闭」文字。
+        # 不处理的话兜底会点屏幕中央，正好点进抽卡页（实训 2026-10-26）。
+        if self.match_text(texts, "立即前往") is not None:
+            self.click(int(self.width * 0.89), int(self.height * 0.17), after_sleep=0.6)
+            self.log_info("关闭活动横幅")
+            return True
         return False
 
     def try_speed_2x(self, texts):
@@ -337,6 +343,31 @@ class TrainingTask(BaseGirlsTask):
 
         self.log_warning("赛前准备页：跳过和前往都没找到")
         return False
+
+    def handle_draw(self, texts):
+        """大厅「幸运大抽奖」转盘：点「转一转」抽一次，结果交给弹窗处理。"""
+        if self.match_text(texts, ("幸运大抽奖", "普通技能", "强力技能")) is None:
+            return False
+        target = self.match_text(texts, "转一转")
+        if target is not None:
+            self.click_box(target, after_sleep=1.2)
+            self.log_info("抽奖：转一转")
+        else:
+            self.click(int(self.width * 0.5), int(self.height * 0.8), after_sleep=1.0)
+            self.log_info("抽奖：点结果继续")
+        return True
+
+    def handle_training_result(self, texts):
+        """训练结果浮层：精力降低了X / 属性提升了 / 触发训练后事件。
+
+        这个浮层没有「下一步」按钮，点屏幕中央或等几秒就会收起。
+        旧代码认不出来，会走「没见过」兜底，每天多存 2~3 张图。
+        """
+        if self.match_text(texts, ("精力降低了", "属性提升了", "触发训练后事件")) is None:
+            return False
+        self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=0.6)
+        self.log_info("训练结果：点屏幕继续")
+        return True
 
     def handle_result(self, texts):
         """比赛/训练结算页：确认、继续、领取。"""
@@ -599,6 +630,9 @@ class TrainingTask(BaseGirlsTask):
             st = self.weekend_state()
             day = st["date"][1] if st["date"] else None
             week = st["date"][0] if st["date"] else None
+            if week is None:
+                # 顶栏 OCR 偶尔读不到周数；沿用上次的周，避免同一周重复进店
+                week = self._shop_week
             shop = self.match_text(texts, "商店")
             if (shop is not None and day != "日" and not st["shop_checked"]
                     and self._shop_week != week):
@@ -1042,7 +1076,9 @@ class TrainingTask(BaseGirlsTask):
         return int(white.sum()) > 30
 
     def handle_lobby(self, texts):
-        if self.match_text(texts, ("赛事", "社团GO")) is None:
+        # 大厅判据：社团GO / 赛事，或底栏的「新人抽奖 / 转一转 / 冠军之路」。
+        # 新版大厅的「社团GO」有时 OCR 不到，只靠它会在主界面空转（实训 2026-10-26）。
+        if self.match_text(texts, ("赛事", "社团GO", "新人抽奖", "转一转", "冠军之路")) is None:
             return False
         action = self.texts_in_region(texts, "main_action")
         target = self.match_text(action, "训练")
@@ -1542,7 +1578,9 @@ class TrainingTask(BaseGirlsTask):
     # 5. 剧情页判据最弱，永远放最后兜底。
     HANDLERS = (
         handle_popup,
+        handle_draw,
         handle_in_match,
+        handle_training_result,
         handle_match_result,
         handle_skill_select,
         handle_boost_training,
