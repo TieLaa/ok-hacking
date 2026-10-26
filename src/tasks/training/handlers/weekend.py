@@ -72,10 +72,22 @@ class WeekendHandlers:
             self.log_info(f"确定 @({confirm.x},{confirm.y})")
         return True
 
+    def mark_visited(self, place):
+        """地点内页真的打开后才登记「今天去过」。
+
+        2026-10-26 用户反馈：在地图上点了「公园」，页面其实没打开，
+        但旧代码点击前就 `visited.add(place)`，结果整天的公园都被跳过。
+        现在只在各地点 handler 识别到自己的内页标题时登记。
+        这里直接写 `_weekend`，不走 `weekend_state()` —— 后者按顶栏日期判断，
+        地点内页如果读不到顶栏会重置整个状态，把 visited 清空。
+        """
+        self._weekend.setdefault("visited", set()).add(place)
+
     def handle_restaurant(self, texts):
         """餐厅内页：桌游GM（零用钱+）/ 当服务员（零用钱++）。"""
         if self.match_text(texts, Defs.RESTAURANT_TITLE) is None:
             return False
+        self.mark_visited("餐厅")
         pref = self.config.get("餐厅选项", "当服务员")
         order = (pref,) + tuple(x for x in Defs.RESTAURANT_OPTIONS if x != pref)
         return self.choose_option(texts, order)
@@ -95,6 +107,7 @@ class WeekendHandlers:
         """
         if self.match_text(texts, Defs.PARK_TITLE) is None:
             return False
+        self.mark_visited("公园")
 
         if self.style != "训练流":
             pref = self.config.get("公园选项", "野餐")
@@ -236,6 +249,7 @@ class WeekendHandlers:
         """
         if self.match_text(texts, Defs.STREET_TITLE) is None:
             return False
+        self.mark_visited("步行街")
         if not self.config.get("允许进步行街", True):
             self.log_info("步行街扭蛋：未开启，退出")
             self.exit_page()
@@ -301,6 +315,7 @@ class WeekendHandlers:
         """
         if self.match_text(texts, Defs.ARCADE_TITLE) is None:
             return False
+        self.mark_visited("游戏厅")
         skip = self.match_text(self.texts_in_region(texts, "weekend_options"), Defs.ARCADE_SKIP)
         if skip is None:
             skip = self.match_text(texts, Defs.ARCADE_SKIP)
@@ -383,8 +398,9 @@ class WeekendHandlers:
         for place in todo:
             target = self.match_text(texts, place)
             if target:
-                visited.add(place)
+                # 不在这里记 visited：要等地点的内页 handler 真认到标题才登记，
+                # 否则「点了没打开」也会被当成去过（2026-10-26 公园没打开就被跳过）。
                 self.click_box(target, after_sleep=0.5)
-                self.log_info(f"周末去「{place}」（{self.style}）")
+                self.log_info(f"周末点「{place}」（{self.style}）")
                 return True
         return False

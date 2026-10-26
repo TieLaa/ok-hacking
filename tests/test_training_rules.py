@@ -255,6 +255,23 @@ class WeekendMapRules(unittest.TestCase):
         self.assertEqual(task.actions[-1][0], "click")
         self.assertGreaterEqual(task.actions[-1][1], int(task.width * 0.9))   # 右上角返回
 
+    def test_clicking_place_does_not_mark_visited(self):
+        """地图上点一下不等于进去过：visited 必须等地点的内页确认（2026-10-26）。"""
+        task = FakeTask(list(self.MAP))
+        task.weekend_state()
+        self.assertTrue(task.handle_weekend(task._texts))
+        self.assertEqual(task._weekend["visited"], set())
+
+    def test_park_page_marks_visited(self):
+        texts = [box(600, 100, "在公园干点什么好呢?", 600, 50),
+                 box(700, 700, "划船", 100, 50),
+                 box(900, 700, "野餐", 100, 50),
+                 box(1100, 700, "散步", 100, 50)]
+        task = FakeTask(texts)
+        task.weekend_state()
+        task.handle_park(texts)
+        self.assertIn("公园", task._weekend["visited"])
+
     def test_map_is_not_treated_as_dialog(self):
         task = FakeTask(list(self.MAP))
         self.assertFalse(task.handle_story_arrow(task._texts))
