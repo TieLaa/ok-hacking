@@ -117,12 +117,16 @@ class TrainingHandlers:
         return False
 
     def handle_result(self, texts):
-        """比赛/训练结算页：确认、继续、领取。
+        """比赛/训练结算页：确认、继续、领取、下一步。
 
         一局的终点（用户 2026-10-26）：最终结算点「下一步」会进入**注册球员编队**，
         任务到这里就算跑完，不要再往下点。
+
+        2026-10-26 补充：地点活动（划船/野餐）成功页也是「成功！+ 属性 + 下一步」，
+        顶栏还在、没有评价大字，handle_match_result 的 RESULT_TITLE_RE 认不出来，
+        这里必须兜住「下一步」，否则会在结果页点中央空转到卡死。
         """
-        target = self.match_text(texts, ("确认", "继续", "领取"))
+        target = self.match_text(texts, ("确认", "继续", "领取", "下一步"))
         if not target:
             return False
         # 结算页的「确认」可能连点两次
