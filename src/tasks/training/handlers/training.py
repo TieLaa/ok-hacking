@@ -388,49 +388,24 @@ class TrainingHandlers:
         return True
 
     def handle_boost_training(self, texts):
-        """加强训练二选一（蓝 100%/+12 vs 紫 80%/+36）。
+        """加强训练二选一：**右卡永远是紫卡**（高收益/低成功率），点它再点「确定」。
 
-        按**期望值**选：收益 × 成功率。实测 36×0.8=28.8 远高于 12×1.0=12。
-        点卡片上半部分（百分比文字下方）再点「确定」。
+        实测三张图：100%/+12 vs 80%/+36、100%/+10 vs 95%/+30、100%/+10 vs 65%/+30，
+        右卡收益都更高，不需要再算期望值，也不需要一堆认不出数字时的兜底。
+        取最右边的成功率文字来点，布局微调也不会点到两张卡中间的空白。
         """
         if self.match_text(texts, "加强训练") is None:
             return False
 
         rates = [t for t in texts if Defs.PERCENT_RE.match(t.name.strip())]
-        gains = [t for t in texts if Defs.GAIN_RE.match(t.name.strip())]
-        if not rates:
-            # 认不出成功率时**不要盲点固定坐标**：0.37w / 0.48h 正好落在两张卡
-            # 中间的空白上，用户实测「点了两次中间才点中右边」（2026-10-26）。
-            # 卡片多半已经选中，直接点「确定」；没有确定再找黄色卡片框。
-            if self.click_text("确定", after_sleep=0.6):
-                self.log_info("加强训练：认不出成功率，直接点确定")
-                return True
-            buttons = sorted(self._yellow_buttons(), key=lambda b: b[0])
-            if buttons:
-                bx, by, bw, bh = buttons[0]
-                self.click(int(bx + bw / 2), int(by + bh / 2), after_sleep=0.35)
-                self.log_warning("加强训练：认不出成功率，点左侧卡片框")
-            else:
-                self.click(int(self.width * 0.25), int(self.height * 0.5), after_sleep=0.35)
-                self.log_warning("加强训练：认不出成功率和卡片框，点左侧")
-            self.click_text("确定", after_sleep=0.6)
-            return True
-
-        scored = []
-        for r in rates:
-            rx = r.x + r.width / 2
-            gain = min(gains, key=lambda g: abs((g.x + g.width / 2) - rx)) if gains else None
-            p = int(Defs.PERCENT_RE.match(r.name.strip()).group(1))
-            v = int(Defs.GAIN_RE.match(gain.name.strip()).group(1)) if gain else p
-            scored.append((v * p / 100.0, r, v, p))
-        scored.sort(key=lambda x: -x[0])
-
-        _, card, v, p = scored[0]
-        self.log_info("加强训练：" + "  ".join(f"{pp}%/+{vv}={ee:.0f}" for ee, _, vv, pp in scored)
-                      + f" → 选 {p}%/+{v}")
-        # 点百分比文字的中心（y 也用它），不要用固定 0.48h —— 卡片高度不同，
-        # 固定 y 会落到卡片上沿或中间空白。
-        self.click(int(card.x + card.width / 2), int(card.y + card.height / 2),
-                   after_sleep=0.35)
-        self.click_text("确定", after_sleep=0.6)
+        if rates:
+            card = max(rates, key=lambda t: t.x)
+            x = int(card.x + card.width / 2)
+            y = int(card.y + card.height / 2)
+        else:
+            x, y = int(self.width * 0.63), int(self.height * 0.30)
+        self.click(x, y, after_sleep=0.35)
+        self.click_text(("确定",), after_sleep=0.6)
+        self.log_info(f"加强训练：点右卡 ({x},{y}) + 确定")
         return True
+

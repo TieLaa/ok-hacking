@@ -197,6 +197,24 @@ class TopBarRules(unittest.TestCase):
         self.assertEqual(task.top_bar()["stamina"], 69)
 
 
+class BoostTrainingClicks(unittest.TestCase):
+    """加强训练：只点右卡 + 确定（2026-10-26 用户口径），不再按期望值比较。"""
+
+    def test_clicks_right_card_then_confirm(self):
+        texts = [
+            box(746, 125, "请选择一种加强训练", 426, 54),
+            box(654, 256, "100%", 126, 58),
+            box(1146, 256, "95%", 100, 58),
+            box(674, 379, "+10", 94, 50),
+            box(1152, 377, "+30", 92, 52),
+            box(906, 874, "确定", 98, 51),
+        ]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_boost_training(texts))
+        self.assertEqual(task.actions[0], ("click", 1196, 285))
+        self.assertTrue(any(a[0] == "click_box" and a[1] == "确定" for a in task.actions))
+
+
 class StoryArrowClicks(unittest.TestCase):
     """剧情页一次只点一下，重试交给主循环（2026-10-26 用户观察）。
 
