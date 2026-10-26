@@ -372,8 +372,12 @@ class WeekendHandlers:
         # 不记录「已去过」就会来回进出游戏厅（2026-10-26 实训）。
         todo = [p for p in places if p not in visited]
         if not todo:
-            self.log_info(f"周末：{sorted(visited)} 都去过了，不再进地点")
-            return False
+            # 地点都去过：停在周末地图上什么都不会发生（2026-10-26 卡死：
+            # 地图被 story_arrow 当成剧情页连点 ▼，反复 50 秒）。
+            # 点右上角返回周末首页，让当天结算。
+            self.log_info(f"周末：{sorted(visited)} 都去过了 → 返回")
+            self.exit_page()
+            return True
 
         self.log_info(f"周末{'日' if day == '日' else '六'}：待去 {todo}（已去 {sorted(visited)}）")
         for place in todo:

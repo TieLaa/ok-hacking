@@ -20,6 +20,7 @@ ok-script 自带 `Start/Stop`（默认 F9），但它有两个坑：
 import ctypes
 import ctypes.wintypes as wintypes
 import threading
+import time
 
 from ok import Logger
 
@@ -39,6 +40,11 @@ DEFAULT_KEYS = (
     (MOD_CONTROL | MOD_SHIFT, 0x7B, "Ctrl+Shift+F12"),
 )
 
+# 轮询兜底：RegisterHotKey 是全局独占的，F8 被别的程序抢走时注册会静默失败。
+# GetAsyncKeyState 不占用按键、也不需要注册，别的程序占了照样能读到物理按下。
+# 2026-10-26 实机：F8 被占用后只抢到 Ctrl+Alt+F12，用户按 F8 完全没反应。
+POLL_KEYS = ((0x77, "F8"), (0x7B, "F12"))
+
 
 class EmergencyStop:
     """一个可复用的“紧急停止”信号。"""
@@ -46,22 +52,29 @@ class EmergencyStop:
     def __init__(self, keys=DEFAULT_KEYS):
         self.keys = tuple(keys)
         self.event = threading.Event()
+        self.ready = threading.Event()   # 注册尝试结束（成功或失败）
         self.label = None           # 真正抢到的按键名
         self._thread = None
+        self._poll_thread = None
         self._lock = threading.Lock()
         self.registered = None      # None=还没试 / True / False
 
     # ---------- 对外 ----------
 
-    def ensure_started(self):
-        """首次调用时启动热键线程；注册失败只记警告，不影响任务本身。"""
+    def ensure_started(self, wait=1.0):
+        """启动热键线程（并等一下注册结果）；注册失败只记警告，不影响任务本身。"""
         with self._lock:
-            if self._thread is not None:
-                return self.registered
-            self._thread = threading.Thread(
-                target=self._listen, name="EmergencyStopHotkey", daemon=True)
-            self._thread.start()
-            return True
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._listen, name="EmergencyStopHotkey", daemon=True)
+                self._thread.start()
+            if self._poll_thread is None:
+                self._poll_thread = threading.Thread(
+                    target=self._poll, name="EmergencyStopPoll", daemon=True)
+                self._poll_thread.start()
+        # 等注册尝试结束再返回，避免 run() 立刻读 label 读到 None（旧版会误报“未注册成功”）
+        self.ready.wait(wait)
+        return self.registered
 
     def consume(self):
         """任务循环里调用：这次按过键就返回 True（并清掉标记）。"""
@@ -87,8 +100,9 @@ class EmergencyStop:
                     break
             except Exception as e:                  # noqa: BLE001
                 logger.debug(f"热键 {label} 注册异常: {type(e).__name__}: {e}")
+        self.ready.set()
         if not self.registered:
-            logger.warning("紧急停止热键全部被占用，只能用 ok-script 自带的 Start/Stop 热键")
+            logger.warning("紧急停止热键全部被占用；F8/F12 轮询兜底仍然可用")
 
         msg = wintypes.MSG()
         try:
@@ -101,6 +115,25 @@ class EmergencyStop:
                 user32.UnregisterHotKey(None, _HOTKEY_ID)
             except Exception:                       # noqa: BLE001
                 pass
+
+    def _poll(self):
+        """GetAsyncKeyState 轮询兜底：不注册、不独占，别的程序占了 F8 也能收到。"""
+        user32 = ctypes.windll.user32
+        was_down = {vk: False for vk, _ in POLL_KEYS}
+        while True:
+            time.sleep(0.05)
+            try:
+                for vk, label in POLL_KEYS:
+                    down = bool(user32.GetAsyncKeyState(vk) & 0x8000)
+                    if down and not was_down[vk]:
+                        logger.warning(f"按下 {label}（轮询兜底）→ 请求停止")
+                        if not self.label:
+                            self.label = label
+                        self.event.set()
+                    was_down[vk] = down
+            except Exception as e:                  # noqa: BLE001
+                logger.debug(f"轮询热键异常: {type(e).__name__}: {e}")
+                time.sleep(1)
 
 
 # 全局单例：任务和工具脚本共用，谁先启动谁注册

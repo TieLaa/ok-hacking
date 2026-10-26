@@ -57,6 +57,10 @@ class EntryHandlers:
         """
         if self.match_text(texts, ("失败率", "决定", "休息", "赢得比赛", "VS")) is not None:
             return False
+        # 周末地图：地点名是导航，不是可推进的剧情。
+        # 2026-10-26 卡死：地图上被当成剧情页连点 ▼，反复 50 秒才被看门狗救回来。
+        if len([t for t in texts if t.name.strip() in Defs.WEEKEND_PLACES]) >= 2:
+            return False
 
         # 训练事件 / 只有 ▼ 的剧情页（实机 2026-10-26）：右下角白色 ▼ 是最可靠的信号。
         # 这类页面没有长台词，旧判据认不出来，会一直卡在「没见过」。

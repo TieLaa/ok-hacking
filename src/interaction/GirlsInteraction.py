@@ -197,6 +197,7 @@ class GirlsInteraction(BaseInteraction):
         # 轻则空点、重则把别的程序按坏（实测点到了 ok-script GUI 上）。
         if not self.ensure_foreground():
             raise RuntimeError("游戏窗口未能置前，放弃本次点击")
+        saved = win32api.GetCursorPos()
         if move:
             self._move_cursor(x, y)
         # 按住时间不能太短：实测「启程」这类按钮 70ms 的点击会被丢弃，
@@ -208,6 +209,14 @@ class GirlsInteraction(BaseInteraction):
             time.sleep(down_time)
         finally:
             win32api.mouse_event(up, 0, 0, 0, 0)
+            # 点完把物理光标还给用户：SetCursorPos **不产生 raw 输入**，
+            # 游戏内部的光标仍停在点击点，下一次点击前会重新绝对定位，
+            # 所以不会像「用 SetCursorPos 代替移动」那样把坐标搞错。
+            # 2026-10-26 用户反馈：脚本跑起来抢不到鼠标。
+            try:
+                win32gui.SetCursorPos(int(saved[0]), int(saved[1]))
+            except Exception:                       # noqa: BLE001
+                pass
 
     def mouse_down(self, x=-1, y=-1, name=None, key="left"):
         if x < 0 or y < 0:

@@ -241,6 +241,37 @@ class SubjectRanking(unittest.TestCase):
                            FakeTask.subject_rank(2.0, False, None, 100))
 
 
+class WeekendMapRules(unittest.TestCase):
+    """周末地图：地点都去过要退回首页，且地图不能被当成剧情页连点 ▼。"""
+
+    MAP = [box(814, 461, "游戏厅", 148, 57), box(1538, 606, "公园", 102, 51),
+           box(258, 748, "餐厅", 104, 60), box(1010, 897, "步行街", 148, 58)]
+
+    def test_all_places_visited_exits_map(self):
+        task = FakeTask(list(self.MAP))
+        task.weekend_state()                      # 先固定 date，避免 handle_weekend 清空 visited
+        task._weekend["visited"] = {"公园", "步行街", "游戏厅"}
+        self.assertTrue(task.handle_weekend(task._texts))
+        self.assertEqual(task.actions[-1][0], "click")
+        self.assertGreaterEqual(task.actions[-1][1], int(task.width * 0.9))   # 右上角返回
+
+    def test_map_is_not_treated_as_dialog(self):
+        task = FakeTask(list(self.MAP))
+        self.assertFalse(task.handle_story_arrow(task._texts))
+        self.assertEqual(task.actions, [])
+
+
+class EmergencyStopSmoke(unittest.TestCase):
+    """F8 轮询兜底：注册失败也要能启动，ready 必须置位（旧版有竞态）。"""
+
+    def test_ready_is_set_after_start(self):
+        from src.util.emergency_stop import EmergencyStop
+        stop = EmergencyStop()
+        stop.ensure_started(wait=2.0)
+        self.assertTrue(stop.ready.is_set())
+        self.assertIsNotNone(stop._poll_thread)
+
+
 class QuickMatchTaskSmoke(unittest.TestCase):
     """常驻快速比赛模块：类装配是否正确（不启动游戏）。"""
 
