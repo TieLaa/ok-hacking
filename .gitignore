@@ -69,3 +69,6 @@ autohelper
 working_images/
 
 docs/shots/.ocr_cache/
+
+# 游戏/工具运行时数据
+_game_data_/

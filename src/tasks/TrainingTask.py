@@ -15,7 +15,9 @@
 import os
 import random
 import re
+import threading
 import time
+from collections import deque
 
 import cv2
 import numpy as np
@@ -110,6 +112,11 @@ class TrainingTask(BaseGirlsTask):
         self._picked_subject = False
         self._picked_index = 0
         self._match_flags = {"manual_fixed": False, "fast_clicked": False, "last_fast_at": 0.0}
+        # 「点了没反应」检测：用户口径 —— 连续点 3 次界面没变化就要开始 debug
+        self._recent_actions = deque(maxlen=10)
+        self._no_change = 0             # 连续几次点击后界面指纹没变
+        self._sig_after_click = None    # 上一次点击后那一帧的指纹
+        self._stuck_rounds = 0          # 已经被判定「点不动」的轮数
         # 周末状态：按「第N周+星期X」区分，跨天自动重置
         self._weekend = {"date": None, "shop_checked": False, "bought": False, "park_choice": None}
         self._shop_week = None          # 同一周只逛一次商店（顶栏星期 OCR 抖动时防止重复进店）
@@ -195,6 +202,30 @@ class TrainingTask(BaseGirlsTask):
             else:
                 stuck, last_sig = 0, sig
 
+            # ---- 点 3 次没变化 → 立刻进入 debug（用户 2026-10-26 口径）----
+            # 不等到 10 秒卡死判定，也不让 handler 一直"命中但无效"地空转。
+            if self._sig_after_click is not None:
+                if sig == self._sig_after_click:
+                    self._no_change += 1
+                else:
+                    self._no_change = 0
+                    self._sig_after_click = None
+                    self._stuck_rounds = 0
+
+            if self._no_change >= 3:
+                self._stuck_rounds += 1
+                self.dump_debug(texts, f"nochange{self._no_change}")
+                self.log_warning(
+                    f"连续 {self._no_change} 次点击界面没变化（上次动作：{self._last_state}）"
+                    f"→ 已存证 logs/debug/，点击屏幕中央重试")
+                if self._stuck_rounds >= 3:
+                    self.log_error("已经 3 轮「点不动」→ 停止任务，避免一直卡在同一界面")
+                    return False
+                self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=interval)
+                self._no_change = 0
+                self._sig_after_click = sig
+                continue
+
             # ---- 卡死检测必须**优先于所有 handler** ----
             # 否则会出现「handler 一直命中、但点了完全没反应」的死循环：
             # 例如剧情页的「跳过」是灰的，handle_dialog_continue 每拍都返回 True，
@@ -232,6 +263,36 @@ class TrainingTask(BaseGirlsTask):
         """
         return hash("|".join(sorted(t.name for t in texts)))
 
+    def dump_debug(self, texts, tag):
+        """点不动的时候存一份「调试包」：截图 + OCR + 最近动作 + 线程。
+
+        用户口径（2026-10-26）：连续点 3 次界面没变化就要开始 debug。
+        产物在 logs/debug/<时间>_<tag>/，logs 已被 .gitignore 忽略。
+        """
+        try:
+            root = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "logs", "debug")
+            folder = os.path.join(root, f"{time.strftime('%m%d-%H%M%S')}_{tag}")
+            os.makedirs(folder, exist_ok=True)
+
+            frame = self.frame
+            if frame is not None:
+                cv2.imwrite(os.path.join(folder, "frame.png"), frame)
+            with open(os.path.join(folder, "ocr.txt"), "w", encoding="utf-8") as f:
+                f.write("\n".join(
+                    f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
+            with open(os.path.join(folder, "actions.txt"), "w", encoding="utf-8") as f:
+                f.write(f"step={self._steps} last={self._last_state} "
+                        f"no_change={self._no_change} rounds={self._stuck_rounds}\n")
+                f.write("\n".join(self._recent_actions))
+            with open(os.path.join(folder, "threads.txt"), "w", encoding="utf-8") as f:
+                for th in threading.enumerate():
+                    f.write(f"{th.name}\t{th.is_alive()}\n")
+            self.log_info(f"调试包已保存：logs/debug/{os.path.basename(folder)}")
+        except Exception as e:                       # noqa: BLE001
+            self.log_debug(f"调试包保存失败: {type(e).__name__}: {e}")
+
     def dump_unknown(self, texts, tag):
         """把不认识的界面存证下来：截图 + OCR 文本，事后复盘补判据用。
 
@@ -258,6 +319,9 @@ class TrainingTask(BaseGirlsTask):
             try:
                 if handler(self, texts):
                     self._last_state = handler.__name__
+                    self._recent_actions.append(f"step{self._steps} {handler.__name__}")
+                    # 记录「点击之后应该看到的那一帧」的指纹，下一拍对比是否变化
+                    self._sig_after_click = self._signature(texts)
                     self.log_debug(f"命中 {handler.__name__}（第 {self._steps} 步）")
                     if handler is not TrainingTask.handle_prepare:
                         self._skip_tries = 0
@@ -290,6 +354,27 @@ class TrainingTask(BaseGirlsTask):
             self.log_info("休息确认：确定")
             return True
         return False
+
+    def handle_resume_training(self, texts):
+        """大厅「训练确认」弹窗：继续上次没跑完的训练。
+
+        实机（2026-10-26 用户截图）：标题「训练确认」+ 主角名 + 目标
+        「赢得与XXX的比赛」，按钮是 [删档]（青色，左）[继续训练]（黄色，右）。
+        必须点「继续训练」，**绝不能点「删档」**（会清掉这一局）。
+        这个弹窗盖在大厅上，背景还能 OCR 到「赛事 / 社团GO / 训练中」，
+        所以优先级要排在 handle_lobby 前面，否则会被当成大厅反复点「训练」。
+        """
+        if self.match_text(texts, "训练确认") is None:
+            return False
+        target = self.match_text(texts, "继续训练")
+        if target is not None:
+            self.click_box(target, after_sleep=0.9)
+            self.log_info("训练确认：继续上次训练")
+            return True
+        # 认不出文字时用实测相对坐标（黄色主按钮中心）
+        self.click(int(self.width * 0.65), int(self.height * 0.75), after_sleep=0.9)
+        self.log_warning("训练确认：没认出「继续训练」，按固定坐标点黄色按钮")
+        return True
 
     def handle_popup(self, texts):
         """公告 / 领奖 / 月卡 / 提示 / 「点击屏幕继续」：先关掉，否则什么都点不动。
@@ -1964,6 +2049,7 @@ class TrainingTask(BaseGirlsTask):
     #    组队/器材/确认编队之后，否则会把它们的「下一步」抢走（实训 2026-10-26）；
     # 5. 剧情页判据最弱，永远放最后兜底。
     HANDLERS = (
+        handle_resume_training,
         handle_rest_confirm,
         handle_popup,
         handle_draw,
