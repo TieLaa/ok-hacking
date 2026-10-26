@@ -161,7 +161,7 @@ class BaseGirlsTask(BaseTask):
                     if 0 < cand <= mx:
                         cur = cand
                         break
-            if 0 < cur <= mx:
+            if 0 <= cur <= mx:
                 # 取最右边的候选（体力在周数右边；金币没有斜杠）
                 if best is None or t.x >= best[0]:
                     best = (t.x, cur, mx)

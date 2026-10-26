@@ -149,59 +149,21 @@ class MatchHandlers:
                            ("VS", "比赛", "训练")) is not None:
             return False
 
-        # ---- 竖向 3 选 1（白色圆角按钮）----
-        # 用户规则：默认选第一个。实测 2026-10-26：三个选项文字居中竖排，
-        # x 几乎相同、y 间隔 0.1~0.2，按钮本身是白底彩边，不是黄色。
-        #
-        # 必须要求右上角有「跳过」：训练动画页的「训练加成/表情加成/…」、
-        # 训练计划日历的「星期天/星期六/…」也是竖排文字，但它们没有跳过按钮。
-        # 注意：不满足条件时**不能直接 return False**，否则会连黄色二选一事件
-        # 一起拒掉（旧事件页的「跳过」是灰的，OCR 有时识别不到）。
+        # ---- 竖向 2/3 选 1（白底彩边，跳过是灰的）----
+        # **不要求白底**：事件页背景有时偏暖/偏暗，_has_white_band 会漏判；
+        # 漏判后 dialog_continue 会去点灰的「跳过」，表现是一直点跳过、
+        # 不选第一个（用户 2026-10-26 反馈）。形态判据见 choice_candidates。
         has_skip = (self.match_text(texts, "训练计划") is None
                     and self.match_text(
                         self.texts_in_region(texts, "top_right"), "跳过") is not None)
 
-        if has_skip:
-            ui_words = {"下一场", "下一步", "跳过", "确定", "取消",
-                        "关闭", "继续", "领取", "开始训练"}
-            vopts = []
-            for t in texts:
-                cx = (t.x + t.width / 2) / self.width
-                cy = (t.y + t.height / 2) / self.height
-                s = t.name.strip()
-                if s in ui_words or self.is_decor(s):
-                    continue
-                if not (0.30 <= cx <= 0.70 and 0.20 <= cy <= 0.70):
-                    continue
-                # 选项名允许书名号/间隔号：实测《巫术的起源与发展》也是选项，
-                # 旧的「必须全中文」会把它过滤掉，导致三选一只剩两个 → 整组不命中。
-                # 只排除带数字或百分比的（那是效果文案，不是选项名）。
-                if not (2 <= len(s) <= 20) or re.search(r"[0-9%]", s):
-                    continue
-                if not self._has_white_band(t):
-                    continue
-                vopts.append(t)
-
-            groups = []
-            for t in sorted(vopts, key=lambda x: x.y):
-                cx = (t.x + t.width / 2) / self.width
-                placed = False
-                for g in groups:
-                    gx = (g[-1].x + g[-1].width / 2) / self.width
-                    if abs(gx - cx) < 0.08 and 0 < (t.y - g[-1].y) / self.height < 0.22:
-                        g.append(t)
-                        placed = True
-                        break
-                if not placed:
-                    groups.append([t])
-            groups = [g for g in groups if len(g) >= 3]
-            if groups:
-                group = max(groups, key=len)
-                pick = min(group, key=lambda t: t.y)
-                self.log_info("事件选项（竖向）：" + "、".join(t.name for t in group)
-                              + f" → 选第一个「{pick.name}」")
-                self.click_box(pick, after_sleep=0.45)
-                return True
+        group = self.choice_candidates(texts)
+        if group and (has_skip or len(group) >= 3):
+            pick = min(group, key=lambda t: t.y)
+            self.log_info("事件选项（竖向）：" + "、".join(t.name.strip() for t in group)
+                          + f" → 选第一个「{pick.name.strip()}」")
+            self.click_box(pick, after_sleep=0.45)
+            return True
 
         buttons = self._yellow_buttons()
         if len(buttons) < 2:
@@ -247,16 +209,26 @@ class MatchHandlers:
                 if (bx / self.width <= cx <= (bx + bw) / self.width
                         and by / self.height <= cy <= (by + bh) / self.height):
                     inside.append(t)
+            # 名字放宽到 12 字、不要求纯中文（「85%概率」类卡片也要能认出）；
+            # 纯数字不算名字。
             names = [t for t in inside
-                     if 2 <= len(t.name.strip()) <= 8
-                     and all("\u4e00" <= ch <= "\u9fff" for ch in t.name.strip())]
+                     if 2 <= len(t.name.strip()) <= 12
+                     and not t.name.strip().isdigit()]
             effects = [t for t in inside if any(ch.isdigit() for ch in t.name)]
-            name = max(names, key=lambda t: t.height).name if names else "?"
+            name_box = max(names, key=lambda t: t.height) if names else None
+            name = name_box.name.strip() if name_box else "?"
             ev = self._effect_ev(effects)
             flat_stamina = any(
                 "精力" in t.name and "%" not in t.name for t in effects)
             infos.append({"x": bx, "y": by, "box": (bx, by, bw, bh),
-                          "name": name, "ev": ev, "flat": flat_stamina})
+                          "name": name, "name_box": name_box,
+                          "ev": ev, "flat": flat_stamina})
+
+        # 框内一个字都没有的，是两卡之间的黄色装饰/空白，点它没用
+        # （用户 2026-10-26 反馈：二选一时在中间空白点了两次）。
+        infos = [i for i in infos if i["name_box"] is not None]
+        if len(infos) < 2:
+            return False
 
         if best_kind == "v":
             pick = min(infos, key=lambda i: i["y"])
@@ -275,6 +247,7 @@ class MatchHandlers:
             f"{i['name']}({('%.0f' % i['ev']) if i['ev'] is not None else '?'}"
             f"{'·回精力' if i['flat'] else ''})" for i in infos)
         self.log_info(f"事件选项：{detail} → 选「{pick['name']}」（{why}）")
-        bx, by, bw, bh = pick["box"]
-        self.click(int(bx + bw / 2), int(by + bh / 2), after_sleep=0.45)
+        # 点文字框中心，不点黄色外框中心：外框可能横跨两卡，
+        # 中心落在中间空白上（用户 2026-10-26 反馈）。
+        self.click_box(pick["name_box"], after_sleep=0.45)
         return True

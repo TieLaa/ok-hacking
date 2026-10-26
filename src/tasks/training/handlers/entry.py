@@ -22,7 +22,14 @@ from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 class EntryHandlers:
 
     def handle_dialog_continue(self, texts):
-        """剧情/提示：右上角有「跳过」就点，否则交给 handle_story_arrow 连点推进。"""
+        """剧情/提示：右上角有「跳过」就点，否则交给 handle_story_arrow 连点推进。
+
+        例外：屏幕中部是竖排选项（三选一）时，「跳过」通常是灰的，点了不推进。
+        这时必须让位给 handle_event_choice（用户 2026-10-26 反馈：
+        机器人一直点跳过，不点第一个选项）。
+        """
+        if len(self.choice_candidates(texts)) >= 2:
+            return False
         skip = self.match_text(self.texts_in_region(texts, "top_right"), ("跳过", "点击屏幕继续"))
         if skip is not None:
             self.click_box(skip, after_sleep=0.35)

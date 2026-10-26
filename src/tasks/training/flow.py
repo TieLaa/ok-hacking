@@ -241,9 +241,9 @@ class TrainingFlowMixin:
         """
         places = [p for p in STYLE_PLACES.get(self.style, STYLE_PLACES["训练流"])
                   if p != "商店"]
-        if not self.config.get("允许进游戏厅", False):
+        if not self.config.get("允许进游戏厅", True):
             places = [p for p in places if p != "游戏厅"]
-        if not self.config.get("允许进步行街", False):
+        if not self.config.get("允许进步行街", True):
             places = [p for p in places if p != "步行街"]
         # 公园永远兜底：周末总得花掉一天
         if "公园" not in places:

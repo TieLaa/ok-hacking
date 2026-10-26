@@ -221,28 +221,18 @@ class WeekendHandlers:
             self.click(int(self.width * 0.94), int(self.height * 0.11), after_sleep=0.8)
         self.log_info("商店：关闭")
 
-    @staticmethod
-    def is_stamina_clear(text):
-        """这段文字是不是「清空精力」效果（而不是恢复精力）。
-
-        只认 Defs.GACHA_CLEAR_PHRASES 里写死的整句，不做「包含清空/包含精力」
-        这种模糊匹配；并且先排除恢复类字样 —— 「恢复全部精力」不能被选成清空扭蛋。
-        """
-        s = text.replace(" ", "").replace("　", "")
-        if any(bad in s for bad in Defs.GACHA_CLEAR_EXCLUDE):
-            return False
-        return any(p in s for p in Defs.GACHA_CLEAR_PHRASES)
-
     def handle_street(self, texts):
-        """步行街扭蛋：三张卡里按「金/紫优先、有队友优先、数值更高优先」选一张，再点确定。
+        """步行街扭蛋：只买金/紫，队友优先，体力低才允许清空精力的卡。
 
-        实机（2026-10-26）：
-        - 标题「请选择1个扭蛋（i）」；
-        - 三张竖卡：卡头是品质色条（紫/蓝/金），下面是效果说明，最下面一个价格药丸；
-        - 卡片下方一个「确定」按钮 —— **只点卡片不会前进**，必须点确定。
+        用户规则（2026-10-26）：
+        1. 只买黄色/紫色品质；蓝色、其他一律不买（宁可退出）；
+        2. 同品质有队友加成的优先；
+        3. 「消耗/清空精力」的卡：只有体力低于阈值（默认 30）才买；
+        4. 没有合格卡就点右上角返回，不点确定。
 
-        用户规则：优先黄紫，其次优先有队友的；旧代码按「投射专注/体能专注」名字找，
-        这页根本没有这些名字，于是反复点卡片、永远停在这。
+        2026-10-26 事故：旧版只按 rank*10 打分，蓝卡也有 10 分，
+        结果 72 体力买了「精力转换-意识（消耗所有精力）」，体力归 0，
+        周日只能划船回 30。现在清空卡在体力够时必须排除。
         """
         if self.match_text(texts, Defs.STREET_TITLE) is None:
             return False
@@ -252,14 +242,41 @@ class WeekendHandlers:
             return True
 
         cards = self.read_gacha_cards(texts)
-        if cards:
-            best = max(cards, key=lambda c: c["score"])
-            self.click(best["x"], best["y"], after_sleep=0.5)
-            self.log_info("扭蛋：" + "、".join(
-                f"{c['name']}({c['quality']}{'+队友' if c['mate'] else ''}/{c['score']:.0f})"
-                for c in cards) + f" → 选「{best['name']}」")
-        else:
-            self.log_warning("扭蛋：三张卡都没认出来，只点确定兜底")
+        if not cards:
+            self.log_warning("扭蛋：三张卡都没认出来，退出不买")
+            self.exit_page()
+            return True
+
+        stamina = self.top_bar().get("stamina")
+        clear_limit = int(self.config.get("扭蛋清空体力阈值", 30))
+        allow_clear = stamina is not None and stamina < clear_limit
+
+        def score(c):
+            base = {"金": 100, "紫": 60, "蓝": 20}.get(c["quality"], 0)
+            return base + (40 if c["mate"] else 0) + (1 if "+" in c["name"] else 0)
+
+        ok = []
+        for c in cards:
+            if c["clear"]:
+                # 清空卡只在体力低于阈值时买（这时是拿体力换属性）
+                if not allow_clear:
+                    continue
+            elif c["quality"] not in ("金", "紫"):
+                continue
+            c["score"] = score(c)
+            ok.append(c)
+
+        detail = "、".join(
+            f"{c['name']}({c['quality']}{'+队友' if c['mate'] else ''}"
+            f"{'·清空' if c['clear'] else ''}/{score(c)})" for c in cards)
+        if not ok:
+            self.log_info(f"扭蛋：{detail} → 没有可买的（体力 {stamina}），退出")
+            self.exit_page()
+            return True
+
+        best = max(ok, key=lambda c: c["score"])
+        self.click(best["x"], best["y"], after_sleep=0.5)
+        self.log_info(f"扭蛋：{detail} → 选「{best['name']}」（体力 {stamina}）")
 
         if self.click_text(("确定",), after_sleep=0.8, must=False):
             self.log_info("扭蛋：确定")

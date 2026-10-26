@@ -128,6 +128,18 @@ class TrainingParsersMixin:
             return "蓝", hue, sat
         return "其他", hue, sat
 
+    @staticmethod
+    def is_stamina_clear(text):
+        """这段文字是不是「清空精力」效果（而不是恢复精力）。
+
+        只认 Defs.GACHA_CLEAR_PHRASES 里写死的整句，不做「包含清空/包含精力」
+        这种模糊匹配；并且先排除恢复类字样 —— 「恢复全部精力」不能被选成清空扭蛋。
+        """
+        s = (text or "").replace(" ", "").replace("　", "")
+        if any(bad in s for bad in Defs.GACHA_CLEAR_EXCLUDE):
+            return False
+        return any(p in s for p in Defs.GACHA_CLEAR_PHRASES)
+
     def read_gacha_cards(self, texts):
         """解析扭蛋三选一：卡名 / 品质色 / 是否有队友加成 / 分值 / 点击坐标。
 
@@ -146,7 +158,7 @@ class TrainingParsersMixin:
                 continue
 
             names = [n for n in texts
-                     if 0.28 <= (n.y + n.height / 2) / self.height <= 0.55
+                     if 0.28 <= (n.y + n.height / 2) / self.height <= 0.44
                      and abs((n.x + n.width / 2) / self.width - cx) < 0.13
                      and 2 <= len(n.name.strip()) <= 12
                      and any("\u4e00" <= ch <= "\u9fff" for ch in n.name.strip())]
@@ -158,6 +170,12 @@ class TrainingParsersMixin:
             quality, hue, sat = self.card_band_quality(cx)
             rank = {"金": 3, "紫": 2, "蓝": 1}.get(quality, 0)
             mate = self.has_mate_badge(cx)
+            # 效果文本：卡名下沿到价格药丸之间的同列文字。
+            # 2026-10-26 漏读「消耗所有精力」导致 72 体力买了清空扭蛋。
+            effect = " ".join(
+                n.name.strip() for n in texts
+                if title.y + title.height <= n.y < t.y
+                and abs((n.x + n.width / 2) / self.width - cx) < 0.13)
             score = rank * 10 + (3 if mate else 0) + (1 if "+" in title.name else 0)
             cards.append({
                 "name": title.name.strip(),
@@ -166,6 +184,8 @@ class TrainingParsersMixin:
                 "mate": mate,
                 "hue": hue,
                 "sat": sat,
+                "effect": effect,
+                "clear": self.is_stamina_clear(effect),
                 "score": score,
                 "x": int(title.x + title.width / 2),
                 "y": int(title.y + title.height / 2),
@@ -535,6 +555,49 @@ class TrainingParsersMixin:
         mean_g = float(g[warm].mean())
         self.log_debug(f"技能卡{idx + 1} 暖色 {ratio:.2f} G均值 {mean_g:.0f}")
         return 3 if mean_g < 185 else 2
+
+    def choice_candidates(self, texts):
+        """屏幕中部的竖向选项候选（事件 / 对话三选一），按 y 从下到上排序。
+
+        只做形态判断：同一列、竖排、短文本；**不要求白底**。
+        用途：跳过按钮是灰的时，先认出选项，别让 dialog_continue 去点灰按钮。
+        训练动画页的「训练加成/表情加成」是横向三个，分组后每组只有 1 个，
+        不会误判成竖向选项。
+        """
+        ui = {"下一场", "下一步", "跳过", "确定", "取消", "关闭",
+              "继续", "领取", "开始训练"}
+        cands = []
+        for t in texts:
+            s = t.name.strip()
+            if s in ui or self.is_decor(s) or re.search(r"[0-9%]", s):
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if not (0.22 <= cx <= 0.78 and 0.20 <= cy <= 0.72):
+                continue
+            if not (2 <= len(s) <= 20):
+                continue
+            # 选项是普通字号；「备战 / 东部大赛」这种大标题/大按钮不算。
+            if t.height > self.height * 0.08:
+                continue
+            cands.append(t)
+
+        groups = []
+        for t in sorted(cands, key=lambda x: x.y):
+            cx = (t.x + t.width / 2) / self.width
+            placed = False
+            for g in groups:
+                gx = (g[-1].x + g[-1].width / 2) / self.width
+                if abs(gx - cx) < 0.12 and 0 < (t.y - g[-1].y) / self.height < 0.25:
+                    g.append(t)
+                    placed = True
+                    break
+            if not placed:
+                groups.append([t])
+        if not groups:
+            return []
+        group = max(groups, key=len)
+        return group if len(group) >= 2 else []
 
     def _yellow_buttons(self):
         """找屏幕下半部分的黄色按钮框（事件选项 / 确认按钮）。
