@@ -61,6 +61,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
             "单局最大操作数": 400,
             "操作间隔(秒)": 0.3,
             "快进重复间隔(秒)": 1.0,
+            "卡死判定(秒)": 5,
         })
         self.config_type.update({
             "流派": {"type": "drop_down", "options": list(STYLE_PLACES.keys())},
@@ -92,6 +93,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
             "比赛日处理": "没打赢过的比赛不能跳过，只能进比赛后点左下角快进",
             "快进重复间隔(秒)": "快进点一次管一段时间，1 秒补点一次即可；0 = 只点一次",
             "单局最大操作数": "防止卡死无限点，超过后自动停止",
+            "卡死判定(秒)": "连续这么多秒没有任何点击、界面文字也没变化，就判定卡住：存证 logs/debug/ 后点屏幕中央继续，连续 3 轮则停止",
         })
         self._steps = 0
         self._skip_tries = 0
@@ -120,6 +122,8 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self._shop_seen = False
         # 失败率超限时置 True：退出科目页后强制休息
         self._force_rest = False
+        # 最近一次点击的墙钟时间：run() 的「N 秒没点击」看门狗用
+        self._last_click_at = 0.0
 
     # 顺序见 training/handlers/__init__.py
     HANDLERS = HANDLERS

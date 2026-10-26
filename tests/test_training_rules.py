@@ -197,5 +197,37 @@ class TopBarRules(unittest.TestCase):
         self.assertEqual(task.top_bar()["stamina"], 69)
 
 
+class StallWatchdog(unittest.TestCase):
+    """5 秒看门狗：只有「界面指纹没变 + 一直没有任何点击」才算卡住。
+
+    只看指纹会误判剧情 ▼ 连点（文字不变但点击在推进，2026-10-26 实测）。
+    """
+
+    def make(self, last_click=None):
+        task = FakeTask([])
+        task._last_click_at = last_click or 0.0
+        return task
+
+    def test_recent_click_is_not_stall(self):
+        task = self.make(last_click=1000.0)
+        self.assertFalse(task._stalled(7, 7, 5, now=1003.0))
+
+    def test_no_click_for_five_seconds_is_stall(self):
+        task = self.make(last_click=1000.0)
+        self.assertTrue(task._stalled(7, 7, 5, now=1006.0))
+
+    def test_screen_changed_is_not_stall(self):
+        task = self.make(last_click=1000.0)
+        self.assertFalse(task._stalled(8, 7, 5, now=1006.0))
+
+    def test_never_clicked_is_not_stall(self):
+        task = self.make()
+        self.assertFalse(task._stalled(7, 7, 5, now=1006.0))
+
+    def test_click_point_uses_box_center(self):
+        task = self.make()
+        self.assertEqual(task._click_point(box(100, 200, "x", 200, 60), -1), (200, 230))
+
+
 if __name__ == "__main__":
     unittest.main()

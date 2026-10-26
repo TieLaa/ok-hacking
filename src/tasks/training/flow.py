@@ -4,6 +4,7 @@
 禁止在这里 import TrainingTask（循环依赖），需要类时用 handler.__name__ 判断。
 """
 
+import json
 import os
 import random
 import re
@@ -18,6 +19,10 @@ from src.tasks.ui import Defs  # noqa: F401
 from src.tasks.training.constants import JPEG_PARAMS, PROJECT_ROOT, STYLE_PLACES  # noqa: F401
 from src.util.emergency_stop import STOP
 
+# 点击流水：一行一个 JSON 事件（时间戳 / 步数 / 当时界面 / 坐标）。
+# 放在 logs/ 下，已被 .gitignore 忽略；任务结束后用它复盘「第几秒点了哪里」。
+CLICK_LOG = os.path.join(PROJECT_ROOT, "logs", "clicks.jsonl")
+
 
 class TrainingFlowMixin:
 
@@ -27,7 +32,7 @@ class TrainingFlowMixin:
         self.log_info(f"紧急停止热键：{STOP.label or '（未注册成功，用 ok-script 自带 F9）'}")
         max_steps = int(self.config.get("单局最大操作数", 400))
         interval = float(self.config.get("操作间隔(秒)", 0.8))
-        stuck_seconds = float(self.config.get("卡死判定(秒)", 10))
+        stuck_seconds = float(self.config.get("卡死判定(秒)", 5))
         stuck_limit = max(3, int(stuck_seconds / max(interval, 0.05)))
         last_sig, stuck = None, 0
         self._last_dump = 0.0
@@ -58,6 +63,23 @@ class TrainingFlowMixin:
                 stuck += 1
             else:
                 stuck, last_sig = 0, sig
+
+            # ---- 5 秒没有任何点击、界面文字也没变 → 卡住，存证后点中央继续 ----
+            # 只看「签名没变」会误判：剧情 ▼ 连点 5 秒时文字确实不变，但点击在推进。
+            # 所以两个条件都要满足：既没有点击事件，界面也没变。
+            if self._stalled(sig, last_sig, stuck_seconds):
+                self._stuck_rounds += 1
+                self.dump_debug(texts, f"stall{int(stuck_seconds)}s")
+                self.log_warning(
+                    f"{stuck_seconds:.0f} 秒没有点击、界面也没变化"
+                    f"（上次动作：{self._last_state}）→ 已存证 logs/debug/，点击屏幕中央继续",
+                    notify=True)
+                if self._stuck_rounds >= 3:
+                    self.log_error("连续 3 轮「点了也不动」→ 停止任务，避免一直卡在同一界面")
+                    return False
+                self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=interval)
+                stuck, last_sig = 0, None
+                continue
 
             # ---- 点 3 次没变化 → 立刻进入 debug（用户 2026-10-26 口径）----
             # 不等到 10 秒卡死判定，也不让 handler 一直"命中但无效"地空转。
@@ -128,6 +150,66 @@ class TrainingFlowMixin:
         结果每一拍都被当成"新界面"，疯狂存证、stuck 永远为 0。
         """
         return hash("|".join(sorted(t.name for t in texts)))
+
+    # ---------- 点击流水 ----------
+
+    def click(self, x=-1, y=-1, *args, **kwargs):
+        """转发 ok 的 click，同时把每次点击写进 logs/clicks.jsonl。
+
+        为什么要再包一层：ok 自带 click 只在传了 name 时才打坐标日志，而业务代码
+        大多不传 name，事后无法复盘「第几秒点了哪里、当时是什么界面」。
+        另外 run() 的「5 秒没点击」看门狗也依赖这里的时间戳。
+        """
+        at = time.time()
+        self._last_click_at = at
+        px, py = self._click_point(x, y)
+        record = {
+            "at": round(at, 3),
+            "iso": time.strftime("%H:%M:%S", time.localtime(at)) + f".{int(at % 1 * 1000):03d}",
+            "step": self._steps,
+            "state": self._last_state or "",
+            "name": kwargs.get("name") or "",
+            "x": px,
+            "y": py,
+            "key": kwargs.get("key", "left"),
+            "ok": True,
+        }
+        try:
+            return super().click(x, y, *args, **kwargs)
+        except Exception as e:                       # noqa: BLE001
+            record["ok"] = False
+            record["error"] = f"{type(e).__name__}: {e}"
+            raise
+        finally:
+            self._journal_click(record)
+
+    @staticmethod
+    def _click_point(x, y):
+        """把 Box / Box 列表 / 相对坐标换算成可读的像素点，只用于存证。"""
+        if isinstance(x, (list, tuple)):
+            x = x[0] if x else -1
+        if hasattr(x, "width") and hasattr(x, "height"):
+            return int(x.x + x.width / 2), int(x.y + x.height / 2)
+        return x, y
+
+    def _stalled(self, sig, last_sig, stuck_seconds, now=None):
+        """卡住判据：界面指纹没变 **且** 超过 N 秒没有任何点击。
+
+        为什么不是只看指纹：剧情 ▼ 连点 5 秒时文字完全不变，但每拍都有点击，
+        流程是在推进的；那种页面绝不能判成卡死。
+        """
+        if not self._last_click_at or last_sig is None or sig != last_sig:
+            return False
+        return (now or time.time()) - self._last_click_at >= stuck_seconds
+
+    @staticmethod
+    def _journal_click(record):
+        try:
+            os.makedirs(os.path.dirname(CLICK_LOG), exist_ok=True)
+            with open(CLICK_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception:                            # noqa: BLE001
+            pass
 
     def dump_debug(self, texts, tag):
         """点不动的时候存一份「调试包」：截图 + OCR + 最近动作 + 线程。
