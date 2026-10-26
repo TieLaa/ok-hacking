@@ -1,0 +1,587 @@
+"""只读解析（OCR 文本 + 帧取色），不产生点击。
+
+从 TrainingTask 拆出；方法仍通过 self 访问任务状态。
+禁止在这里 import TrainingTask（循环依赖），需要类时用 handler.__name__ 判断。
+"""
+
+import random
+import re
+import time
+
+import cv2
+import numpy as np
+
+from src.tasks.ui import Defs  # noqa: F401
+from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
+
+
+class TrainingParsersMixin:
+
+    def read_money(self, texts):
+        """顶栏金币：体力条右边的独立数字（不含斜杠）。"""
+        best = None
+        for t in texts:
+            s = t.name.strip()
+            if not s.isdigit() or len(s) > 5:
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if 0.50 <= cx <= 0.62 and cy < 0.09:
+                best = int(s)
+        return best
+
+    def read_shop_items(self, texts):
+        """解析商店左侧商品：名称 + 价格 + 卡片中心点击坐标。"""
+        prices = []
+        for t in texts:
+            s = t.name.strip()
+            if not s.isdigit() or not (1 <= int(s) <= 9999):
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if 0.15 <= cx <= 0.58 and 0.38 <= cy <= 0.75:
+                prices.append((int(s), t))
+
+        names = []
+        for t in texts:
+            s = t.name.strip()
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if not (0.15 <= cx <= 0.58 and 0.18 <= cy <= 0.62):
+                continue
+            if "剩余" in s or "时间" in s or "商店" in s:
+                continue
+            if not (2 <= len(s) <= 12):
+                continue
+            if not any("\u4e00" <= ch <= "\u9fff" for ch in s):
+                continue
+            names.append(t)
+
+        items = []
+        for price, pt in prices:
+            px = pt.x + pt.width / 2
+            near = [n for n in names
+                    if n.y + n.height / 2 < pt.y + pt.height / 2
+                    and abs((n.x + n.width / 2) - px) < self.width * 0.10]
+            if not near:
+                continue
+            name = max(near, key=lambda n: n.y)
+            quality, qh, qs = self.card_quality(name, pt)
+            items.append({
+                "name": name.name.strip(),
+                "price": price,
+                "quality": quality,
+                "hue": qh,
+                "sat": qs,
+                # 点名称和价格之间的卡片图，避免点到价格/数量
+                "x": int(name.x + name.width / 2),
+                "y": int((name.y + name.height / 2 + pt.y) / 2),
+            })
+        return items
+
+    def card_quality(self, name_box, price_box):
+        """读商品卡片的品质色（金 / 紫 / 蓝 / 其他）。
+
+        实机（docs/shots/2026-10-26-shop.png）：卡片底色就是品质色 ——
+        紫卡 HSL 偏紫（OpenCV H≈124~132、S≈40、V≈251），
+        金卡是暖黄（H≈20~40、S 更高），蓝卡 H≈100~115。
+        采样卡片的**左右两条内边**（避开中间图标和文字），取中位色相。
+        颜色只用来筛「只买金和紫」，认不出来就按「其他」处理（不买），
+        宁可少买也不乱花钱。
+        """
+        frame = self.frame
+        if frame is None:
+            return "其他", -1, -1
+        h, w = frame.shape[:2]
+        x1 = int(name_box.x - w * 0.015)
+        x2 = int(name_box.x + name_box.width + w * 0.015)
+        y1 = int(name_box.y - h * 0.02)
+        y2 = int(price_box.y + price_box.height)
+        x1, x2 = max(0, x1), min(w, x2)
+        y1, y2 = max(0, y1), min(h, y2)
+        if x2 - x1 < 20 or y2 - y1 < 40:
+            return "其他", -1, -1
+
+        band_y1 = y1 + int((y2 - y1) * 0.45)
+        band_y2 = y2 - int((y2 - y1) * 0.15)
+        strips = [frame[band_y1:band_y2, x1 + 4:x1 + 16],
+                  frame[band_y1:band_y2, x2 - 16:x2 - 4]]
+        pixels = [s.reshape(-1, 3) for s in strips if s.size]
+        if not pixels:
+            return "其他", -1, -1
+        pixels = np.concatenate(pixels)
+        hsv = cv2.cvtColor(pixels.reshape(-1, 1, 3), cv2.COLOR_BGR2HSV).reshape(-1, 3)
+        colored = (hsv[:, 1] >= 20) & (hsv[:, 2] >= 170)
+        if colored.sum() < 40:
+            return "其他", -1, -1
+        hue = float(np.median(hsv[colored, 0]))
+        sat = float(np.median(hsv[colored, 1]))
+        if 10 <= hue <= 45 and sat >= 55:
+            return "金", hue, sat
+        if 115 <= hue <= 155:
+            return "紫", hue, sat
+        if 90 <= hue < 115:
+            return "蓝", hue, sat
+        return "其他", hue, sat
+
+    def read_gacha_cards(self, texts):
+        """解析扭蛋三选一：卡名 / 品质色 / 是否有队友加成 / 分值 / 点击坐标。
+
+        坐标靠「价格药丸」定位（每张卡底部一个 60/80 的数字），
+        卡名取价格正上方最近的短文本，品质色取卡头那一条横带的色相。
+        """
+        frame = self.frame
+        cards = []
+        for t in texts:
+            s = t.name.strip()
+            if not s.isdigit() or not (1 <= int(s) <= 999):
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if not (0.15 <= cx <= 0.85 and 0.60 <= cy <= 0.82):
+                continue
+
+            names = [n for n in texts
+                     if 0.28 <= (n.y + n.height / 2) / self.height <= 0.55
+                     and abs((n.x + n.width / 2) / self.width - cx) < 0.13
+                     and 2 <= len(n.name.strip()) <= 12
+                     and any("\u4e00" <= ch <= "\u9fff" for ch in n.name.strip())]
+            if not names:
+                continue
+            title = min(names, key=lambda n: abs(
+                (n.y + n.height / 2) / self.height - 0.41))
+
+            quality, hue, sat = self.card_band_quality(cx)
+            rank = {"金": 3, "紫": 2, "蓝": 1}.get(quality, 0)
+            mate = self.has_mate_badge(cx)
+            score = rank * 10 + (3 if mate else 0) + (1 if "+" in title.name else 0)
+            cards.append({
+                "name": title.name.strip(),
+                "price": int(s),
+                "quality": quality,
+                "mate": mate,
+                "hue": hue,
+                "sat": sat,
+                "score": score,
+                "x": int(title.x + title.width / 2),
+                "y": int(title.y + title.height / 2),
+            })
+        return cards
+
+    def card_band_quality(self, cx):
+        """取卡片标题条（y≈0.36~0.43）的底色，返回 金/紫/蓝/其他 与 H/S。"""
+        frame = self.frame
+        if frame is None:
+            return "其他", -1, -1
+        h, w = frame.shape[:2]
+        x1 = int(w * (cx - 0.06))
+        x2 = int(w * (cx + 0.06))
+        y1, y2 = int(h * 0.36), int(h * 0.43)
+        roi = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+        if roi.size == 0:
+            return "其他", -1, -1
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        hue, sat, val = cv2.split(hsv)
+        m = (sat > 60) & (val > 120)
+        if m.sum() < 50:
+            return "其他", -1, -1
+        hmed = float(np.median(hue[m]))
+        smed = float(np.median(sat[m]))
+        if 10 <= hmed <= 45 and smed >= 90:
+            return "金", hmed, smed
+        if 115 <= hmed <= 160:
+            return "紫", hmed, smed
+        if 90 <= hmed < 115:
+            return "蓝", hmed, smed
+        return "其他", hmed, smed
+
+    def has_mate_badge(self, cx):
+        """卡头左上角有没有橙色「!」气泡（= 这次带队友加成）。"""
+        frame = self.frame
+        if frame is None:
+            return False
+        h, w = frame.shape[:2]
+        x1 = int(w * (cx - 0.10))
+        x2 = int(w * (cx + 0.02))
+        y1, y2 = int(h * 0.17), int(h * 0.26)
+        roi = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+        if roi.size == 0:
+            return False
+        b = roi[:, :, 0].astype(int)
+        g = roi[:, :, 1].astype(int)
+        r = roi[:, :, 2].astype(int)
+        orange = (r > 200) & (g > 90) & (g < 200) & (b < 90)
+        return int(orange.sum()) > 200
+
+    def weekend_state(self):
+        """按「第N周 + 星期X」维护周末状态：周六是否看过商店、买了没、公园选什么。"""
+        state = self.top_bar()
+        key = (state.get("week"), state.get("day"))
+        if self._weekend.get("date") != key:
+            self._weekend = {
+                "date": key,
+                "shop_checked": False,
+                "bought": False,
+                "park_choice": None,
+            }
+        return self._weekend
+
+    def read_fail_rate(self, texts):
+        """读取当前选中科目的失败率（0~100），读不到返回 None。"""
+        joined = "".join(t.name for t in self.texts_in_region(texts, "fail_rate")).replace(" ", "")
+        if m := Defs.FAIL_RATE_RE.search(joined):
+            return int(m.group(1))
+        return None
+
+    def current_subject(self, texts):
+        """当前已选中的科目：右边有「决定」的那一行。"""
+        decide = self.match_text(texts, "决定")
+        if decide is None:
+            return None
+        dy = decide.y + decide.height / 2
+        cands = []
+        for t in self.texts_in_region(texts, "subject_list"):
+            if t.name.strip() not in Defs.TRAINING_SUBJECTS:
+                continue
+            cy = t.y + t.height / 2
+            if abs(cy - dy) < 45 * self.height / 1080.0:
+                cands.append(t)
+        return max(cands, key=lambda t: t.height).name.strip() if cands else None
+
+    def find_teammate_icons(self):
+        """在右侧科目区找「有队友」的橙色小人头像，返回中心点列表。
+
+        实测（2026-10-25）：小人是 42x42 的纯橙圆，主色 (255,145,0)；
+        右上角「决定」按钮是亮黄 (255,237,75)，**G 通道高 90**，所以卡 g<190 就能排除。
+        再用连通域尺寸过滤（42px 上下），后期按钮图标换色也不影响。
+        """
+        frame = self.frame
+        if frame is None:
+            return []
+        h, w = frame.shape[:2]
+        x0 = int(w * 0.78)                       # 只在右侧科目区找
+        roi = frame[:, x0:]
+        b = roi[:, :, 0].astype(int)
+        g = roi[:, :, 1].astype(int)
+        r = roi[:, :, 2].astype(int)
+        mask = ((r > 225) & (g > 100) & (g < 190) & (b < 70)).astype(np.uint8)
+        if not mask.any():
+            return []
+        n, _lab, stats, cent = cv2.connectedComponentsWithStats(mask, 8)
+        size = 42 * w / 1920.0                   # 按分辨率缩放
+        icons = []
+        for i in range(1, n):
+            _x, _y, ww, hh, area = stats[i]
+            if not (size * 0.6 <= ww <= size * 1.6 and size * 0.6 <= hh <= size * 1.6):
+                continue
+            if area < size * size * 0.3:
+                continue
+            icons.append((cent[i][0] + x0, cent[i][1]))
+        return icons
+
+    def has_teammate_icon(self, box, icons):
+        """这个科目的右边有没有小人头像。
+
+        两代 UI 都支持（2026-10-26 实测）：
+        - 旧版：头像在按钮**右上角**，中心比文字中心高约 55px；
+        - 新版：头像在按钮**右侧居中**，和文字中心几乎同高。
+        不能用 ±80 的大范围：相邻两行只差 100px，会同时命中两个科目
+        （旧代码就是这么把 5 个科目全当成「有队友」的）。
+        """
+        if not icons or box is None:
+            return False
+        cx = box.x + box.width / 2
+        cy = box.y + box.height / 2
+        old_ui_y = cy - 55 * self.height / 1080.0
+        tol_old = 20 * self.height / 1080.0
+        tol_new = 35 * self.height / 1080.0
+        return any(
+            ix > cx and (abs(iy - old_ui_y) < tol_old or abs(iy - cy) < tol_new)
+            for ix, iy in icons)
+
+    def probe_subject(self, box):
+        """点开一个科目，返回预览信息：队友数 / 装备数 / 满经验数 / 彩虹边框。"""
+        self.click_box(box, after_sleep=0.55)
+        texts = self._ocr_region()
+        self.log_debug(f"场上角色名：{self.scene_names(texts)}")
+        return self.analyze_preview(texts)
+
+    def analyze_preview(self, texts):
+        """读一帧科目预览，返回打分要用的全部字段。
+
+        - 队友 / 经理：场景里飘在角色头顶的名字（经理的名字牌就是「球队经理」，
+          会被当成队友名，必须单独扣出来）；
+        - 器材数 / 满经验：底部器材卡的经验条与 MAX 字样（已实测）；
+        - 金框：器材卡**边框**是金色品质（`count_gold_cards`）；
+        - 彩色（暴击）：满经验 MAX 卡片 —— 结算会出「暴击训练!」，已验证；
+        - 经理暴击：经理在场且这次训练确实出暴击（有满经验或彩虹边框）。
+        """
+        scene = self.read_scene(texts)
+        equip, full, gold = self.read_equipment(texts)
+        crit = self.has_crit_border(texts)
+        return {
+            "names": scene["names"],
+            "mates": scene["mates"],
+            "manager": scene["manager"],
+            "equip": equip,
+            "full": full,
+            "gold": gold,
+            "crit": crit,
+            "color": full,
+            "manager_crit": 1 if (scene["manager"] and (full > 0 or crit)) else 0,
+        }
+
+    def read_scene(self, texts):
+        """场上角色：队友数（扣掉队长和经理）+ 经理在不在。"""
+        names = self.scene_names(texts)
+        manager = 1 if any(any(m in n for m in Defs.MANAGER_TEXTS) for n in names) else 0
+        mates = [n for n in names if not any(m in n for m in Defs.MANAGER_TEXTS)]
+        return {
+            "names": names,
+            "manager": manager,
+            # 队长总在场，所以队友数 = 场上名字 - 队长（- 经理已经被扣掉）
+            "mates": max(0, len(mates) - 1),
+        }
+
+    def read_equipment(self, texts):
+        """数预览界面底部的器材卡，并判断哪些已经满经验、哪些是金框。
+
+        两种形态：
+        - 未满：卡片底部是黑色胶囊经验条，青色部分是进度；
+        - 已满：经验条变成「MAX」字样（实测 2026-10-26），且卡片带彩虹边框。
+        所以 装备数 = 经验条个数 + MAX 个数；满经验数 = MAX 个数 + 全满的经验条。
+        金框另算：数卡片外框的金色占比（紫色/蓝色品质不算）。
+        """
+        frame = self.frame
+        equip = full = 0
+        if frame is not None:
+            h, w = frame.shape[:2]
+            x1, y1, x2, y2 = Defs.region("equip_bars")
+            roi = frame[int(h * y1):int(h * y2), int(w * x1):int(w * x2)]
+            if roi.size:
+                b = roi[:, :, 0].astype(int)
+                g = roi[:, :, 1].astype(int)
+                r = roi[:, :, 2].astype(int)
+                dark = ((b < 90) & (g < 90) & (r < 90)).astype(np.uint8)
+                n, lab, stats, _cent = cv2.connectedComponentsWithStats(dark, 8)
+                min_w, max_w = int(w * 0.04), int(w * 0.10)
+                for i in range(1, n):
+                    x, y, ww, hh, _area = stats[i]
+                    if not (min_w <= ww <= max_w and 8 <= hh <= 30):
+                        continue
+                    equip += 1
+                    cb = b[y:y + hh, x:x + ww]
+                    cg = g[y:y + hh, x:x + ww]
+                    cr = r[y:y + hh, x:x + ww]
+                    cyan = (cb > 150) & (cg > 110) & (cr < 160)
+                    if float(cyan.mean()) > 0.75:
+                        full += 1
+        # MAX 字样（满经验卡没有经验条）
+        bar_texts = self.texts_in_region(texts, "equip_bars")
+        joined = "".join(t.name for t in bar_texts).upper().replace(" ", "")
+        max_count = joined.count(Defs.EQUIP_MAX_TEXT)
+        if max_count:
+            equip += max_count
+            full += max_count
+        return equip, full, self.count_gold_cards()
+
+    def count_gold_cards(self):
+        """数预览区里「金框」器材卡的张数。
+
+        实机（docs/shots/2026-10-26-subject-crit.png）：金品质器材卡是亮黄橙外框，
+        色相落在 HSV H 12~45、S>120、V>180；紫牌/蓝牌不在此区间。
+        做法：直接在 equip_cards 区域取「金色像素」，闭运算补断口，
+        再按卡片尺寸（宽高 0.05~0.20 屏宽）和长宽比 0.6~1.6 过滤。
+
+        先试过「高饱和色块」整体找卡片，但卡片会和天空/球场连成一片
+        （312x168，长宽比 1.86），过滤不掉，所以改成按颜色直取。
+        日志会打印每个候选框，实机跑一次就能拿来校准。
+        """
+        frame = self.frame
+        if frame is None:
+            return 0
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = Defs.region("equip_cards")
+        roi = frame[int(h * y1):int(h * y2), int(w * x1):int(w * x2)]
+        if roi.size == 0:
+            return 0
+
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        hue, sat, val = cv2.split(hsv)
+        gold = ((hue >= 12) & (hue <= 45) & (sat > 120) & (val > 180)).astype(np.uint8)
+        gold = cv2.morphologyEx(gold, cv2.MORPH_CLOSE,
+                                cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)))
+        n, _lab, stats, _cent = cv2.connectedComponentsWithStats(gold, 8)
+
+        min_w, max_w = int(w * 0.05), int(w * 0.20)
+        count = 0
+        for i in range(1, n):
+            x, y, ww, hh, area = stats[i]
+            if area < 800:
+                continue
+            if not (min_w <= ww <= max_w and min_w <= hh <= max_w):
+                continue
+            if not (0.6 <= ww / max(hh, 1) <= 1.6):
+                continue
+            if area < ww * hh * 0.30:
+                continue
+            count += 1
+            self.log_debug(f"金框器材 @({x + ww // 2},{y + hh // 2}) {ww}x{hh} 实心 {area / (ww * hh):.2f}")
+        return count
+
+    def has_crit_border(self, texts=None):
+        """选中的科目大按钮有没有彩虹边框（= 有满经验器材，训练会暴击）。
+
+        注意：大按钮的位置随科目行变化（选中的科目会停在它原来的行），
+        所以不能写死 y=0.12~0.30；要用「决定」按钮的 y 找到它所在的那一行。
+        只采样按钮**边缘一圈**：按钮内部的科目图标（西瓜/鞋）有绿色/红色，
+        采样整块会把普通科目误判成彩虹（实训 2026-10-26）。
+        """
+        frame = self.frame
+        if frame is None:
+            return False
+        texts = texts if texts is not None else self._ocr_region()
+        decide = self.match_text(texts, "决定")
+        if decide is None:
+            return False
+        h, w = frame.shape[:2]
+        cy = decide.y + decide.height / 2
+        x1, x2 = int(w * 0.66), int(w * 0.93)
+        y1 = max(0, int(cy - h * 0.06))
+        y2 = min(h, int(cy + h * 0.06))
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return False
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        hue, sat, val = cv2.split(hsv)
+        magenta = (sat > 90) & (val > 120) & (hue >= 125) & (hue <= 175)
+        green = (sat > 90) & (val > 120) & (hue >= 35) & (hue <= 90)
+        ring = np.zeros(roi.shape[:2], dtype=bool)
+        t = max(4, int(h * 0.008))
+        ring[:t, :] = True
+        ring[-t:, :] = True
+        ring[:, :t] = True
+        ring[:, -t:] = True
+        hit = (magenta | green) & ring
+        ratio = float(hit.sum()) / max(int(ring.sum()), 1)
+        if ratio > 0.02:
+            self.log_debug(f"科目大按钮彩虹占比 {ratio:.3f}")
+        return ratio > 0.06
+
+    def scene_names(self, texts):
+        """过滤出训练场景里飘在角色头顶的名字。"""
+        x1, y1, x2, y2 = Defs.region("scene_names")
+        skip = {"失败率", "决定", "训练", "休息", "比赛", "商店", "出行", "跳过"}
+        found = []
+        for t in texts:
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if not (x1 <= cx <= x2 and y1 <= cy <= y2):
+                continue
+            s = t.name.strip()
+            if s in skip:
+                continue
+            if 2 <= len(s) <= 4 and all("\u4e00" <= ch <= "\u9fff" for ch in s):
+                found.append(s)
+        return found
+
+    def read_captain_name(self):
+        """底部中间那行队长名字（区域见 Defs.CAPTAIN_NAME_AREA）。"""
+        x1, y1, x2, y2 = Defs.CAPTAIN_NAME_AREA
+        best = None
+        for t in self._ocr_region():
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if not (x1 <= cx <= x2 and y1 <= cy <= y2):
+                continue
+            if len(t.name.strip()) < 2:
+                continue
+            if best is None or t.width > best.width:
+                best = t
+        return best.name.strip() if best is not None else None
+
+    def _card_texts(self, texts, idx):
+        x1 = 0.05 + idx * 0.31
+        x2 = x1 + 0.28
+        return [t for t in texts if x1 <= (t.x + t.width / 2) / self.width <= x2]
+
+    def _card_quality(self, frame, idx):
+        """判断技能卡品质，返回 3=彩色 / 2=金色 / 1=白色。
+
+        评分公式里技能价值差一倍（75 / 50 / 25），所以必须先分清金色和白色。
+        判据用卡片上部色带的**暖色像素的平均 G 通道**：
+        橙色 (255,145,0) 的 G≈145 → 彩色；金色 (255,215,0) 的 G≈215 → 金色；
+        白/蓝卡没有暖色带 → 白色。
+        实测日志里会打印 G 均值，方便以后校准。
+        """
+        if frame is None:
+            return 1
+        h, w = frame.shape[:2]
+        x1 = int(w * (0.07 + idx * 0.32))
+        x2 = int(w * (0.07 + idx * 0.32 + 0.24))
+        y1, y2 = int(h * 0.20), int(h * 0.34)
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return 1
+        b, g, r = roi[:, :, 0].astype(int), roi[:, :, 1].astype(int), roi[:, :, 2].astype(int)
+        warm = (r > 185) & (b < 120) & (g > 90)
+        ratio = float(warm.mean())
+        if ratio < 0.12:
+            return 1
+        mean_g = float(g[warm].mean())
+        self.log_debug(f"技能卡{idx + 1} 暖色 {ratio:.2f} G均值 {mean_g:.0f}")
+        return 3 if mean_g < 185 else 2
+
+    def _yellow_buttons(self):
+        """找屏幕下半部分的黄色按钮框（事件选项 / 确认按钮）。
+
+        事件按钮是「白底 + 黄色圆角边框」，所以用黄色 mask 找外框，
+        再做闭运算把文字/图标造成的断口补上。返回 (x, y, w, h) 列表。
+        """
+        frame = self.frame
+        if frame is None:
+            return []
+        h, w = frame.shape[:2]
+        y0 = int(h * 0.60)
+        roi = frame[y0:, :]
+        b = roi[:, :, 0].astype(int)
+        g = roi[:, :, 1].astype(int)
+        r = roi[:, :, 2].astype(int)
+        mask = ((r > 200) & (g > 150) & (b < 120)).astype(np.uint8)
+        kx = max(3, w // 240)
+        ky = max(3, h // 240)
+        mask = cv2.morphologyEx(
+            mask, cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (kx, ky)))
+        n, _lab, stats, _cent = cv2.connectedComponentsWithStats(mask, 8)
+        boxes = []
+        for i in range(1, n):
+            x, y, ww, hh, _area = stats[i]
+            if ww < w * 0.12 or hh < h * 0.045:
+                continue
+            if ww > w * 0.95 or hh > h * 0.35:
+                continue
+            boxes.append((int(x), int(y + y0), int(ww), int(hh)))
+        return boxes
+
+    def _has_white_band(self, t):
+        """文字所在的那条横带是不是白底（事件选项按钮）。
+
+        竖向 3 选 1 的真按钮是「白底彩边」；训练动画的「训练加成/表情加成」
+        是深色背景上的文字，白底占比很低。用这一条把两者分开。
+        """
+        frame = self.frame
+        if frame is None:
+            return False
+        h, w = frame.shape[:2]
+        cy = int(t.y + t.height / 2)
+        y1, y2 = max(0, cy - 10), min(h, cy + 10)
+        x1, x2 = int(w * 0.22), int(w * 0.78)
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return False
+        b = roi[:, :, 0].astype(int)
+        g = roi[:, :, 1].astype(int)
+        r = roi[:, :, 2].astype(int)
+        bright = (b > 195) & (g > 190) & (r > 180)
+        return float(bright.mean()) > 0.50

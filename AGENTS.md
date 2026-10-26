@@ -7,7 +7,7 @@
 
 ## 截图格式
 
-- 调试/存证帧一律存 **JPEG q95 + 4:4:4**：`TrainingTask.dump_debug`（`frame.jpg`，用文件顶部的 `JPEG_PARAMS`）、`dump_unknown`（`<name>.jpg`）、`tools/wgc_capture.py`、`tools/win_shot.py` 都已改。
+- 调试/存证帧一律存 **JPEG q95 + 4:4:4**：`TrainingTask.dump_debug`（`frame.jpg`，用 `src/tasks/training/constants.py` 的 `JPEG_PARAMS`）、`dump_unknown`（`<name>.jpg`）、`tools/wgc_capture.py`、`tools/win_shot.py` 都已改。
 - 为什么不用 PNG：同一帧 PNG 约 2.4 MB、q95 约 0.48 MB，读图耗时与体积成正比（每 MB 约 3.5 秒）。
 - 为什么是 4:4:4：项目有按像素/区域取色复核品质、互动的需求，色度抽样会把颜色糊到相邻像素。实测单像素最大色差 4:2:0 是 94、4:4:4 是 20；区域平均色差都在 1 以内。旧版 OpenCV 没有 `IMWRITE_JPEG_SAMPLING_FACTOR_444` 时会自动降级。
 - 运行时取色读的是内存帧 `self.frame`，与存盘格式无关。
@@ -19,3 +19,9 @@
   ```
 
 - `docs/shots/` 保持 PNG：`tools/check_handlers.py`、`check_shop_quality.py` 等按 `*.png` 扫描，改成 JPEG 会漏测。
+
+## 工程（硬规则）
+
+- 业务代码只放 `src/tasks/training/`（flow / parsers / scoring / handlers），`tools/` 只放运维脚本，禁止写游戏业务判据。细则见 `docs/ENGINEERING.md`。
+- 改 handler 判据或顺序后必须跑 `python tools/check_handlers.py --cache`，exit 0 才能提交；新截图先 `--update-expected` 再人工确认。
+- 踩到新坑时，把「下次该怎么说」补进 `docs/PROMPT_PLAYBOOK.md`，不要只改代码。

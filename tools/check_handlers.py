@@ -3,20 +3,16 @@
 为什么要有这个：
     之前每改一次判据都要「重启 ok-script → 等游戏加载 → 跑 60 秒 → 看日志」，
     一轮 5~10 分钟，而且只有真撞上那个界面才知道错。
-    8 个界面就要跑 8 轮，还常常"修一个冒一个"。
-
-    现在改成：截图 → OCR → 对 25 个 handler 干跑一遍 → 3 秒出结果。
-    改完代码立刻知道哪张图判错了。
+    现在改成：截图 → OCR → 对全部 handler 干跑一遍 → 3 秒出结果。
 
 用法：
-    python tools/check_handlers.py                  # 扫 docs/shots/*.png
-    python tools/check_handlers.py --all docs/shots logs/unknown
+    python tools/check_handlers.py                  # 扫 docs/shots/*.png，比对 expected.json
+    python tools/check_handlers.py --cache          # 复用 OCR 缓存（快 5 倍）
+    python tools/check_handlers.py --all-hits       # 额外列出「同时命中」的 handler（查抢占）
     python tools/check_handlers.py 图.png            # 只测指定图片
-    python tools/check_handlers.py --cache           # 复用 OCR 缓存（快 5 倍）
+    python tools/check_handlers.py --update-expected # 登记新图的期望值（人工确认后再提交）
 
-输出：
-    每张图 → 命中的 handler → 打算点击的位置
-    没命中的会标出来 —— 那就是需要补判据的地方。
+退出码：有「未命中」或「和 expected.json 不一致」时返回 1，可以直接进 pre-commit / CI。
 """
 
 import glob
@@ -200,27 +196,60 @@ def load_boxes(path, ocr_holder, use_cache=True):
 
 
 def probe(path, ocr_holder, use_cache=True, verbose=False):
+    """返回 (path, [(handler_name, actions), ...])，按优先级列出**所有**命中。
+
+    每个 handler 用独立的 DryRunTask，避免前面的命中污染后面的判据。
+    """
     frame = cv2.imread(path)
     if frame is None:
-        return path, None, []
+        return path, []
     boxes = load_boxes(path, ocr_holder, use_cache)
     if boxes is None:
-        return path, None, []
-    task = DryRunTask(frame, boxes)
+        return path, []
+    hits = []
     for handler in TrainingTask.HANDLERS:
+        task = DryRunTask(frame, boxes)
         try:
             if handler(task, boxes):
-                return path, handler.__name__, task.actions
+                hits.append((handler.__name__, task.actions))
         except Exception as e:
             if verbose:
                 print(f"    ! {handler.__name__} 抛异常: {type(e).__name__}: {e}")
-    return path, None, []
+    return path, hits
+
+
+EXPECTED_PATH = os.path.join(ROOT, "docs", "shots", "expected.json")
+
+
+def load_expected():
+    """期望表 {截图文件名: 应该命中的 handler}。
+
+    新截图先跑 `--update-expected` 落盘，再人工确认一次结果是否合理。
+    """
+    if not os.path.exists(EXPECTED_PATH):
+        return {}
+    with open(EXPECTED_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_expected(exp):
+    with open(EXPECTED_PATH, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(dict(sorted(exp.items())), f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
+def describe(actions):
+    if not actions:
+        return "-"
+    return " ".join(str(x) for x in actions[0])[:46]
 
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     verbose = "--verbose" in sys.argv
     use_cache = "--cache" in sys.argv
+    show_all = "--all-hits" in sys.argv
+    update = "--update-expected" in sys.argv
 
     if args:
         paths = []
@@ -233,30 +262,61 @@ def main():
         print("没有找到图片")
         return 1
 
+    expected = load_expected()
     ocr_holder = {"ocr": None}
-    print(f"{'图片':<40} {'命中 handler':<26} 动作")
-    print("-" * 100)
-    misses = []
-    for path in paths:
-        name, handler, actions = probe(path, ocr_holder, use_cache, verbose)
-        short = os.path.basename(name)[:38]
-        if handler is None:
-            misses.append(short)
-            print(f"{short:<40} {'✗ 未命中':<26} -")
-        else:
-            act = ""
-            if actions:
-                a = actions[0]
-                act = " ".join(str(x) for x in a)[:46]
-            print(f"{short:<40} {handler:<26} {act}")
+    fails, misses, new_shots, conflicts = [], [], [], []
 
-    print("-" * 100)
+    print(f"{'图片':<38} {'实际':<24} 期望 / 动作")
+    print("-" * 96)
+    for path in paths:
+        name, hits = probe(path, ocr_holder, use_cache, verbose)
+        base = os.path.basename(name)
+        first = hits[0][0] if hits else None
+        want = expected.get(base)
+
+        if update and first:
+            expected[base] = first
+            want = first
+
+        if first is None:
+            misses.append(base)
+            print(f"{base:<38} {'✗ 未命中':<24} {want or '-'}")
+        elif want is None:
+            new_shots.append(base)
+            print(f"{base:<38} {first:<24} 新图（未登记） {describe(hits[0][1])}")
+        elif first != want:
+            fails.append((base, want, first))
+            print(f"{base:<38} {first:<24} 期望 {want}  ✗ 抢错")
+        else:
+            print(f"{base:<38} {first:<24} {describe(hits[0][1])}")
+
+        if show_all and len(hits) > 1:
+            conflicts.append((base, [h[0] for h in hits[1:]]))
+            for hname, _ in hits[1:]:
+                print(f"    + 同时命中 {hname}")
+
+    if update:
+        save_expected(expected)
+        print(f"已更新 {EXPECTED_PATH}（{len(expected)} 条）")
+
+    print("-" * 96)
     if misses:
-        print(f"需要补判据的界面（{len(misses)}）：")
-        for m in misses:
-            print(f"  - {m}")
-    else:
-        print("全部命中")
+        print(f"未命中（{len(misses)}）：" + "、".join(misses))
+    if fails:
+        print(f"抢错（{len(fails)}）：" + "、".join(
+            f"{b} 期望 {w} 实际 {a}" for b, w, a in fails))
+    if new_shots:
+        print(f"未登记（{len(new_shots)}）：" + "、".join(new_shots))
+        print("  确认结果正确后跑：python tools/check_handlers.py --update-expected")
+    if show_all and conflicts:
+        print(f"多 handler 同时命中（{len(conflicts)}）：")
+        for base, others in conflicts:
+            print(f"  {base}: 首个 {expected.get(base, '?')}，另外 {'、'.join(others)}")
+
+    if fails or misses:
+        print("回归失败")
+        return 1
+    print("回归通过")
     return 0
 
 
