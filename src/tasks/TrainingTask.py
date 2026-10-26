@@ -1868,11 +1868,14 @@ class TrainingTask(BaseGirlsTask):
         return True
 
     def in_registration_page(self, texts):
-        """最终结算的下一页：注册球员编队（选择器材 / 确认编队 / 我的球员）。
+        """最终结算的下一页：注册球员 / 签约 —— 这才是**一局的终点**。
 
-        用户口径：这是**一局的终点**，看到它任务就算完成，不要再点。
+        坑（2026-10-26）：这里原来写了「选择器材 / 确认编队」，但那两步是
+        **每局开局的标准流程**（训练 → 启程 → 选队长 → 选择器材 → 确认编队 → 开始训练）。
+        结果新一局刚开局 3 秒就被当成"跑完了"直接退出。
+        所以只认注册/签约这类**一次性**文案，绝不认开局建队的按钮。
         """
-        return self.match_text(texts, ("注册球员", "签约", "选择器材", "确认编队")) is not None
+        return self.match_text(texts, ("注册球员", "球员登录", "签约", "入部申请", "成为注册")) is not None
 
     def handle_skill_select(self, texts):
         """技能三选一：**按品质算分**（评分公式见 docs/score-model/README.md）。
