@@ -248,6 +248,7 @@ class WeekendHandlers:
             return True
 
         stamina = self.top_bar().get("stamina")
+        money = self.read_money(texts)
         clear_limit = int(self.config.get("扭蛋清空体力阈值", 30))
         allow_clear = stamina is not None and stamina < clear_limit
 
@@ -263,20 +264,26 @@ class WeekendHandlers:
                     continue
             elif c["quality"] not in ("金", "紫"):
                 continue
+            # 买不起就跳过，看下一张（2026-10-26：零用钱 50、卡片 60，
+            # 旧代码照样点确定 → 停留在扭蛋页反复点）。
+            if money is not None and c["price"] > money:
+                continue
             c["score"] = score(c)
             ok.append(c)
 
         detail = "、".join(
             f"{c['name']}({c['quality']}{'+队友' if c['mate'] else ''}"
-            f"{'·清空' if c['clear'] else ''}/{score(c)})" for c in cards)
+            f"{'·清空' if c['clear'] else ''}/{c['price']}币/{score(c)})" for c in cards)
         if not ok:
-            self.log_info(f"扭蛋：{detail} → 没有可买的（体力 {stamina}），退出")
+            self.log_info(f"扭蛋：{detail} → 没有可买的"
+                          f"（零用钱 {money}，体力 {stamina}），退出")
             self.exit_page()
             return True
 
         best = max(ok, key=lambda c: c["score"])
         self.click(best["x"], best["y"], after_sleep=0.5)
-        self.log_info(f"扭蛋：{detail} → 选「{best['name']}」（体力 {stamina}）")
+        self.log_info(f"扭蛋：{detail} → 选「{best['name']}」"
+                      f"（{best['price']}币，零用钱 {money}，体力 {stamina}）")
 
         if self.click_text(("确定",), after_sleep=0.8, must=False):
             self.log_info("扭蛋：确定")

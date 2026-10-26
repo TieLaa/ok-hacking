@@ -44,16 +44,19 @@ class FakeTask(DryRunTask):
         return self._mates.pop(0) if self._mates else False
 
 
-def gacha_texts(cards, stamina=None):
+def gacha_texts(cards, stamina=None, money=None, price="60"):
     """cards = [(名字, 效果), ...]，生成扭蛋页的 OCR 框。"""
     texts = [box(760, 80, "请选择1个扭蛋i", 400, 70)]
     if stamina:
         texts.append(box(380, 16, stamina, 210, 53))
+    if money:
+        texts.append(box(1050, 20, money, 80, 40))
     xs = [480, 960, 1440]
     for i, (name, effect) in enumerate(cards):
         texts.append(box(xs[i], 330, name, 280, 60))
         texts.append(box(xs[i], 520, effect, 280, 60))
-        texts.append(box(xs[i], 700, "60", 80, 55))
+        p = price[i] if isinstance(price, (list, tuple)) else price
+        texts.append(box(xs[i], 700, p, 80, 55))
     texts.append(box(860, 950, "确定", 200, 60))
     return texts
 
@@ -91,6 +94,28 @@ class GachaRules(unittest.TestCase):
         self.assertTrue(task.handle_street(task._texts))
         self.assertEqual(task.actions[0][0], "click")      # 点卡片
         self.assertNotEqual(task.actions[0][1], 1839)       # 不是退出
+
+    def test_cannot_afford_should_exit(self):
+        """零用钱 50、卡片 60：买不起就退出，不能点确定卡在扭蛋页。"""
+        task = FakeTask(gacha_texts([
+            ("训练增强", "训练可以额外获得1点主属性"),
+            ("器材暴击+", "器材的暴击加成提高10%"),
+            ("投射增加", "主力投射+30"),
+        ], stamina="72/121", money="50", price="60"), qualities=["蓝", "紫", "蓝"])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions, [("click", 1839, 64)])
+
+    def test_affordable_pick_next(self):
+        """前两张买不起时，选买得起的第三张（不是直接退出）。"""
+        task = FakeTask(gacha_texts([
+            ("训练增强", "训练可以额外获得1点主属性"),
+            ("器材暴击+", "器材的暴击加成提高10%"),
+            ("投射增加", "主力投射+30"),
+        ], stamina="72/121", money="60", price=["80", "80", "60"]),
+            qualities=["紫", "紫", "紫"])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions[0][0], "click")
+        self.assertEqual(task.actions[0][1], 1580)
 
     def test_purple_beats_blue(self):
         """金/紫优先，蓝卡不参与排序。"""
