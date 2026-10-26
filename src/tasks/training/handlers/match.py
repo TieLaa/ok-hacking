@@ -34,6 +34,7 @@ class MatchHandlers:
         # 纯转场页：文字很少，避免在比赛结算/数据页误判
         if len([t for t in texts if len(t.name.strip()) >= 2]) > 6:
             return False
+        self._no_stall_until = time.monotonic() + 3
         self.sleep(0.4)
         return True
 
@@ -63,6 +64,8 @@ class MatchHandlers:
         if self.match_text(texts, ("胜利", "失败", "MVP")) is not None:
             self._match_intro_at = 0.0
             return False
+        # 告诉 run()：接下来是「设计上不点」的等待，别把它当卡死
+        self._no_stall_until = time.monotonic() + 5
         self.sleep(0.4)
         return True
 

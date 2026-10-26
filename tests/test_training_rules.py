@@ -253,6 +253,8 @@ class MatchIntroWait(unittest.TestCase):
         task._match_intro_at = time.monotonic()
         self.assertTrue(task.handle_match_wait(task._texts))
         self.assertEqual(task.actions, [])
+        # 同时要给 run() 打「别判卡死」的标，否则 5 秒看门狗会点中央
+        self.assertGreater(task._no_stall_until, time.monotonic())
 
     def test_hands_over_to_in_match_when_hud_appears(self):
         texts = [box(40, 950, "自动", 80, 40)]
