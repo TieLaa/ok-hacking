@@ -35,7 +35,6 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self.description = "自动跑完一局养成：训练 / 周末活动 / 比赛日跳过，循环到赛季结束"
         self.default_config.update({
             "流派": "训练流",
-            "训练科目优先级": ["弹跳", "运控", "投射", "防守", "体能", "意识"],
             "推荐属性": ["弹跳", "运控"],
             "失败率上限(%)": 50,
             "失败率超限改休息": True,
@@ -74,8 +73,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
             },
         })
         self.config_description.update({
-            "训练科目优先级": "同分时的先后顺序；按 docs/score-model 的权重算总分：队友1 / 道具1.1 / 经理1.2 / 黄框道具暴击1.2 / 经理暴击1.3 / 彩色道具暴击1.3",
-            "推荐属性": "队长的两项推荐属性（面板上的绿标），同分时优先",
+            "推荐属性": "队长的两项推荐属性（面板上的绿标），同分时优先；再平票选当前数值最低的科目",
             "指定队长": "填角色名（如「真崎辉世」）就逐张点开找她当队长；留空 = 点第一张（等级最高）",
             "新一局删档": "遇到「训练确认」弹窗时点「删档」开新的一局；只在旧局已经跑完时打开",
             "失败率上限(%)": "训练科目页失败率高于这个值就直接回主界面休息（失败率高说明体力撑不住了）",

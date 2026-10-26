@@ -48,6 +48,16 @@ class TrainingScoringMixin:
                 + r["color"] * cls.W_COLOR_CRIT)
 
     @staticmethod
+    def subject_rank(score, is_recommended, attr_value, y):
+        """科目排序键（用户 2026-10-26 口径）。
+
+        分数 → 队长推荐属性 → 当前数值**低**的（成长空间大）→ 屏幕上靠前的（兜底）。
+        读不到数值的属性用 10^6 垫底，不能靠「读不到」白捡便宜。
+        """
+        value = attr_value if attr_value is not None else 10 ** 6
+        return (score, 1 if is_recommended else 0, -value, -y)
+
+    @staticmethod
     def _effect_ev(effect_texts):
         """从效果文本里算期望值：例如「精力+10」=10，'50%概率 精力+30'=15。
 

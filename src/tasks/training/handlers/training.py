@@ -243,13 +243,14 @@ class TrainingHandlers:
                 return True
             self.log_warning(f"失败率 {fail}% 超过上限 {limit}%（配置为不休息，继续）")
 
-        priority = list(self.config.get("训练科目优先级", list(Defs.TRAINING_SUBJECTS)))
         recommended = set(self.config.get("推荐属性", []))
         boxes = {}
-        for name in priority:
+        for name in Defs.TRAINING_SUBJECTS:
             box = self.match_text(subjects, name)
             if box is not None:
                 boxes[name] = box
+        # 按屏幕从上到下探测（旧版按配置表扫，看起来像随机乱点 —— 用户 2026-10-26）
+        boxes = dict(sorted(boxes.items(), key=lambda kv: kv[1].y))
 
         if not boxes:
             self.log_warning("认不出任何训练科目")
@@ -257,7 +258,7 @@ class TrainingHandlers:
 
         # 橙色小人只表示「有队友」；数量/装备必须点开看。
         icons = self.find_teammate_icons()
-        with_team = [n for n in priority if n in boxes and self.has_teammate_icon(boxes[n], icons)]
+        with_team = [n for n in boxes if self.has_teammate_icon(boxes[n], icons)]
         self.log_info("有队友的科目：" + ("、".join(with_team) if with_team else "无（按推荐属性选）"))
 
         # 当前已经选中的科目（右边有「决定」的那一行）不要点：点它有直接开练的风险。
@@ -287,22 +288,25 @@ class TrainingHandlers:
                 f"｜装备 {r['equip']}｜满经验 {r['full']}｜金框 {r['gold']}"
                 f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}")
 
+        attr_values = self.read_attribute_values(texts)
+        if attr_values:
+            self.log_debug(f"六维当前值：{attr_values}")
+
         def rank(name):
-            """按用户 2026-10-26 给的权重算总分（不是拍脑袋的相对分）。
+            """分数 → 队长推荐属性 → 当前数值低的 → 屏幕上靠前的（兜底）。"""
+            return self.subject_rank(self.subject_score(results.get(name)),
+                                     name in recommended,
+                                     attr_values.get(name),
+                                     boxes[name].y)
 
-            队友 1.0 / 道具 1.1 / 经理 1.2 /
-            黄框道具暴击 1.2 / 经理暴击 1.3 / 彩色道具暴击 1.3。
-            同分时：带队长推荐属性的优先，再按配置里的科目顺序。
-            """
-            r = results.get(name)
-            return (self.subject_score(r), 1 if name in recommended else 0,
-                    -priority.index(name))
-
-        name = max(boxes, key=rank)
+        # 只在「有队友」的科目里选；一个都认不出来才退回全部科目
+        pool = with_team or list(boxes)
+        name = max(pool, key=rank)
         r = results.get(name) or self.empty_preview()
         self.log_info(
             f"选科目「{name}」（队友 {r['mates']}｜经理 {r['manager']}｜装备 {r['equip']}"
             f"｜满经验 {r['full']}｜金框 {r['gold']}｜得分 {self.subject_score(r):.2f}"
+            f"｜当前值 {attr_values.get(name, '?')}"
             f"｜{'推荐' if name in recommended else '非推荐'}）")
 
         # 若最佳科目不是当前选中的那个，先点一下选中（点两下会直接开练，

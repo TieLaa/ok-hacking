@@ -197,6 +197,49 @@ class TopBarRules(unittest.TestCase):
         self.assertEqual(task.top_bar()["stamina"], 69)
 
 
+class AttributeValues(unittest.TestCase):
+    """底部六维面板取值：OCR 会把「999/1450」拆开、把等级粘在数值前。"""
+
+    def test_reads_all_six_values(self):
+        texts = [
+            box(214, 830, "投射", 100, 57), box(330, 834, "B+", 68, 55),
+            box(384, 834, "501/1300", 186, 55),
+            box(792, 834, "体能", 84, 51), box(883, 821, "C+354/±90", 246, 77),
+            box(222, 909, "弹跳", 92, 54), box(334, 913, "A+", 62, 52),
+            box(388, 917, "999", 86, 46), box(460, 919, "/1450", 104, 44),
+            box(784, 907, "防守", 94, 60), box(898, 913, "B", 46, 48),
+            box(946, 911, "424/1300", 188, 56),
+            box(218, 987, "运控", 92, 51), box(336, 989, "B+", 62, 49),
+            box(380, 986, "526/1300", 188, 59),
+            box(788, 987, "意识", 88, 53), box(900, 989, "B", 46, 47),
+            box(946, 989, "475/", 110, 51), box(1028, 979, "/+29", 126, 63),
+        ]
+        task = FakeTask(texts)
+        self.assertEqual(task.read_attribute_values(texts),
+                         {"投射": 501, "体能": 354, "弹跳": 999,
+                          "防守": 424, "运控": 526, "意识": 475})
+
+
+class SubjectRanking(unittest.TestCase):
+    """科目排序：分数 → 队长推荐属性 → 数值低的 → 屏幕靠上（2026-10-26 用户口径）。"""
+
+    def test_score_wins_first(self):
+        self.assertGreater(FakeTask.subject_rank(3.0, False, 999, 900),
+                           FakeTask.subject_rank(2.0, True, 100, 100))
+
+    def test_recommended_wins_when_score_tied(self):
+        self.assertGreater(FakeTask.subject_rank(2.0, True, 900, 900),
+                           FakeTask.subject_rank(2.0, False, 100, 100))
+
+    def test_lower_value_wins_when_both_tied(self):
+        self.assertGreater(FakeTask.subject_rank(2.0, False, 400, 900),
+                           FakeTask.subject_rank(2.0, False, 800, 300))
+
+    def test_unknown_value_loses(self):
+        self.assertGreater(FakeTask.subject_rank(2.0, False, 900, 900),
+                           FakeTask.subject_rank(2.0, False, None, 100))
+
+
 class BoostTrainingClicks(unittest.TestCase):
     """加强训练：按 收益×成功率 的期望值选卡，再点「确定」（2026-10-26 用户口径）。"""
 

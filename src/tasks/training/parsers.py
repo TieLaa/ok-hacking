@@ -372,6 +372,33 @@ class TrainingParsersMixin:
             "mates": max(0, len(mates) - 1),
         }
 
+    def read_attribute_values(self, texts):
+        """读底部六维面板的当前数值：`{属性名: 当前值}`，读不到的属性不出现。
+
+        版式（2026-10-26 实测，三行两列）：每格「名字 + 等级 + 当前值/上限」，
+        OCR 会拆成「999」+「/1450」，也会把等级粘在数值前（「C+354/±90」）。
+        所以按行找名字右侧、从左往右第一个 ≥100 的数字 —— 后面的 /上限、/+加成
+        都比当前值大或小于 100。
+        """
+        panel = self.texts_in_region(texts, "attr_panel")
+        values = {}
+        for name in Defs.TRAINING_SUBJECTS:
+            # 必须整词匹配：match_text 的「拼接兜底」会返回面板里最长的框
+            # （例如「C+354/±90」），拿来当名字会把整行读错。
+            head = self.exact_text(panel, (name,))
+            if head is None:
+                continue
+            cy = head.y + head.height / 2
+            row = [t for t in panel
+                   if abs((t.y + t.height / 2) - cy) <= self.height * 0.035
+                   and t.x > head.x + head.width * 0.5]
+            for t in sorted(row, key=lambda b: b.x):
+                m = re.search(r"(\d{2,4})", t.name)
+                if m and int(m.group(1)) >= 100:
+                    values[name] = int(m.group(1))
+                    break
+        return values
+
     def read_equipment(self, texts):
         """数预览界面底部的器材卡，并判断哪些已经满经验、哪些是金框。
 
