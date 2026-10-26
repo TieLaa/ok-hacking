@@ -304,8 +304,10 @@ class WeekendHandlers:
                 self.click_box(confirm, after_sleep=0.45)
             self.log_info("游戏厅：跳过已三星小游戏")
             return True
-        self.log_warning("游戏厅：没有可跳过的小游戏（未三星），退出")
-        self.back(after_sleep=0.45)
+        self.log_warning("游戏厅：没有可跳过的小游戏（未三星），点右上角返回")
+        # 游戏厅选择页没有「跳过」时，back() 点左上角无效（2026-10-26 卡死），
+        # 返回箭头在右上角，和商店/公园一致。
+        self.exit_page()
         return True
 
     def handle_go_out(self, texts):
