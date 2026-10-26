@@ -63,7 +63,8 @@ class TrainingTask(BaseGirlsTask):
             "休息体力阈值": 40,
             "技能标签优先": ["得分手"],
             "比赛日处理": "自动（先跳过，跳不了就进比赛加速）",
-            "购买策略": "只买器材手册+",
+            "购买策略": "只买金和紫",
+            "每天逛商店": True,
             "周末先看商店": False,
             "周末野餐阈值": 60,
             "周末第一天优先资源点": True,
@@ -75,7 +76,7 @@ class TrainingTask(BaseGirlsTask):
             "流派": {"type": "drop_down", "options": list(STYLE_PLACES.keys())},
             "餐厅选项": {"type": "drop_down", "options": ["当服务员", "桌游GM"]},
             "公园选项": {"type": "drop_down", "options": ["野餐", "划船", "散步"]},
-            "购买策略": {"type": "drop_down", "options": ["只买器材手册+", "买最贵", "不买"]},
+            "购买策略": {"type": "drop_down", "options": ["只买金和紫", "只买器材手册+", "买最贵", "不买"]},
             "比赛日处理": {
                 "type": "drop_down",
                 "options": ["自动（先跳过，跳不了就进比赛加速）", "总是跳过", "总是进比赛（外部战斗脚本）"],
@@ -87,8 +88,9 @@ class TrainingTask(BaseGirlsTask):
             "失败率上限(%)": "训练科目页失败率高于这个值就直接回主界面休息（失败率高说明体力撑不住了）",
             "餐厅选项": "当服务员 = 零用钱++；桌游GM = 零用钱+",
             "公园选项": "野餐 = 精力++；划船 = 属性+；散步 = 零用钱+",
-            "购买策略": "只买器材手册+ = 只买能涨器材熟练度的（涨熟练度才会出满经验暴击）；买最贵 = 旧逻辑；不买 = 只逛不买",
-            "周末先看商店": "只有商店流才在周末先去商店；训练流的钱优先换步行街/游戏厅的黄色道具",
+            "购买策略": "只买金和紫 = 只买金卡/紫卡（看到品质色判定，金优先）；只买器材手册+ = 只买涨熟练度的；买最贵 = 旧逻辑；不买 = 只逛不买",
+            "每天逛商店": "每天在训练日主界面进一次商店（商店每天都能进，不用等周末）",
+            "周末先看商店": "商店流在周末首页额外先看一眼商店（日常商店已由「每天逛商店」覆盖）",
             "周末第一天优先资源点": "训练流周六优先去步行街（其次游戏厅），周日再回公园补精力",
             "周末野餐阈值": "周日体力低于这个值才野餐；否则选划船（属性+）",
             "扭蛋优先属性": "步行街扭蛋三选一，按顺序找第一个存在的（会消耗所有精力）",
@@ -105,6 +107,8 @@ class TrainingTask(BaseGirlsTask):
         # 周末状态：按「第N周+星期X」区分，跨天自动重置
         self._weekend = {"date": None, "shop_checked": False, "bought": False, "park_choice": None}
         self._shop_week = None          # 同一周只逛一次商店（顶栏星期 OCR 抖动时防止重复进店）
+        self._shop_day = None           # 每天逛一次商店：按（第N周, 星期X）去重
+        self._shop_at = 0.0             # 读不到星期时的兜底冷却（秒）
         # 倍速：每周只尝试一次，避免在未解锁时每拍狂点
         self._speed_week = None
         self._speed_locked = False
@@ -508,14 +512,13 @@ class TrainingTask(BaseGirlsTask):
         """商店：按「购买策略」买，买完退出。
 
         实机界面（2026-10-26）：
-        - 左侧商品卡：名称 + 剩余数量 + 价格（100 / 60 / 45）；
+        - 左侧商品卡：名称 + 剩余数量 + 价格（100 / 60 / 45），**卡片底色 = 品质色**；
         - 右侧是选中商品的详情和**黄色购买条**（价格就在条上）；
         - 右上角 X 关闭；顶栏金币是体力条右边那个独立数字。
 
-        用户口径（2026-10-26）：「有钱就买」是错的 —— 训练流的钱要优先换
-        步行街/游戏厅里**有队友加成的黄色道具**，商店只买能涨器材熟练度的
-        「器材手册+」（熟练度满才会出满经验暴击）。所以默认策略是「只买器材手册+」，
-        买不到就空手退出，把零用钱留给周末。
+        用户口径（2026-10-26）：商店每天都能进（`handle_daily_shop` 负责进店），
+        但**只买金卡和紫卡**，蓝/白不买；「有钱就买最贵」是错的。
+        所以默认策略是「只买金和紫」，认不出品质色就不买。
         """
         # 周末首页也有「商店」两个字，但同时有「出行」，那是按钮不是商店页
         if self.match_text(texts, "出行") is not None:
@@ -525,11 +528,12 @@ class TrainingTask(BaseGirlsTask):
         if self.match_text(texts, ("上新时间", "剩余", "能力详情")) is None:
             return False
 
-        policy = self.config.get("购买策略", "只买器材手册+")
+        policy = self.config.get("购买策略", "只买金和紫")
         money = self.read_money(texts)
         items = self.read_shop_items(texts)
-        self.log_info("商店：" + "、".join(f"{i['name']}({i['price']})" for i in items)
-                      + f"｜零用钱 {money}｜策略 {policy}")
+        self.log_info("商店：" + "、".join(
+            f"{i['name']}({i['price']}/{i['quality']})" for i in items)
+            + f"｜零用钱 {money}｜策略 {policy}")
 
         if policy == "不买":
             self.log_info("商店：策略是只逛不买，退出")
@@ -542,10 +546,18 @@ class TrainingTask(BaseGirlsTask):
             self.close_shop(texts)
             return True
 
-        if policy == "只买器材手册+":
+        if policy == "只买金和紫":
+            # 用户口径：只买金卡和紫卡（蓝/白不买），金优先
+            pool = [i for i in affordable if i["quality"] in ("金", "紫")]
+            if not pool:
+                self.log_info("商店：没有买得起的金/紫商品，不买，退出")
+                self.close_shop(texts)
+                return True
+            pick = max(pool, key=lambda i: (1 if i["quality"] == "金" else 0, i["price"]))
+        elif policy == "只买器材手册+":
             pool = [i for i in affordable if "器材手册" in i["name"]]
             if not pool:
-                self.log_info("商店：没有器材手册，钱留给周末的黄色道具，退出")
+                self.log_info("商店：没有器材手册，退出")
                 self.close_shop(texts)
                 return True
             pick = max(pool, key=lambda i: i["price"])
@@ -556,7 +568,7 @@ class TrainingTask(BaseGirlsTask):
         self.click(pick["x"], pick["y"], after_sleep=0.6)
         # 右侧黄色购买条（实机相对位置 0.79, 0.84）
         self.click(int(self.width * 0.79), int(self.height * 0.84), after_sleep=0.8)
-        self.log_info(f"商店：买「{pick['name']}」{pick['price']}（零用钱 {money}）")
+        self.log_info(f"商店：买「{pick['name']}」{pick['price']}（{pick['quality']}｜零用钱 {money}）")
 
         confirm = self.find_text(("确定", "确认"), region_name="confirm_bar")
         if confirm is not None:
@@ -615,14 +627,63 @@ class TrainingTask(BaseGirlsTask):
             if not near:
                 continue
             name = max(near, key=lambda n: n.y)
+            quality, qh, qs = self.card_quality(name, pt)
             items.append({
                 "name": name.name.strip(),
                 "price": price,
+                "quality": quality,
+                "hue": qh,
+                "sat": qs,
                 # 点名称和价格之间的卡片图，避免点到价格/数量
                 "x": int(name.x + name.width / 2),
                 "y": int((name.y + name.height / 2 + pt.y) / 2),
             })
         return items
+
+    def card_quality(self, name_box, price_box):
+        """读商品卡片的品质色（金 / 紫 / 蓝 / 其他）。
+
+        实机（docs/shots/2026-10-26-shop.png）：卡片底色就是品质色 ——
+        紫卡 HSL 偏紫（OpenCV H≈124~132、S≈40、V≈251），
+        金卡是暖黄（H≈20~40、S 更高），蓝卡 H≈100~115。
+        采样卡片的**左右两条内边**（避开中间图标和文字），取中位色相。
+        颜色只用来筛「只买金和紫」，认不出来就按「其他」处理（不买），
+        宁可少买也不乱花钱。
+        """
+        frame = self.frame
+        if frame is None:
+            return "其他", -1, -1
+        h, w = frame.shape[:2]
+        x1 = int(name_box.x - w * 0.015)
+        x2 = int(name_box.x + name_box.width + w * 0.015)
+        y1 = int(name_box.y - h * 0.02)
+        y2 = int(price_box.y + price_box.height)
+        x1, x2 = max(0, x1), min(w, x2)
+        y1, y2 = max(0, y1), min(h, y2)
+        if x2 - x1 < 20 or y2 - y1 < 40:
+            return "其他", -1, -1
+
+        band_y1 = y1 + int((y2 - y1) * 0.45)
+        band_y2 = y2 - int((y2 - y1) * 0.15)
+        strips = [frame[band_y1:band_y2, x1 + 4:x1 + 16],
+                  frame[band_y1:band_y2, x2 - 16:x2 - 4]]
+        pixels = [s.reshape(-1, 3) for s in strips if s.size]
+        if not pixels:
+            return "其他", -1, -1
+        pixels = np.concatenate(pixels)
+        hsv = cv2.cvtColor(pixels.reshape(-1, 1, 3), cv2.COLOR_BGR2HSV).reshape(-1, 3)
+        colored = (hsv[:, 1] >= 20) & (hsv[:, 2] >= 170)
+        if colored.sum() < 40:
+            return "其他", -1, -1
+        hue = float(np.median(hsv[colored, 0]))
+        sat = float(np.median(hsv[colored, 1]))
+        if 10 <= hue <= 45 and sat >= 55:
+            return "金", hue, sat
+        if 115 <= hue <= 155:
+            return "紫", hue, sat
+        if 90 <= hue < 115:
+            return "蓝", hue, sat
+        return "其他", hue, sat
 
     def close_shop(self, texts=None):
         """点右上角 X 关商店。"""
@@ -635,12 +696,13 @@ class TrainingTask(BaseGirlsTask):
         self.log_info("商店：关闭")
 
     def handle_street(self, texts):
-        """步行街扭蛋：三选一（会消耗所有精力），选完按确定。
+        """步行街扭蛋：三选一（有的会清空精力），选完按确定。
 
-        用户口径（2026-10-26）：**低精力时**抽到「清空精力」的高品质扭蛋是赚的，
-        但高精力去抽就是纯亏（第二天没法训练）。所以训练流加一道体力闸：
-        体力 ≥ 休息阈值时直接退出，体力低时才抽。
-        注意：左上角那个「返回」会打开训练计划日历，要用**右上角**的返回箭头。
+        用户口径（2026-10-26）：「清空精力」的扭蛋**只有体力低的时候才抽** ——
+        低体力时反正也要靠休息回，用它换高品质属性是赚的；
+        体力高的时候去抽就纯亏（第二天没法训练）。
+        注意：不是「体力高就整条街都不进」，高体力照样可以抽不清空的扭蛋。
+        左上角那个「返回」会打开训练计划日历，要用**右上角**的返回箭头。
         """
         if self.match_text(texts, Defs.STREET_TITLE) is None:
             return False
@@ -648,14 +710,29 @@ class TrainingTask(BaseGirlsTask):
             self.log_info("步行街扭蛋：未开启，退出")
             self.exit_page()
             return True
-        if self.style == "训练流":
-            stamina = self.top_bar().get("stamina")
-            limit = int(self.config.get("休息体力阈值", 40))
-            if stamina is not None and stamina >= limit:
-                self.log_info(f"步行街：体力 {stamina} ≥ {limit}，抽了会清空精力，不抽，退出")
-                self.exit_page()
-                return True
-            self.log_info(f"步行街：体力 {stamina} < {limit}，扭蛋清空精力反而是赚的，抽")
+
+        stamina = self.top_bar().get("stamina")
+        limit = int(self.config.get("休息体力阈值", 40))
+        low = stamina is not None and stamina < limit
+
+        opts = self.texts_in_region(texts, "weekend_options")
+        opts = [t for t in opts if 2 <= len(t.name.strip()) <= 10]
+        clearing = [t for t in opts
+                    if any(k in t.name for k in Defs.GACHA_CLEAR_TEXTS)]
+
+        if low and clearing:
+            pick = max(clearing, key=lambda t: (t.height, -t.y))
+            self.click_box(pick, after_sleep=0.4)
+            confirm = self.find_text(("确定", "确认"))
+            if confirm is not None:
+                self.click_box(confirm, after_sleep=0.45)
+            self.log_info(f"步行街：体力 {stamina} < {limit}，抽清空精力的「{pick.name.strip()}」")
+            return True
+
+        if clearing and not low:
+            self.log_info(f"步行街：体力 {stamina} ≥ {limit}，跳过会清空精力的选项 "
+                          + "、".join(t.name.strip() for t in clearing))
+
         names = []
         for attr in self.config.get("扭蛋优先属性", list(Defs.GACHA_OPTIONS)):
             names.append(f"{attr}专注")
@@ -953,15 +1030,15 @@ class TrainingTask(BaseGirlsTask):
         self.log_debug(f"场上角色名：{self.scene_names(texts)}")
         return self.analyze_preview(texts)
 
-    # ---------- 科目预览打分（用户 2026-10-26 给的权重）----------
-    # 队友 1.0 / 道具 1.1 / 经理 1.2 / 黄框道具暴击 1.2 /
-    # 经理暴击 1.3 / 彩色道具暴击 1.3
+    # ---------- 科目预览打分（用户 2026-10-26 简化版权重）----------
+    # 队友 1 / 道具 1 / 经理 1 / 黄框 +0.1 / 彩框 +0.2
+    # （用户分不清「经理暴击」和「道具暴击」，所以不再单独给暴击项加权，
+    #   只把黄框、彩框当作同分时的小加成。）
     W_MATE = 1.0
-    W_EQUIP = 1.1
-    W_MANAGER = 1.2
-    W_GOLD_CRIT = 1.2
-    W_MANAGER_CRIT = 1.3
-    W_COLOR_CRIT = 1.3
+    W_EQUIP = 1.0
+    W_MANAGER = 1.0
+    W_GOLD_CRIT = 0.1
+    W_COLOR_CRIT = 0.2
 
     @classmethod
     def empty_preview(cls):
@@ -970,14 +1047,13 @@ class TrainingTask(BaseGirlsTask):
 
     @classmethod
     def subject_score(cls, r):
-        """按权重算总分（不带任何相对化的"主项/辅助"拍脑袋系数）。"""
+        """按权重算总分（全部是正分，直接排序）。"""
         if not r:
             return 0.0
         return (r["mates"] * cls.W_MATE
                 + r["equip"] * cls.W_EQUIP
                 + r["manager"] * cls.W_MANAGER
                 + r["gold"] * cls.W_GOLD_CRIT
-                + r["manager_crit"] * cls.W_MANAGER_CRIT
                 + r["color"] * cls.W_COLOR_CRIT)
 
     def analyze_preview(self, texts):
@@ -1355,6 +1431,47 @@ class TrainingTask(BaseGirlsTask):
         else:
             self.flow_click("confirm_start", after_sleep=0.8)
         self.log_info("开始训练（已扣体力，不可退）")
+        return True
+
+    def handle_daily_shop(self, texts):
+        """训练日主界面：每天进一次商店。
+
+        用户口径（2026-10-26）：商店**每天都能进**，不用非等到周末。
+        判据：有「星期」+「休息」+「商店」，且**没有「出行」**
+        （有「出行」的是周末首页，走 handle_go_out 那条线）。
+        按（第N周, 星期X）去重：买完关店回到主界面不会又被点进去。
+        """
+        if not self.config.get("每天逛商店", True):
+            return False
+        if self.match_text(texts, "星期") is None or self.match_text(texts, "休息") is None:
+            return False
+        if self.match_text(texts, "出行") is not None:
+            return False
+        shop = self.match_text(texts, "商店")
+        if shop is None:
+            return False
+
+        state = self.top_bar()
+        key = (state.get("week"), state.get("day"))
+        if key[1] is None:
+            # 顶栏星期 OCR 偶尔只认出「星期」两个字；用左上角「5天 赢得比赛」的
+            # 倒计时兜底 —— 它每天都变，正好可以当日更键。
+            banner = "".join(t.name for t in self.texts_in_region(texts, "today_banner"))
+            m = re.search(r"(\d+)\s*天", banner)
+            if m:
+                key = (key[0], f"倒计时{m.group(1)}")
+        if key[1] is not None:
+            if key == self._shop_day:
+                return False
+        else:
+            # 星期和倒计时都读不到：退化成「至少隔 60 秒再进一次」，
+            # 避免买完关店又被同一帧点进去死循环，又不至于整天都不进店。
+            if time.monotonic() - self._shop_at < 60:
+                return False
+        self._shop_at = time.monotonic()
+        self._shop_day = key
+        self.click_box(shop, after_sleep=0.9)
+        self.log_info(f"每日商店：第{key[0]}周 星期{key[1]}，进去只买金/紫")
         return True
 
     def handle_training_day(self, texts):
@@ -1794,6 +1911,7 @@ class TrainingTask(BaseGirlsTask):
         handle_team,
         handle_equipment,
         handle_confirm_team,
+        handle_daily_shop,
         handle_training_day,
         handle_training_hub,
         handle_restaurant,
