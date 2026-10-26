@@ -562,15 +562,37 @@ class TrainingTask(BaseGirlsTask):
         self.log_info(f"结算页「{target.name}」")
         return True
 
+    @staticmethod
+    def is_label(name):
+        """浮层/角标文字（「划船比赛！」这种），只是视觉提示，点了没反应。"""
+        s = (name or "").strip()
+        if not s:
+            return False
+        return s.endswith("！") or s.endswith("!") or "加成" in s or "比赛！" in s
+
     def choose_option(self, texts, names, after_sleep=0.4):
         """在周末子页面的选项区里选一个，并处理可能的「确定」。
 
         确定按钮位置不固定（扭蛋页在底部中间，餐厅/公园可能在别处），
         先看底部条，再看整屏，避免只在固定区域找不到就反复点同一张卡。
+
+        坑（2026-10-26 实机）：公园的「划船」图标上盖了一个
+        「划船比赛！」活动标签，子串匹配先命中的是这个标签，点它毫无反应。
+        所以这里**先整词匹配**，找不到再用子串，并且排除角标文字。
         """
         opts = self.texts_in_region(texts, "weekend_options")
         opts = [t for t in opts if not self.is_decor(t.name)]
-        target = self.match_text(opts, names)
+
+        target = None
+        for name in names:
+            target = next((t for t in opts if t.name.strip() == name), None)
+            if target is not None:
+                break
+        if target is None:
+            plain = [t for t in opts if not self.is_label(t.name)]
+            target = self.match_text(plain, names)
+            if target is not None and self.is_label(target.name):
+                target = None
         if target is None:
             return False
         self.click_box(target, after_sleep=after_sleep)
