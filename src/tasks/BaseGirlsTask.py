@@ -48,6 +48,20 @@ class BaseGirlsTask(BaseTask):
                 return max(texts, key=lambda t: len(t.name))
         return None
 
+    @staticmethod
+    def is_decor(name):
+        """这段文字是不是纯视觉标签（折扣！/限时特惠/UP! …），不是可点元素。
+
+        判据很克制：去掉标点后**以装饰词开头**且整串很短（≤6 字）才算，
+        这样「参加社团活动」这类真选项不会被误杀。
+        """
+        s = (name or "").replace(" ", "").replace("　", "")
+        s = s.strip("！!~～·.。,，")
+        if not s or len(s) > 6:
+            return False
+        up = s.upper()
+        return any(up.startswith(w.upper()) for w in Defs.DECOR_WORDS)
+
     def find_text(self, names, region_name=None, box=None):
         """找文字并返回**真实文本框**。
 

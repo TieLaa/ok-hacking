@@ -59,11 +59,13 @@ class TrainingTask(BaseGirlsTask):
             "餐厅选项": "当服务员",
             "公园选项": "野餐",
             "扭蛋优先属性": ["投射", "体能", "运控"],
-            "允许进游戏厅": False,
-            "允许进步行街": False,
+            "允许进游戏厅": True,
+            "允许进步行街": True,
             "允许开始训练": True,
             "休息体力阈值": 40,
             "技能标签优先": ["得分手"],
+            "指定队长": "",
+            "新一局删档": False,
             "比赛日处理": "自动（先跳过，跳不了就进比赛加速）",
             "购买策略": "只买金和紫",
             "每天逛商店": True,
@@ -90,6 +92,8 @@ class TrainingTask(BaseGirlsTask):
         self.config_description.update({
             "训练科目优先级": "同分时的先后顺序；按 docs/score-model 的权重算总分：队友1 / 道具1.1 / 经理1.2 / 黄框道具暴击1.2 / 经理暴击1.3 / 彩色道具暴击1.3",
             "推荐属性": "队长的两项推荐属性（面板上的绿标），同分时优先",
+            "指定队长": "填角色名（如「真崎辉世」）就逐张点开找她当队长；留空 = 点第一张（等级最高）",
+            "新一局删档": "遇到「训练确认」弹窗时点「删档」开新的一局；只在旧局已经跑完时打开",
             "失败率上限(%)": "训练科目页失败率高于这个值就直接回主界面休息（失败率高说明体力撑不住了）",
             "餐厅选项": "当服务员 = 零用钱++；桌游GM = 零用钱+",
             "公园选项": "野餐 = 精力++；划船 = 属性+；散步 = 零用钱+",
@@ -385,6 +389,16 @@ class TrainingTask(BaseGirlsTask):
         """
         if self.match_text(texts, "训练确认") is None:
             return False
+        # 想开新的一局：先删掉上一局的存档（旧局已经跑完，删档不会误伤进度）
+        if self.config.get("新一局删档", False):
+            wipe = self.exact_text(texts, ("删档",))
+            if wipe is not None:
+                self.click_box(wipe, after_sleep=0.9)
+                confirm = self.exact_text(self._ocr_region(), ("确定", "确认"))
+                if confirm is not None:
+                    self.click_box(confirm, after_sleep=0.9)
+                self.log_info("训练确认：删档 → 开新的一局")
+                return True
         target = self.match_text(texts, "继续训练")
         if target is not None:
             self.click_box(target, after_sleep=0.9)
@@ -555,6 +569,7 @@ class TrainingTask(BaseGirlsTask):
         先看底部条，再看整屏，避免只在固定区域找不到就反复点同一张卡。
         """
         opts = self.texts_in_region(texts, "weekend_options")
+        opts = [t for t in opts if not self.is_decor(t.name)]
         target = self.match_text(opts, names)
         if target is None:
             return False
@@ -1431,6 +1446,14 @@ class TrainingTask(BaseGirlsTask):
             return True
         return False
 
+    def handle_club_members(self, texts):
+        """社团成员 / 角色列表页：误入时退出（左上角 <<）。"""
+        if self.match_text(texts, "社团成员") is None:
+            return False
+        self.click(int(self.width * 0.035), int(self.height * 0.06), after_sleep=0.8)
+        self.log_info("社团成员页：点左上角返回")
+        return True
+
     def handle_story_arrow(self, texts):
         """剧情对话：连点画面推进（有「跳过」的话 handle_dialog_continue 先处理）。
 
@@ -1503,7 +1526,7 @@ class TrainingTask(BaseGirlsTask):
             cx = (t.x + t.width / 2) / self.width
             cy = (t.y + t.height / 2) / self.height
             s = t.name.strip()
-            if s in ui_words or not s:
+            if s in ui_words or not s or self.is_decor(s):
                 continue
             if not (0.20 <= cx <= 0.80 and 0.15 <= cy <= 0.75):
                 continue
@@ -1574,8 +1597,21 @@ class TrainingTask(BaseGirlsTask):
         return True
 
     def handle_captain(self, texts):
+        """训练核心页：选队长。
+
+        实机（2026-10-25）：右侧 2x2 四张卡，选中的人名字显示在底部中间
+        （「SSR 佐久间 雨乃」）。配置 `指定队长` 填名字时，逐张点开比对，
+        找到就点「下一步」；留空时沿用旧逻辑（点第一张，等级最高）。
+        """
         if self.match_text(texts, "训练核心") is None:
             return False
+
+        want = (self.config.get("指定队长", "") or "").strip()
+        if want and self.pick_captain_by_name(want):
+            return True
+        if want:
+            self.log_warning(f"四张队长卡里没找到「{want}」，退回第一张")
+
         self.flow_click("captain_card", after_sleep=0.5)
         self.log_info("选第一位队长（列表按等级降序，第一张最强）")
         # 选完队长后按钮可能移动，重新 OCR 再点「下一步」
@@ -1583,6 +1619,36 @@ class TrainingTask(BaseGirlsTask):
             self._ocr_region(), "下一步", ("选择队友",), timeout=8)
         self.log_info("进入选择队友" if ok else "点「下一步」没反应")
         return True
+
+    def read_captain_name(self):
+        """底部中间那行队长名字（区域见 Defs.CAPTAIN_NAME_AREA）。"""
+        x1, y1, x2, y2 = Defs.CAPTAIN_NAME_AREA
+        best = None
+        for t in self._ocr_region():
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if not (x1 <= cx <= x2 and y1 <= cy <= y2):
+                continue
+            if len(t.name.strip()) < 2:
+                continue
+            if best is None or t.width > best.width:
+                best = t
+        return best.name.strip() if best is not None else None
+
+    def pick_captain_by_name(self, want):
+        """逐张点开四张队长卡，读到名字匹配就点「下一步」。"""
+        for idx in (1, 2, 3, 4):
+            rx, ry = Defs.CAPTAIN_CARD[idx]
+            self.click(int(self.width_of_screen(rx)), int(self.height_of_screen(ry)),
+                       after_sleep=0.7)
+            name = self.read_captain_name()
+            self.log_info(f"队长卡 {idx}：{name or '（没认出名字）'}")
+            if name and want in name:
+                ok = self.click_text_and_expect(
+                    self._ocr_region(), "下一步", ("选择队友",), timeout=8)
+                self.log_info(f"选定队长「{name}」" + ("" if ok else "（点下一步没反应）"))
+                return True
+        return False
 
     def handle_team(self, texts):
         if self.match_text(texts, "选择队友") is None:
@@ -1884,7 +1950,7 @@ class TrainingTask(BaseGirlsTask):
                 cx = (t.x + t.width / 2) / self.width
                 cy = (t.y + t.height / 2) / self.height
                 s = t.name.strip()
-                if s in ui_words:
+                if s in ui_words or self.is_decor(s):
                     continue
                 if not (0.30 <= cx <= 0.70 and 0.20 <= cy <= 0.70):
                     continue
@@ -2168,5 +2234,6 @@ class TrainingTask(BaseGirlsTask):
         handle_weekend,
         handle_vacation,
         handle_result,
+        handle_club_members,
         handle_story_arrow,
     )
