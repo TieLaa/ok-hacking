@@ -24,7 +24,7 @@ WEEKEND_PLACES = ("餐厅", "游戏厅", "公园", "步行街")
 # 周末子页面
 RESTAURANT_TITLE = ("在餐厅", "桌游GM", "当服务员")
 RESTAURANT_OPTIONS = ("当服务员", "桌游GM")
-PARK_TITLE = ("在公园", "散步", "划船", "野餐")
+PARK_TITLE = ("在公园", "干点什么好呢", "野餐")
 PARK_OPTIONS = ("野餐", "划船", "散步")
 STREET_TITLE = ("请选择1个扭蛋", "扭蛋")
 GACHA_OPTIONS = ("投射专注", "体能专注", "运控专注")

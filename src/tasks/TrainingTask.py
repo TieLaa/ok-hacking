@@ -237,6 +237,11 @@ class TrainingTask(BaseGirlsTask):
                 stuck, last_sig = 0, None
                 continue
 
+            # ---- 一局的终点：进入注册球员编队就算跑完（用户 2026-10-26）----
+            if self.in_registration_page(texts):
+                self.log_info("已到一局终点（注册球员编队）→ 任务完成", notify=True)
+                return True
+
             if self._handle_any(texts):
                 self.sleep(interval)
                 continue
@@ -530,8 +535,12 @@ class TrainingTask(BaseGirlsTask):
         return True
 
     def handle_result(self, texts):
-        """比赛/训练结算页：确认、继续、领取。"""
-        target = self.match_text(texts, ("确认", "继续", "领取", "下一步"))
+        """比赛/训练结算页：确认、继续、领取。
+
+        一局的终点（用户 2026-10-26）：最终结算点「下一步」会进入**注册球员编队**，
+        任务到这里就算跑完，不要再往下点。
+        """
+        target = self.match_text(texts, ("确认", "继续", "领取"))
         if not target:
             return False
         # 结算页的「确认」可能连点两次
@@ -569,10 +578,15 @@ class TrainingTask(BaseGirlsTask):
     def handle_park(self, texts):
         """公园内页：散步（零用钱+）/ 划船（属性+）/ 野餐（精力++）。
 
-        训练流的新逻辑（用户 2026-10-26）：
-        - **不再无脑野餐**（之前满体力也吃野餐，浪费了 6 次属性机会）；
-        - 周六先选划船（属性+，精力也会回到 50 多）；
-        - 周日看体力：低于阈值才野餐，否则继续划船（回到 90 多）。
+        实机（2026-10-26 debug 包）：三个**圆形图标**按钮，名字和效果都在图标下方
+        （「划船 属性+」），页顶有「在公园干点什么好呢?」。
+        旧判据 `Defs.PARK_TITLE = ("在公园", ...)` 依赖「在公园」三个字，
+        但实际文案是「在公园干点什么好呢?」整句 —— 整句 OCR 时「在公园」不是独立框，
+        match_text 的子串匹配靠"整段拼接"兜底才能命中，命中后返回的是**最长的框**
+        （整句话），click_box 会点到句子中间，什么都点不到 → 卡死。
+
+        现在改成：标题只当**判据**（有「公园」相关字样 + 有三个圆形选项就处理），
+        实际点击永远走选项文字框（散步/划船/野餐）。
         """
         if self.match_text(texts, Defs.PARK_TITLE) is None:
             return False
@@ -1433,7 +1447,11 @@ class TrainingTask(BaseGirlsTask):
 
         # 训练事件 / 只有 ▼ 的剧情页（实机 2026-10-26）：右下角白色 ▼ 是最可靠的信号。
         # 这类页面没有长台词，旧判据认不出来，会一直卡在「没见过」。
-        if self.match_text(texts, "训练事件") is not None or self.has_story_arrow():
+        # 竖向三选一（如「更衣室加设空衣柜 / JellyRabbit毛绒玩具 / 了解千圣的想法」）
+        # 右上角是「跳过」按钮，也没有 ▼ —— 有白底圆角横条组就点第一个。
+        if (self.match_text(texts, "训练事件") is not None
+                or self.has_story_arrow()
+                or self._vertical_choice(texts) is not None):
             self.click(int(self.width * 0.96), int(self.height * 0.93), after_sleep=0.5)
             self.log_info("训练事件/剧情：点右下角 ▼")
             return True
@@ -1466,6 +1484,50 @@ class TrainingTask(BaseGirlsTask):
         return True
         self.log_info(f"剧情对话：连点 3 下推进（白 {white_ratio:.3f} 背景 {around.mean():.0f}）")
         return True
+
+    def _vertical_choice(self, texts):
+        """竖排三选一的选项组（剧情三选一，右上角有「跳过」）。
+
+        与 handle_event_choice 的竖向分支同源，但这里只**找**不点：
+        剧情三选一在 story_arrow 之前处理，点屏幕右下角即可推进（点了就选第一个）。
+        返回选项列表（>=3 个才算）。
+        """
+        if self.match_text(texts, "训练计划") is not None:
+            return None
+        if self.match_text(self.texts_in_region(texts, "top_right"), "跳过") is None:
+            return None
+        ui_words = {"下一场", "下一步", "跳过", "确定", "取消",
+                    "关闭", "继续", "领取", "开始训练"}
+        vopts = []
+        for t in texts:
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            s = t.name.strip()
+            if s in ui_words or not s:
+                continue
+            if not (0.20 <= cx <= 0.80 and 0.15 <= cy <= 0.75):
+                continue
+            if len(s) < 3 or len(s) > 20:
+                continue
+            if not self._has_white_band(t):
+                continue
+            vopts.append(t)
+        if len(vopts) < 3:
+            return None
+        groups = []
+        for t in sorted(vopts, key=lambda x: x.y):
+            placed = False
+            for g in groups:
+                gx = (g[-1].x + g[-1].width / 2) / self.width
+                cx = (t.x + t.width / 2) / self.width
+                if abs(gx - cx) < 0.10 and 0 < (t.y - g[-1].y) / self.height < 0.25:
+                    g.append(t)
+                    placed = True
+                    break
+            if not placed:
+                groups.append([t])
+        groups = [g for g in groups if len(g) >= 3]
+        return max(groups, key=len) if groups else None
 
     def has_story_arrow(self):
         """右下角有没有白色 ▼（剧情/训练事件的推进箭头）。"""
@@ -1702,6 +1764,11 @@ class TrainingTask(BaseGirlsTask):
         """比赛结算 / 赛程页 / 目标达成：一路点「下一步」或屏幕。
 
         判定必须**整词**：「失败率 0%」里也有「失败」，科目页会被误判成结算页。
+
+        一局的终点（用户 2026-10-26）：最终结算页（A 级评价大字那张）点「下一步」
+        会进入**注册球员编队** —— 那是这一局的终点，任务停在这里。
+        判据：只有评价等级大字（A/S/B 单独成框）+ 没有顶栏周数，才点「下一步」；
+        点完看到「选择器材/确认编队」等编队页文字后，run() 直接 return 结束。
         """
         if self.match_text(texts, ("失败率", "决定", "休息")) is not None:
             return False
@@ -1733,6 +1800,13 @@ class TrainingTask(BaseGirlsTask):
             return True
         self.click(int(self.width_of_screen(0.5)), int(self.height_of_screen(0.5)), after_sleep=0.45)
         return True
+
+    def in_registration_page(self, texts):
+        """最终结算的下一页：注册球员编队（选择器材 / 确认编队 / 我的球员）。
+
+        用户口径：这是**一局的终点**，看到它任务就算完成，不要再点。
+        """
+        return self.match_text(texts, ("注册球员", "签约", "选择器材", "确认编队")) is not None
 
     def handle_skill_select(self, texts):
         """技能三选一：**按品质算分**（评分公式见 docs/score-model/README.md）。
