@@ -117,6 +117,15 @@ class EventRules(unittest.TestCase):
         task = FakeTask(texts)
         self.assertEqual(task.choice_candidates(texts), [])
 
+    def test_weekend_dialogue_not_choice(self):
+        """周末首页的对话气泡（带逗号/问号/学校名）不能当选项。"""
+        texts = [
+            box(900, 250, "眼镜的度数又上涨了，教练", 400, 50),
+            box(900, 320, "您可以陪我去配一副新的吗？", 400, 50),
+            box(900, 390, "北空之丘女子高校", 400, 50),
+        ]
+        self.assertEqual(FakeTask(texts).choice_candidates(texts), [])
+
     def test_dialog_continue_yields_to_choice(self):
         """三选一页的「跳过」是灰的，dialog_continue 必须让位。"""
         texts = [

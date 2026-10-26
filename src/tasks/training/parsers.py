@@ -577,6 +577,13 @@ class TrainingParsersMixin:
                 continue
             if not (2 <= len(s) <= 20):
                 continue
+            # 选项名是短名词：带句读的台词、学校名都不是选项。
+            # 2026-10-26 周末首页把「眼镜的度数又上涨了，教练 / 您可以陪我去配一副
+            # 新的吗？/ 北空之丘女子高校」当成三选一，每拍点第一个导致卡死。
+            if re.search(r"[，。？！、；：]", s):
+                continue
+            if re.search(r"(高校|公学|中学|大学|学校)$", s):
+                continue
             # 选项是普通字号；「备战 / 东部大赛」这种大标题/大按钮不算。
             if t.height > self.height * 0.08:
                 continue
