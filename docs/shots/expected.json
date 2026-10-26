@@ -22,7 +22,7 @@
   "2026-10-26-park.png": "handle_park",
   "2026-10-26-rest-confirm.png": "handle_rest_confirm",
   "2026-10-26-shop.png": "handle_shop",
-  "2026-10-26-story-choice.png": "handle_dialog_continue",
+  "2026-10-26-story-choice.png": "handle_event_choice",
   "2026-10-26-subject-crit.png": "handle_subject_select",
   "2026-10-26-team.png": "handle_team",
   "2026-10-26-training-day.png": "handle_popup"
