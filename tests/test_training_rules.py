@@ -36,6 +36,14 @@ class FakeTask(DryRunTask):
         self.config = config or {}
         self._qualities = list(qualities or [])
         self._mates = list(mates or [])
+        self.ocr_calls = 0
+        self.ocr_queue = []          # 依次弹出的「下一帧」OCR 结果（模拟动画）
+
+    def _ocr_region(self, region_name=None, box=None):
+        self.ocr_calls += 1
+        if self.ocr_queue:
+            return self.ocr_queue.pop(0)
+        return super()._ocr_region(region_name, box)
 
     def card_band_quality(self, cx):
         q = self._qualities.pop(0) if self._qualities else "其他"
@@ -63,6 +71,37 @@ def gacha_texts(cards, stamina=None, money=None, price="60"):
 
 
 class GachaRules(unittest.TestCase):
+
+    def test_gacha_waits_for_open_animation(self):
+        """2026-10-27 用户反馈：第一次进步行街会先播扭蛋开场动画。
+
+        动画期间 OCR 只有街道招牌，读不到卡；旧代码立刻退出，白丢一次扭蛋。
+        现在必须原地重试 3 次（约 2 秒）再决定退出。
+        """
+        texts = [box(760, 80, "请选择1个扭蛋i", 400, 70),
+                 box(640, 950, "确定", 120, 60),
+                 box(30, 990, "能力详情", 150, 40)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_street(texts))
+        self.assertGreaterEqual(task.ocr_calls, 3)          # 确实等了动画
+        self.assertEqual(task.actions[-1][0], "click")      # 仍无卡才退出
+        self.assertGreater(task.actions[-1][1], task.width * 0.9)   # 右上角 ↩
+
+    def test_gacha_animation_then_cards_appear(self):
+        """动画播完后刷出三张卡：要正常选卡，不能退出。"""
+        empty = [box(760, 80, "请选择1个扭蛋i", 400, 70),
+                 box(1075, 20, "200", 60, 30),      # 顶栏零用钱
+                 box(640, 950, "确定", 120, 60)]
+        real = gacha_texts([
+            ("投射增加++", "主力投射+72"),
+            ("运控增加++", "主力运控+72"),
+            ("体能增加++", "主力体能+72"),
+        ], stamina="45/130", money="200", price="60")
+        task = FakeTask(empty, qualities=["金", "金", "金"])
+        task.ocr_queue = [real]                      # 第一次重试就刷出卡
+        self.assertTrue(task.handle_street(empty))
+        self.assertEqual(task.actions[0][0], "click")        # 选了卡
+        self.assertEqual(task.actions[-1][1], "确定")        # 并点确定
 
     def test_stamina_recover_parse(self):
         """2026-10-27 用户截图：精力恢复++ 的两种写法要能算出总量。"""

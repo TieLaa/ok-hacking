@@ -285,6 +285,22 @@ class WeekendHandlers:
 
         cards = self.read_gacha_cards(texts)
         if not cards:
+            # 2026-10-27 用户反馈：训练中第一次进步行街，扭蛋会先播一段开场动画
+            # （卡片从街道背景里飞出来），动画期间 OCR 只认到「浅井屋 / 美度电器」
+            # 这类招牌，read_gacha_cards 返回空 —— 旧代码立刻 leave_street()，
+            # 整次扭蛋机会被白白跳过。
+            # 现在原地等最多 ~2 秒，每 0.7 秒刷新一帧重新识别，仍然空才退出。
+            for _ in range(3):
+                self.sleep(0.7)
+                try:
+                    self.next_frame()
+                except Exception:
+                    pass
+                cards = self.read_gacha_cards(self._ocr_region() or [])
+                if cards:
+                    self.log_info("扭蛋：开场动画结束，重新识别到卡片")
+                    break
+        if not cards:
             self.log_warning("扭蛋：三张卡都没认出来，退出不买")
             self.leave_street()
             return True
