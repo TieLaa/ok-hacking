@@ -24,15 +24,18 @@ from ok import ConfigOption  # noqa: F401  (保留给全局配置扩展)
 
 from src.tasks.BaseGirlsTask import BaseGirlsTask
 from src.tasks.ui import Defs
+from src.util.emergency_stop import STOP
 
 # 流派 → 周末去哪（按优先级，每天一个）
 # 注意顺序：步行街扭蛋「消耗所有精力」，公园野餐「精力++」，
 # 所以先扭蛋再野餐，相当于白拿 +48 属性；反过来就把回复浪费了。
 STYLE_PLACES = {
-    # 训练流：周末优先回精力。步行街扭蛋会**清空精力**，第二天就没法训练，所以挪到最后。
-    "训练流": ["公园", "步行街"],
+    # 训练流：周末目标是把零用钱换成「有队友加成的黄色道具」，
+    # 步行街 → 游戏厅，都没有可买的才回公园补精力（2026-10-26 用户口径）。
+    # 注意 允许进步行街 / 允许进游戏厅 仍是显式开关，没开就退化成公园。
+    "训练流": ["步行街", "游戏厅", "公园"],
     "扭蛋流": ["步行街", "公园"],
-    "商店流": ["餐厅", "公园"],
+    "商店流": ["商店", "公园"],
     # 游戏厅只在「强化」里解锁了「可跳过已三星小游戏」之后才有意义，
     # 需要配置里显式打开「允许进游戏厅」；没三星的游戏仍需要真人打。
     "小游戏流": ["游戏厅", "公园"],
@@ -60,9 +63,10 @@ class TrainingTask(BaseGirlsTask):
             "休息体力阈值": 40,
             "技能标签优先": ["得分手"],
             "比赛日处理": "自动（先跳过，跳不了就进比赛加速）",
-            "体力低于多少改休息": 30,
-            "周末先看商店": True,
+            "购买策略": "只买器材手册+",
+            "周末先看商店": False,
             "周末野餐阈值": 60,
+            "周末第一天优先资源点": True,
             "单局最大操作数": 400,
             "操作间隔(秒)": 0.3,
             "快进重复间隔(秒)": 1.0,
@@ -71,18 +75,21 @@ class TrainingTask(BaseGirlsTask):
             "流派": {"type": "drop_down", "options": list(STYLE_PLACES.keys())},
             "餐厅选项": {"type": "drop_down", "options": ["当服务员", "桌游GM"]},
             "公园选项": {"type": "drop_down", "options": ["野餐", "划船", "散步"]},
+            "购买策略": {"type": "drop_down", "options": ["只买器材手册+", "买最贵", "不买"]},
             "比赛日处理": {
                 "type": "drop_down",
                 "options": ["自动（先跳过，跳不了就进比赛加速）", "总是跳过", "总是进比赛（外部战斗脚本）"],
             },
         })
         self.config_description.update({
-            "训练科目优先级": "同分时的先后顺序；选科目实际按 队友数+装备数 > 满经验暴击 > 推荐属性",
-            "推荐属性": "队长的两项推荐属性（面板上的绿标），会额外加分",
-            "失败率上限(%)": "当前科目失败率高于这个值就换科目，全部超限才休息",
+            "训练科目优先级": "同分时的先后顺序；按 docs/score-model 的权重算总分：队友1 / 道具1.1 / 经理1.2 / 黄框道具暴击1.2 / 经理暴击1.3 / 彩色道具暴击1.3",
+            "推荐属性": "队长的两项推荐属性（面板上的绿标），同分时优先",
+            "失败率上限(%)": "训练科目页失败率高于这个值就直接回主界面休息（失败率高说明体力撑不住了）",
             "餐厅选项": "当服务员 = 零用钱++；桌游GM = 零用钱+",
             "公园选项": "野餐 = 精力++；划船 = 属性+；散步 = 零用钱+",
-            "周末先看商店": "训练流周六先去商店看一眼有没有买得起的高级器材，再决定公园项目",
+            "购买策略": "只买器材手册+ = 只买能涨器材熟练度的（涨熟练度才会出满经验暴击）；买最贵 = 旧逻辑；不买 = 只逛不买",
+            "周末先看商店": "只有商店流才在周末先去商店；训练流的钱优先换步行街/游戏厅的黄色道具",
+            "周末第一天优先资源点": "训练流周六优先去步行街（其次游戏厅），周日再回公园补精力",
             "周末野餐阈值": "周日体力低于这个值才野餐；否则选划船（属性+）",
             "扭蛋优先属性": "步行街扭蛋三选一，按顺序找第一个存在的（会消耗所有精力）",
             "比赛日处理": "没打赢过的比赛不能跳过，只能进比赛后点左下角快进",
@@ -105,6 +112,8 @@ class TrainingTask(BaseGirlsTask):
         self._subject_cache = {"date": None, "best": None}
         # 商店：第一次遇到只存证，不买东西（等复盘确认界面）
         self._shop_seen = False
+        # 失败率超限时置 True：退出科目页后强制休息
+        self._force_rest = False
 
     # ---------- 策略 ----------
 
@@ -113,22 +122,33 @@ class TrainingTask(BaseGirlsTask):
         return self.config.get("流派", "训练流")
 
     def weekend_priority(self):
-        places = list(STYLE_PLACES.get(self.style, STYLE_PLACES["训练流"]))
+        """周末地图上实际要去的地点（顺序 = 优先级）。
+
+        「商店」是周末首页的按钮、不是地图上的地点，这里要过滤掉；
+        步行街 / 游戏厅仍是显式开关（没验证过内页，先别默认乱进）。
+        """
+        places = [p for p in STYLE_PLACES.get(self.style, STYLE_PLACES["训练流"])
+                  if p != "商店"]
         if not self.config.get("允许进游戏厅", False):
             places = [p for p in places if p != "游戏厅"]
         if not self.config.get("允许进步行街", False):
             places = [p for p in places if p != "步行街"]
-        return places or ["公园"]
+        # 公园永远兜底：周末总得花掉一天
+        if "公园" not in places:
+            places.append("公园")
+        return places
 
     def low_stamina(self, stamina_state):
         current = stamina_state.get("stamina")
-        limit = int(self.config.get("体力低于多少改休息", 30))
+        limit = int(self.config.get("休息体力阈值", 30))
         return current is not None and current < limit
 
     # ---------- 单拍决策 ----------
 
     def run(self):
         self._steps = 0
+        STOP.ensure_started()
+        self.log_info(f"紧急停止热键：{STOP.label or '（未注册成功，用 ok-script 自带 F9）'}")
         max_steps = int(self.config.get("单局最大操作数", 400))
         interval = float(self.config.get("操作间隔(秒)", 0.8))
         stuck_seconds = float(self.config.get("卡死判定(秒)", 10))
@@ -137,6 +157,10 @@ class TrainingTask(BaseGirlsTask):
         self._last_dump = 0.0
 
         while self._steps < max_steps:
+            if STOP.consume():
+                self.log_warning(f"按下紧急停止键（{STOP.label}）→ 立即中断，鼠标已释放",
+                                 notify=True)
+                return False
             if not self._enabled:
                 self.log_info("任务已停止")
                 return False
@@ -238,6 +262,23 @@ class TrainingTask(BaseGirlsTask):
 
     # ---------- handlers（顺序 = 优先级）----------
 
+    def handle_rest_confirm(self, texts):
+        """「休息需要一整天，可恢复体力，是否要休息？」确认框：点「确定」。
+
+        必须排在 handle_popup 之前。旧逻辑把「取消」当通用弹窗关闭词，
+        结果点了休息→确认框→点取消→再点休息，永远休息不了（实训 2026-10-26）。
+        """
+        if self.match_text(texts, Defs.REST_CONFIRM_TEXTS) is None:
+            return False
+        target = next((t for t in texts if t.name.strip() == "确定"), None)
+        if target is None:
+            target = next((t for t in texts if t.name.strip() == "休息"), None)
+        if target is not None:
+            self.click_box(target, after_sleep=0.9)
+            self.log_info("休息确认：确定")
+            return True
+        return False
+
     def handle_popup(self, texts):
         """公告 / 领奖 / 月卡 / 提示 / 「点击屏幕继续」：先关掉，否则什么都点不动。
 
@@ -248,11 +289,19 @@ class TrainingTask(BaseGirlsTask):
             self.click(int(self.width * 0.5), int(self.height * 0.4), after_sleep=0.35)
             self.log_info("弹窗：点击屏幕继续")
             return True
-        target = self.match_text(texts, ("今日不再提示", "关闭", "取消"))
+        target = self.match_text(texts, ("今日不再提示", "关闭"))
         if target:
             self.click_box(target, after_sleep=0.35)
             self.log_info(f"关闭弹窗「{target.name}」")
             return True
+        # 「取消」只在**没有确定按钮**的纯提示框里点；有确定按钮的确认框
+        # 交给具体 handler（休息/购买），否则会把用户想做的操作取消掉。
+        if self.match_text(texts, "确定") is None:
+            cancel = next((t for t in texts if t.name.strip() == "取消"), None)
+            if cancel is not None:
+                self.click_box(cancel, after_sleep=0.35)
+                self.log_info("关闭弹窗「取消」")
+                return True
         # 抽卡/活动横幅：只有「立即前往」和右上角一个 X，没有「关闭」文字。
         # 不处理的话兜底会点屏幕中央，正好点进抽卡页（实训 2026-10-26）。
         if self.match_text(texts, "立即前往") is not None:
@@ -456,15 +505,17 @@ class TrainingTask(BaseGirlsTask):
         return self._weekend
 
     def handle_shop(self, texts):
-        """商店：买得起的里面优先「器材手册+」，否则买最贵的，买完退出。
+        """商店：按「购买策略」买，买完退出。
 
         实机界面（2026-10-26）：
         - 左侧商品卡：名称 + 剩余数量 + 价格（100 / 60 / 45）；
         - 右侧是选中商品的详情和**黄色购买条**（价格就在条上）；
         - 右上角 X 关闭；顶栏金币是体力条右边那个独立数字。
 
-        训练流只看不买是浪费：器材熟练度直接关系到满经验暴击，
-        所以有钱就买，没钱就退出，绝不允许把金币买成负数。
+        用户口径（2026-10-26）：「有钱就买」是错的 —— 训练流的钱要优先换
+        步行街/游戏厅里**有队友加成的黄色道具**，商店只买能涨器材熟练度的
+        「器材手册+」（熟练度满才会出满经验暴击）。所以默认策略是「只买器材手册+」，
+        买不到就空手退出，把零用钱留给周末。
         """
         # 周末首页也有「商店」两个字，但同时有「出行」，那是按钮不是商店页
         if self.match_text(texts, "出行") is not None:
@@ -474,18 +525,34 @@ class TrainingTask(BaseGirlsTask):
         if self.match_text(texts, ("上新时间", "剩余", "能力详情")) is None:
             return False
 
+        policy = self.config.get("购买策略", "只买器材手册+")
         money = self.read_money(texts)
         items = self.read_shop_items(texts)
         self.log_info("商店：" + "、".join(f"{i['name']}({i['price']})" for i in items)
-                      + f"｜零用钱 {money}")
+                      + f"｜零用钱 {money}｜策略 {policy}")
+
+        if policy == "不买":
+            self.log_info("商店：策略是只逛不买，退出")
+            self.close_shop(texts)
+            return True
+
         affordable = [i for i in items if money is not None and i["price"] <= money]
         if not affordable:
             self.log_info("商店：没有买得起的商品，退出")
             self.close_shop(texts)
             return True
 
-        pick = max(affordable, key=lambda i: (
-            1 if "器材手册" in i["name"] else 0, i["price"]))
+        if policy == "只买器材手册+":
+            pool = [i for i in affordable if "器材手册" in i["name"]]
+            if not pool:
+                self.log_info("商店：没有器材手册，钱留给周末的黄色道具，退出")
+                self.close_shop(texts)
+                return True
+            pick = max(pool, key=lambda i: i["price"])
+        else:
+            pick = max(affordable, key=lambda i: (
+                1 if "器材手册" in i["name"] else 0, i["price"]))
+
         self.click(pick["x"], pick["y"], after_sleep=0.6)
         # 右侧黄色购买条（实机相对位置 0.79, 0.84）
         self.click(int(self.width * 0.79), int(self.height * 0.84), after_sleep=0.8)
@@ -570,7 +637,9 @@ class TrainingTask(BaseGirlsTask):
     def handle_street(self, texts):
         """步行街扭蛋：三选一（会消耗所有精力），选完按确定。
 
-        训练流默认**不进步行街**（会把精力清空，第二天没法训练），此时直接退出。
+        用户口径（2026-10-26）：**低精力时**抽到「清空精力」的高品质扭蛋是赚的，
+        但高精力去抽就是纯亏（第二天没法训练）。所以训练流加一道体力闸：
+        体力 ≥ 休息阈值时直接退出，体力低时才抽。
         注意：左上角那个「返回」会打开训练计划日历，要用**右上角**的返回箭头。
         """
         if self.match_text(texts, Defs.STREET_TITLE) is None:
@@ -579,6 +648,14 @@ class TrainingTask(BaseGirlsTask):
             self.log_info("步行街扭蛋：未开启，退出")
             self.exit_page()
             return True
+        if self.style == "训练流":
+            stamina = self.top_bar().get("stamina")
+            limit = int(self.config.get("休息体力阈值", 40))
+            if stamina is not None and stamina >= limit:
+                self.log_info(f"步行街：体力 {stamina} ≥ {limit}，抽了会清空精力，不抽，退出")
+                self.exit_page()
+                return True
+            self.log_info(f"步行街：体力 {stamina} < {limit}，扭蛋清空精力反而是赚的，抽")
         names = []
         for attr in self.config.get("扭蛋优先属性", list(Defs.GACHA_OPTIONS)):
             names.append(f"{attr}专注")
@@ -626,7 +703,8 @@ class TrainingTask(BaseGirlsTask):
         if self.match_text(texts, "出行") is None:
             return False
 
-        if self.style == "训练流" and self.config.get("周末先看商店", True):
+        # 商店只有「商店流」才进（用户 2026-10-26：训练流的钱优先换步行街/游戏厅的黄色道具）
+        if self.style == "商店流":
             st = self.weekend_state()
             day = st["date"][1] if st["date"] else None
             week = st["date"][0] if st["date"] else None
@@ -639,7 +717,7 @@ class TrainingTask(BaseGirlsTask):
                 st["shop_checked"] = True
                 self._shop_week = week
                 self.click_box(shop, after_sleep=0.9)
-                self.log_info("周末：先看一眼商店有没有买得起的高级器材")
+                self.log_info("周末：商店流，先去商店")
                 return True
 
         self.click_text("出行", after_sleep=0.6)
@@ -647,13 +725,21 @@ class TrainingTask(BaseGirlsTask):
         return True
 
     def handle_weekend(self, texts):
-        """周末地图：训练流固定去公园（项目由 handle_park 按体力决定）。"""
+        """周末地图：按流派顺序去地点。
+
+        训练流（用户 2026-10-26）：周六先去步行街，其次游戏厅，
+        找「有队友加成的黄色道具」；周日再回公园补精力。
+        `允许进步行街 / 允许进游戏厅` 没开时这两个地点会被过滤掉，退化成公园。
+        """
         if not self.match_text(texts, Defs.WEEKEND_PLACES):
             return False
-        if self.style == "训练流":
-            places = ["公园"]
-        else:
-            places = self.weekend_priority()
+        places = self.weekend_priority()
+        if self.style == "训练流" and self.config.get("周末第一天优先资源点", True):
+            st = self.weekend_state()
+            day = st["date"][1] if st["date"] else None
+            if day == "日":
+                places = ["公园"]
+            self.log_info(f"周末{'日' if day == '日' else '六'}：顺序 {places}")
         for place in places:
             target = self.match_text(texts, place)
             if target:
@@ -703,7 +789,13 @@ class TrainingTask(BaseGirlsTask):
             self.info_set("当前失败率", f"{fail}%")
         limit = int(self.config.get("失败率上限(%)", 50))
         if fail is not None and fail > limit:
-            self.log_warning(f"失败率 {fail}% 超过上限 {limit}%（仍继续，休息需要回主界面）")
+            if self.config.get("失败率超限改休息", True):
+                self._force_rest = True
+                self.log_warning(f"失败率 {fail}% > {limit}% → 退出科目页，回主界面休息")
+                # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
+                self.click(int(self.width * 0.958), int(self.height * 0.060), after_sleep=0.8)
+                return True
+            self.log_warning(f"失败率 {fail}% 超过上限 {limit}%（配置为不休息，继续）")
 
         priority = list(self.config.get("训练科目优先级", list(Defs.TRAINING_SUBJECTS)))
         recommended = set(self.config.get("推荐属性", []))
@@ -727,16 +819,12 @@ class TrainingTask(BaseGirlsTask):
         current = self.current_subject(texts)
         results = {}
         if current in boxes:
-            names = self.scene_names(texts)
-            equip, full = self.read_equipment(texts)
-            crit = self.has_crit_border(texts)
-            results[current] = {
-                "mates": max(0, len(names) - 1), "names": names,
-                "equip": equip, "full": full, "crit": crit,
-            }
+            results[current] = self.analyze_preview(texts)
+            r = results[current]
             self.log_info(
-                f"当前已选「{current}」：队友 {results[current]['mates']}"
-                f"｜装备 {equip}｜满经验 {full}｜彩虹 {int(crit)}")
+                f"当前已选「{current}」：队友 {r['mates']}｜经理 {r['manager']}"
+                f"｜装备 {r['equip']}｜满经验 {r['full']}｜金框 {r['gold']}"
+                f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}")
 
         last_probed = None
         for name in with_team:
@@ -749,21 +837,27 @@ class TrainingTask(BaseGirlsTask):
             last_probed = name
             r = results[name]
             self.log_info(
-                f"探测「{name}」：队友 {r['mates']}｜装备 {r['equip']}"
-                f"｜满经验 {r['full']}｜彩虹 {int(r['crit'])}")
+                f"探测「{name}」：队友 {r['mates']}｜经理 {r['manager']}"
+                f"｜装备 {r['equip']}｜满经验 {r['full']}｜金框 {r['gold']}"
+                f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}")
 
         def rank(name):
+            """按用户 2026-10-26 给的权重算总分（不是拍脑袋的相对分）。
+
+            队友 1.0 / 道具 1.1 / 经理 1.2 /
+            黄框道具暴击 1.2 / 经理暴击 1.3 / 彩色道具暴击 1.3。
+            同分时：带队长推荐属性的优先，再按配置里的科目顺序。
+            """
             r = results.get(name)
-            # 队友数 + 装备数 是主项；满经验（MAX）是暴击，额外 +2；
-            # 彩虹边框只作 +1 的辅助（颜色判据偶尔会被科目图标干扰）。
-            base = (r["mates"] + r["equip"] + 2 * r["full"] + int(r["crit"])) if r else 0
-            return (base, 1 if name in recommended else 0, -priority.index(name))
+            return (self.subject_score(r), 1 if name in recommended else 0,
+                    -priority.index(name))
 
         name = max(boxes, key=rank)
-        r = results.get(name, {"mates": 0, "equip": 0, "full": 0, "crit": False})
+        r = results.get(name) or self.empty_preview()
         self.log_info(
-            f"选科目「{name}」（队友 {r['mates']}｜装备 {r['equip']}"
-            f"｜满经验 {r['full']}｜{'推荐' if name in recommended else '非推荐'}）")
+            f"选科目「{name}」（队友 {r['mates']}｜经理 {r['manager']}｜装备 {r['equip']}"
+            f"｜满经验 {r['full']}｜金框 {r['gold']}｜得分 {self.subject_score(r):.2f}"
+            f"｜{'推荐' if name in recommended else '非推荐'}）")
 
         # 若最佳科目不是当前选中的那个，先点一下选中（点两下会直接开练，
         # 所以统一只点一下，再按右上角「决定」）
@@ -856,25 +950,81 @@ class TrainingTask(BaseGirlsTask):
         """点开一个科目，返回预览信息：队友数 / 装备数 / 满经验数 / 彩虹边框。"""
         self.click_box(box, after_sleep=0.55)
         texts = self._ocr_region()
-        names = self.scene_names(texts)
-        equip, full = self.read_equipment(texts)
+        self.log_debug(f"场上角色名：{self.scene_names(texts)}")
+        return self.analyze_preview(texts)
+
+    # ---------- 科目预览打分（用户 2026-10-26 给的权重）----------
+    # 队友 1.0 / 道具 1.1 / 经理 1.2 / 黄框道具暴击 1.2 /
+    # 经理暴击 1.3 / 彩色道具暴击 1.3
+    W_MATE = 1.0
+    W_EQUIP = 1.1
+    W_MANAGER = 1.2
+    W_GOLD_CRIT = 1.2
+    W_MANAGER_CRIT = 1.3
+    W_COLOR_CRIT = 1.3
+
+    @classmethod
+    def empty_preview(cls):
+        return {"names": [], "mates": 0, "manager": 0, "equip": 0, "full": 0,
+                "gold": 0, "crit": False, "color": 0, "manager_crit": 0}
+
+    @classmethod
+    def subject_score(cls, r):
+        """按权重算总分（不带任何相对化的"主项/辅助"拍脑袋系数）。"""
+        if not r:
+            return 0.0
+        return (r["mates"] * cls.W_MATE
+                + r["equip"] * cls.W_EQUIP
+                + r["manager"] * cls.W_MANAGER
+                + r["gold"] * cls.W_GOLD_CRIT
+                + r["manager_crit"] * cls.W_MANAGER_CRIT
+                + r["color"] * cls.W_COLOR_CRIT)
+
+    def analyze_preview(self, texts):
+        """读一帧科目预览，返回打分要用的全部字段。
+
+        - 队友 / 经理：场景里飘在角色头顶的名字（经理的名字牌就是「球队经理」，
+          会被当成队友名，必须单独扣出来）；
+        - 器材数 / 满经验：底部器材卡的经验条与 MAX 字样（已实测）；
+        - 金框：器材卡**边框**是金色品质（`count_gold_cards`）；
+        - 彩色（暴击）：满经验 MAX 卡片 —— 结算会出「暴击训练!」，已验证；
+        - 经理暴击：经理在场且这次训练确实出暴击（有满经验或彩虹边框）。
+        """
+        scene = self.read_scene(texts)
+        equip, full, gold = self.read_equipment(texts)
         crit = self.has_crit_border(texts)
-        self.log_debug(f"场上角色名：{names}")
         return {
-            "mates": max(0, len(names) - 1),      # 减去队长（队长总在场）
-            "names": names,
+            "names": scene["names"],
+            "mates": scene["mates"],
+            "manager": scene["manager"],
             "equip": equip,
             "full": full,
+            "gold": gold,
             "crit": crit,
+            "color": full,
+            "manager_crit": 1 if (scene["manager"] and (full > 0 or crit)) else 0,
+        }
+
+    def read_scene(self, texts):
+        """场上角色：队友数（扣掉队长和经理）+ 经理在不在。"""
+        names = self.scene_names(texts)
+        manager = 1 if any(any(m in n for m in Defs.MANAGER_TEXTS) for n in names) else 0
+        mates = [n for n in names if not any(m in n for m in Defs.MANAGER_TEXTS)]
+        return {
+            "names": names,
+            "manager": manager,
+            # 队长总在场，所以队友数 = 场上名字 - 队长（- 经理已经被扣掉）
+            "mates": max(0, len(mates) - 1),
         }
 
     def read_equipment(self, texts):
-        """数预览界面底部的器材卡，并判断哪些已经满经验。
+        """数预览界面底部的器材卡，并判断哪些已经满经验、哪些是金框。
 
         两种形态：
         - 未满：卡片底部是黑色胶囊经验条，青色部分是进度；
         - 已满：经验条变成「MAX」字样（实测 2026-10-26），且卡片带彩虹边框。
         所以 装备数 = 经验条个数 + MAX 个数；满经验数 = MAX 个数 + 全满的经验条。
+        金框另算：数卡片外框的金色占比（紫色/蓝色品质不算）。
         """
         frame = self.frame
         equip = full = 0
@@ -907,7 +1057,51 @@ class TrainingTask(BaseGirlsTask):
         if max_count:
             equip += max_count
             full += max_count
-        return equip, full
+        return equip, full, self.count_gold_cards()
+
+    def count_gold_cards(self):
+        """数预览区里「金框」器材卡的张数。
+
+        实机（docs/shots/2026-10-26-subject-crit.png）：金品质器材卡是亮黄橙外框，
+        色相落在 HSV H 12~45、S>120、V>180；紫牌/蓝牌不在此区间。
+        做法：直接在 equip_cards 区域取「金色像素」，闭运算补断口，
+        再按卡片尺寸（宽高 0.05~0.20 屏宽）和长宽比 0.6~1.6 过滤。
+
+        先试过「高饱和色块」整体找卡片，但卡片会和天空/球场连成一片
+        （312x168，长宽比 1.86），过滤不掉，所以改成按颜色直取。
+        日志会打印每个候选框，实机跑一次就能拿来校准。
+        """
+        frame = self.frame
+        if frame is None:
+            return 0
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = Defs.region("equip_cards")
+        roi = frame[int(h * y1):int(h * y2), int(w * x1):int(w * x2)]
+        if roi.size == 0:
+            return 0
+
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        hue, sat, val = cv2.split(hsv)
+        gold = ((hue >= 12) & (hue <= 45) & (sat > 120) & (val > 180)).astype(np.uint8)
+        gold = cv2.morphologyEx(gold, cv2.MORPH_CLOSE,
+                                cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)))
+        n, _lab, stats, _cent = cv2.connectedComponentsWithStats(gold, 8)
+
+        min_w, max_w = int(w * 0.05), int(w * 0.20)
+        count = 0
+        for i in range(1, n):
+            x, y, ww, hh, area = stats[i]
+            if area < 800:
+                continue
+            if not (min_w <= ww <= max_w and min_w <= hh <= max_w):
+                continue
+            if not (0.6 <= ww / max(hh, 1) <= 1.6):
+                continue
+            if area < ww * hh * 0.30:
+                continue
+            count += 1
+            self.log_debug(f"金框器材 @({x + ww // 2},{y + hh // 2}) {ww}x{hh} 实心 {area / (ww * hh):.2f}")
+        return count
 
     def has_crit_border(self, texts=None):
         """选中的科目大按钮有没有彩虹边框（= 有满经验器材，训练会暴击）。
@@ -1175,13 +1369,18 @@ class TrainingTask(BaseGirlsTask):
         cur = state.get("stamina")
         limit = int(self.config.get("休息体力阈值", 40))
         action = self.texts_in_region(texts, "main_action")
-        if cur is not None and cur < limit:
+        force_rest = self._force_rest
+        if force_rest:
+            self._force_rest = False
+            self.log_info("失败率过高，强制休息")
+        if force_rest or (cur is not None and cur < limit):
             target = self.match_text(action, "休息")
             if target is not None:
                 self.click_box(target, after_sleep=0.6)
             else:
                 self.flow_click("day_rest", after_sleep=0.6)
-            self.log_info(f"体力 {cur} 偏低，休息")
+            if not force_rest:
+                self.log_info(f"体力 {cur} 偏低，休息")
         else:
             target = self.match_text(action, "训练")
             if target is not None:
@@ -1577,6 +1776,7 @@ class TrainingTask(BaseGirlsTask):
     #    组队/器材/确认编队之后，否则会把它们的「下一步」抢走（实训 2026-10-26）；
     # 5. 剧情页判据最弱，永远放最后兜底。
     HANDLERS = (
+        handle_rest_confirm,
         handle_popup,
         handle_draw,
         handle_in_match,

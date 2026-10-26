@@ -108,6 +108,7 @@ class DryRunTask(TrainingTask):
         self._speed_week = None
         self._speed_locked = False
         self._subject_cache = {"date": None, "best": None}
+        self._force_rest = False
 
     # ---------- 坐标换算 ----------
     def width_of_screen(self, ratio):
