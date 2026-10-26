@@ -241,39 +241,44 @@ class SubjectRanking(unittest.TestCase):
                            FakeTask.subject_rank(2.0, False, None, 100))
 
 
-class MatchIntroWait(unittest.TestCase):
-    """比赛开场不可跳过（用户 2026-10-26）：到跳球前只等，不点。"""
+class MatchIntroFastForward(unittest.TestCase):
+    """开场（跳球前）左下角只有一个 ▶▶：也要点，别等（用户 2026-10-26 现场截图）。"""
 
     LINEUP = [box(760, 300, "都立北空之丘", 300, 60),
               box(1000, 300, "崇德馆高等学校", 300, 60),
               box(700, 400, "真崎", 80, 40)]
 
-    def test_waits_without_clicking(self):
+    def test_clicks_fast_forward_during_intro(self):
         task = FakeTask(list(self.LINEUP))
         task._match_intro_at = time.monotonic()
-        self.assertTrue(task.handle_match_wait(task._texts))
-        self.assertEqual(task.actions, [])
-        # 同时要给 run() 打「别判卡死」的标，否则 5 秒看门狗会点中央
-        self.assertGreater(task._no_stall_until, time.monotonic())
+        self.assertTrue(task.handle_in_match(task._texts))
+        self.assertEqual(task.actions, [("click", 119, 1002)])
 
-    def test_hands_over_to_in_match_when_hud_appears(self):
+    def test_switches_manual_to_auto(self):
+        texts = [box(40, 950, "手动", 80, 40)]
+        task = FakeTask(texts)
+        task._match_intro_at = time.monotonic()
+        self.assertTrue(task.handle_in_match(texts))
+        self.assertEqual(task.actions[0][0], "click_box")
+
+    def test_auto_closes_intro_window(self):
         texts = [box(40, 950, "自动", 80, 40)]
         task = FakeTask(texts)
         task._match_intro_at = time.monotonic()
-        self.assertFalse(task.handle_match_wait(texts))
+        self.assertTrue(task.handle_in_match(texts))
         self.assertEqual(task._match_intro_at, 0.0)
 
-    def test_expires_after_90s(self):
-        task = FakeTask([])
-        task._match_intro_at = time.monotonic() - 91
-        self.assertFalse(task.handle_match_wait([]))
+    def test_no_click_without_intro_or_hud(self):
+        task = FakeTask(list(self.LINEUP))
+        self.assertFalse(task.handle_in_match(task._texts))
+        self.assertEqual(task.actions, [])
 
-    def test_prepare_page_is_not_blocked(self):
+    def test_prepare_page_is_not_stolen(self):
         texts = [box(1100, 950, "前往比赛", 200, 50)]
         task = FakeTask(texts)
         task._match_intro_at = time.monotonic()
-        self.assertFalse(task.handle_match_wait(texts))
-        self.assertNotEqual(task._match_intro_at, 0.0)
+        self.assertFalse(task.handle_in_match(texts))
+        self.assertEqual(task.actions, [])
 
     def test_nba_wipe_does_not_click(self):
         texts = [box(800, 400, "NBA", 200, 100)]

@@ -64,19 +64,10 @@ class TrainingFlowMixin:
             else:
                 stuck, last_sig = 0, sig
 
-            # 设计上就该「不点、只等」的阶段（比赛开场动画等）由 handler 打标：
-            # 窗口内不判卡死、不存证、也不点中央，否则等 30 秒会触发 10 次空点。
-            suppress_stall = time.monotonic() < getattr(self, "_no_stall_until", 0)
-            if suppress_stall:
-                self._no_change = 0
-                self._sig_after_click = None
-                self._stuck_rounds = 0
-                stuck, last_sig = 0, None
-
             # ---- 5 秒没有任何点击、界面文字也没变 → 卡住，存证后点中央继续 ----
             # 只看「签名没变」会误判：剧情 ▼ 连点 5 秒时文字确实不变，但点击在推进。
             # 所以两个条件都要满足：既没有点击事件，界面也没变。
-            if not suppress_stall and self._stalled(sig, last_sig, stuck_seconds):
+            if self._stalled(sig, last_sig, stuck_seconds):
                 self._stuck_rounds += 1
                 self.dump_debug(texts, f"stall{int(stuck_seconds)}s")
                 self.log_warning(
@@ -92,7 +83,7 @@ class TrainingFlowMixin:
 
             # ---- 点 3 次没变化 → 立刻进入 debug（用户 2026-10-26 口径）----
             # 不等到 10 秒卡死判定，也不让 handler 一直"命中但无效"地空转。
-            if not suppress_stall and self._sig_after_click is not None:
+            if self._sig_after_click is not None:
                 if sig == self._sig_after_click:
                     self._no_change += 1
                 else:
@@ -100,7 +91,7 @@ class TrainingFlowMixin:
                     self._sig_after_click = None
                     self._stuck_rounds = 0
 
-            if not suppress_stall and self._no_change >= 3:
+            if self._no_change >= 3:
                 self._stuck_rounds += 1
                 self.dump_debug(texts, f"nochange{self._no_change}")
                 self.log_warning(
@@ -118,7 +109,7 @@ class TrainingFlowMixin:
             # 否则会出现「handler 一直命中、但点了完全没反应」的死循环：
             # 例如剧情页的「跳过」是灰的，handle_dialog_continue 每拍都返回 True，
             # 于是连点 70+ 次、把 400 步全耗光（实训 2026-10-26）。
-            if not suppress_stall and stuck >= stuck_limit:
+            if stuck >= stuck_limit:
                 self.dump_unknown(texts, "stuck")
                 self.log_warning(f"连续 {stuck + 1} 拍没变化 → 强制点一下继续")
                 self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=interval)

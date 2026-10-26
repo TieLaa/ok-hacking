@@ -21,7 +21,6 @@ HANDLERS = (
     PopupHandlers.handle_draw,
     MatchHandlers.handle_match_intro,
     MatchHandlers.handle_in_match,
-    MatchHandlers.handle_match_wait,
     TrainingHandlers.handle_training_result,
     MatchHandlers.handle_match_result,
     MatchHandlers.handle_skill_select,

@@ -124,8 +124,6 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self._last_click_at = 0.0
         # 进入不可跳过的比赛开场（点「前往比赛」）的时刻；0 = 不在开场
         self._match_intro_at = 0.0
-        # 到这一刻之前不判「卡死」：设计上就该只等的阶段（比赛开场）由 handler 打标
-        self._no_stall_until = 0.0
 
     # 顺序见 training/handlers/__init__.py
     HANDLERS = HANDLERS

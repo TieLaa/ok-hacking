@@ -38,58 +38,38 @@ class MatchHandlers:
         self.sleep(0.4)
         return True
 
-    def handle_match_wait(self, texts):
-        """不可跳过的比赛开场：从点「前往比赛」到跳球前，点哪里都没用，只能等。
-
-        用户 2026-10-26：最终比赛的 intro 阶段不能快速跳过，跳球之后才开始正常快进。
-        实测 15:55:53→15:56:22 这 29 秒里，被事件/剧情/兜底三个 handler 乱点了 20+ 次，
-        全都没推进任何东西。这里用 `_match_intro_at` 标记开场窗口，窗口内不产生点击，
-        等 HUD（自动/手动）出现就交回 `handle_in_match` 点快进。
-        """
-        started = getattr(self, "_match_intro_at", 0.0)
-        if not started:
-            return False
-        if time.monotonic() - started > 90:
-            self._match_intro_at = 0.0
-            return False
-        # 赛前准备页还没点掉：交给 handle_prepare 继续点
-        if self.match_text(texts, ("跳过比赛", "前往比赛")) is not None:
-            return False
-        # HUD 出现 = 跳球结束，交回 handle_in_match
-        if self.match_text(self.texts_in_region(texts, "match_hud"),
-                           ("自动", "手动")) is not None:
-            self._match_intro_at = 0.0
-            return False
-        # 已经到结算/赛程页：开场窗口结束
-        if self.match_text(texts, ("胜利", "失败", "MVP")) is not None:
-            self._match_intro_at = 0.0
-            return False
-        # 告诉 run()：接下来是「设计上不点」的等待，别把它当卡死
-        self._no_stall_until = time.monotonic() + 5
-        self.sleep(0.4)
-        return True
-
     def handle_in_match(self, texts):
         """比赛内：先把手动切成自动，再连点「快进」。
 
-        实机验证：左下角三个控件 —— 快进(图标) / 1x(倍率) / 手动·自动(文字)。
-        切到自动后整场不需要人，连点快进约 12 次就能打完。
+        开场阶段（跳球前）左下角**只有一个 ▶▶ 快进按钮**，没有「自动/手动」，
+        旧代码因为找不到这两个词直接 return False，整段开场一次都不点
+        （用户 2026-10-26 现场截图确认）。现在用 `_match_intro_at` 标记这个窗口，
+        窗口内也点快进；跳球后 HUD 齐全，再走「手动 → 自动」的正常流程。
         """
         hud = self.texts_in_region(texts, "match_hud")
-        if not hud:
+        intro = bool(self._match_intro_at) and time.monotonic() - self._match_intro_at < 90
+        if not hud and not intro:
             return False
-        # HUD 出现说明跳球结束，开场等待窗口可以关掉了
-        self._match_intro_at = 0.0
+        # 赛前准备页还没点掉：交给 handle_prepare 继续点「跳过/前往比赛」
+        if self.match_text(texts, ("跳过比赛", "前往比赛")) is not None:
+            return False
+
+        auto = self.match_text(hud, "自动")
         manual = self.match_text(hud, "手动")
+        if auto is not None or manual is not None:
+            self._match_intro_at = 0.0          # 跳球完成，开场窗口关闭
         if manual is not None:
             self.click_box(manual, after_sleep=0.35)
             self.log_info("比赛：手动 → 自动")
             return True
-        if self.match_text(hud, "自动") is None:
+        if auto is None and not intro:
             return False
+
         x = int(self.width_of_screen(Defs.MATCH_FAST_FORWARD[0]))
         y = int(self.height_of_screen(Defs.MATCH_FAST_FORWARD[1]))
         self.click(x, y, after_sleep=0.6)
+        if auto is None:
+            self.log_debug("比赛开场：点左下角 ▶▶ 快进")
         return True
 
     def handle_match_result(self, texts):
