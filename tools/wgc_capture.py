@@ -1,9 +1,15 @@
 """Standalone WGC frame grab for a window, reusing ok-script's capture implementation.
 
-Usage: python wgc_capture.py <out.png> [title_keyword]
+Usage: python wgc_capture.py <out.jpg|out.png> [title_keyword] [quality]
 Works from a non-elevated process even when the target window is occluded.
+
+输出格式按扩展名决定：.jpg/.jpeg 用 JPEG（默认 q95 + 4:4:4），其他走 cv2 默认。
+截图给 agent 读时优先用 .jpg —— 1080p PNG 约 2.4 MB、q95 约 0.48 MB，
+读图耗时与体积成正比（每 MB 约 3.5 秒）。用 q95+4:4:4 而非 q85：项目有按像素
+取色的判断逻辑，色度抽样会把颜色糊到相邻像素（实测最大色差 4:2:0=94、4:4:4=20）。
 """
 import ctypes
+import os
 import sys
 import threading
 import time
@@ -14,6 +20,25 @@ import win32gui
 user32 = ctypes.windll.user32
 user32.GetClientRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long * 4)]
 user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # PER_MONITOR_AWARE_V2
+
+JPEG_QUALITY = 95
+
+
+def jpeg_params(quality=JPEG_QUALITY):
+    """JPEG 编码参数：给定质量 + 4:4:4 色度不降采样（旧版 OpenCV 自动降级）。"""
+    params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+    if hasattr(cv2, "IMWRITE_JPEG_SAMPLING_FACTOR_444"):
+        params += [cv2.IMWRITE_JPEG_SAMPLING_FACTOR,
+                   cv2.IMWRITE_JPEG_SAMPLING_FACTOR_444]
+    return params
+
+
+def imwrite_auto(path, img, quality=JPEG_QUALITY):
+    """按扩展名选编码器：.jpg/.jpeg 用 JPEG(q95+4:4:4)，其余交给 cv2 默认（png 等）。"""
+    if os.path.splitext(path)[1].lower() in (".jpg", ".jpeg"):
+        return cv2.imwrite(path, img, jpeg_params(quality))
+    return cv2.imwrite(path, img)
+
 
 
 def find_hwnd(keyword, hwnd_class="UnityWndClass"):
@@ -77,7 +102,7 @@ class MockWindow:
         return x, y
 
 
-def grab(out_path, keyword="篮球少女：飞跃巅峰"):
+def grab(out_path, keyword="篮球少女：飞跃巅峰", quality=JPEG_QUALITY):
     from ok.device.capture_methods.windows_graphics import WindowsGraphicsCaptureMethod
 
     hwnd = find_hwnd(keyword)
@@ -94,10 +119,15 @@ def grab(out_path, keyword="篮球少女：飞跃巅峰"):
     if frame is None:
         cap.close()
         raise SystemExit("no frame captured")
-    cv2.imwrite(out_path, frame)
+    imwrite_auto(out_path, frame, quality)
     print(f"hwnd={hwnd} frame={frame.shape[1]}x{frame.shape[0]} saved={out_path}")
     cap.close()
 
 
 if __name__ == "__main__":
-    grab(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "篮球少女：飞跃巅峰")
+    if len(sys.argv) < 2:
+        raise SystemExit("用法: wgc_capture.py <out.jpg|out.png> [title_keyword] [quality]")
+    out = sys.argv[1]
+    kw = sys.argv[2] if len(sys.argv) > 2 else "篮球少女：飞跃巅峰"
+    q = int(sys.argv[3]) if len(sys.argv) > 3 else JPEG_QUALITY
+    grab(out, kw, q)

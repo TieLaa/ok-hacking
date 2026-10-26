@@ -44,6 +44,17 @@ STYLE_PLACES = {
 }
 
 
+# 存证/调试帧的 JPEG 参数：q95 + 4:4:4 色度不降采样。
+# 为什么不用 PNG：同一帧 PNG 约 2.4 MB，q95 约 0.36 MB，读图耗时与体积成正比。
+# 为什么是 4:4:4：实测单像素最大色差从 94 降到 20（区域均值都在 1 以内），
+# 项目有按像素取色复核品质/互动的需求，色度抽样会把颜色糊到相邻像素上。
+# 旧版 OpenCV 没有 SAMPLING_FACTOR 常量时自动降级为默认 4:2:0。
+JPEG_PARAMS = [cv2.IMWRITE_JPEG_QUALITY, 95]
+if hasattr(cv2, "IMWRITE_JPEG_SAMPLING_FACTOR_444"):
+    JPEG_PARAMS += [cv2.IMWRITE_JPEG_SAMPLING_FACTOR,
+                    cv2.IMWRITE_JPEG_SAMPLING_FACTOR_444]
+
+
 class TrainingTask(BaseGirlsTask):
 
     def __init__(self, *args, **kwargs):
@@ -287,7 +298,10 @@ class TrainingTask(BaseGirlsTask):
 
             frame = self.frame
             if frame is not None:
-                cv2.imwrite(os.path.join(folder, "frame.png"), frame)
+                # 存 JPEG 不存 PNG：同一帧 PNG 约 2.4 MB、JPEG 约 0.36 MB，读图更快。
+                # JPEG_PARAMS 是 q95 + 4:4:4（见文件顶部），保证颜色可复核。
+                # 注意：运行时取色读的是内存里的 self.frame，与这里存盘格式无关。
+                cv2.imwrite(os.path.join(folder, "frame.jpg"), frame, JPEG_PARAMS)
             with open(os.path.join(folder, "ocr.txt"), "w", encoding="utf-8") as f:
                 f.write("\n".join(
                     f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
@@ -315,11 +329,12 @@ class TrainingTask(BaseGirlsTask):
             name = f"{time.strftime('%m%d-%H%M%S')}_{tag}_s{self._steps}"
             frame = self.frame
             if frame is not None:
-                cv2.imwrite(os.path.join(folder, name + ".png"), frame)
+                # 同 dump_debug：q95 + 4:4:4，颜色可复核。
+                cv2.imwrite(os.path.join(folder, name + ".jpg"), frame, JPEG_PARAMS)
             with open(os.path.join(folder, name + ".txt"), "w", encoding="utf-8") as f:
                 f.write("\n".join(
                     f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
-            self.log_info(f"存证 logs/unknown/{name}.png")
+            self.log_info(f"存证 logs/unknown/{name}.jpg")
         except Exception as e:
             self.log_debug(f"存证失败: {type(e).__name__}: {e}")
 
