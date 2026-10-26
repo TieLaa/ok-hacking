@@ -399,8 +399,20 @@ class TrainingHandlers:
         rates = [t for t in texts if Defs.PERCENT_RE.match(t.name.strip())]
         gains = [t for t in texts if Defs.GAIN_RE.match(t.name.strip())]
         if not rates:
-            self.log_warning("加强训练：认不出成功率，随便点左边")
-            self.click(int(self.width * 0.37), int(self.height * 0.48), after_sleep=0.35)
+            # 认不出成功率时**不要盲点固定坐标**：0.37w / 0.48h 正好落在两张卡
+            # 中间的空白上，用户实测「点了两次中间才点中右边」（2026-10-26）。
+            # 卡片多半已经选中，直接点「确定」；没有确定再找黄色卡片框。
+            if self.click_text("确定", after_sleep=0.6):
+                self.log_info("加强训练：认不出成功率，直接点确定")
+                return True
+            buttons = sorted(self._yellow_buttons(), key=lambda b: b[0])
+            if buttons:
+                bx, by, bw, bh = buttons[0]
+                self.click(int(bx + bw / 2), int(by + bh / 2), after_sleep=0.35)
+                self.log_warning("加强训练：认不出成功率，点左侧卡片框")
+            else:
+                self.click(int(self.width * 0.25), int(self.height * 0.5), after_sleep=0.35)
+                self.log_warning("加强训练：认不出成功率和卡片框，点左侧")
             self.click_text("确定", after_sleep=0.6)
             return True
 
@@ -416,6 +428,9 @@ class TrainingHandlers:
         _, card, v, p = scored[0]
         self.log_info("加强训练：" + "  ".join(f"{pp}%/+{vv}={ee:.0f}" for ee, _, vv, pp in scored)
                       + f" → 选 {p}%/+{v}")
-        self.click(int(card.x + card.width / 2), int(self.height * 0.48), after_sleep=0.35)
+        # 点百分比文字的中心（y 也用它），不要用固定 0.48h —— 卡片高度不同，
+        # 固定 y 会落到卡片上沿或中间空白。
+        self.click(int(card.x + card.width / 2), int(card.y + card.height / 2),
+                   after_sleep=0.35)
         self.click_text("确定", after_sleep=0.6)
         return True

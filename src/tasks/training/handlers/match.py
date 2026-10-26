@@ -21,6 +21,23 @@ from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 
 class MatchHandlers:
 
+    def handle_match_intro(self, texts):
+        """比赛开场动画（NBA / VS / 两队名）：点左下角「跳过」。
+
+        动画页几乎没有可识别文字，只剩 NBA / VS / 校名；story_arrow 连点 ▼
+        也能过，但每次要 2~3 拍，决赛前实测很慢（2026-10-26 用户口径：
+        左下角有跳过按钮）。
+        """
+        names = {t.name.strip() for t in texts}
+        if not (names & {"NBA", "VS"}):
+            return False
+        # 纯动画页：文字很少，避免在比赛结算/数据页误点
+        if len([t for t in texts if len(t.name.strip()) >= 2]) > 6:
+            return False
+        self.click(int(self.width * 0.07), int(self.height * 0.92), after_sleep=0.5)
+        self.log_info("比赛开场动画：点左下角跳过")
+        return True
+
     def handle_in_match(self, texts):
         """比赛内：先把手动切成自动，再连点「快进」。
 

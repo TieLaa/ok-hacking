@@ -19,6 +19,7 @@ HANDLERS = (
     PopupHandlers.handle_rest_confirm,
     PopupHandlers.handle_popup,
     PopupHandlers.handle_draw,
+    MatchHandlers.handle_match_intro,
     MatchHandlers.handle_in_match,
     TrainingHandlers.handle_training_result,
     MatchHandlers.handle_match_result,
