@@ -901,47 +901,128 @@ class TrainingTask(BaseGirlsTask):
         return any(p in s for p in Defs.GACHA_CLEAR_PHRASES)
 
     def handle_street(self, texts):
-        """步行街扭蛋：三选一（有的会清空精力），选完按确定。
+        """步行街扭蛋：三张卡里按「金/紫优先、有队友优先、数值更高优先」选一张，再点确定。
 
-        用户口径（2026-10-26）：「清空精力」的扭蛋**只有体力低的时候才抽** ——
-        低体力时反正也要靠休息回，用它换高品质属性是赚的；
-        体力高的时候去抽就纯亏（第二天没法训练）。
-        注意：不是「体力高就整条街都不进」，高体力照样可以抽不清空的扭蛋。
-        左上角那个「返回」会打开训练计划日历，要用**右上角**的返回箭头。
+        实机（2026-10-26）：
+        - 标题「请选择1个扭蛋（i）」；
+        - 三张竖卡：卡头是品质色条（紫/蓝/金），下面是效果说明，最下面一个价格药丸；
+        - 卡片下方一个「确定」按钮 —— **只点卡片不会前进**，必须点确定。
+
+        用户规则：优先黄紫，其次优先有队友的；旧代码按「投射专注/体能专注」名字找，
+        这页根本没有这些名字，于是反复点卡片、永远停在这。
         """
         if self.match_text(texts, Defs.STREET_TITLE) is None:
             return False
-        if not self.config.get("允许进步行街", False):
+        if not self.config.get("允许进步行街", True):
             self.log_info("步行街扭蛋：未开启，退出")
             self.exit_page()
             return True
 
-        stamina = self.top_bar().get("stamina")
-        limit = int(self.config.get("休息体力阈值", 40))
-        low = stamina is not None and stamina < limit
+        cards = self.read_gacha_cards(texts)
+        if cards:
+            best = max(cards, key=lambda c: c["score"])
+            self.click(best["x"], best["y"], after_sleep=0.5)
+            self.log_info("扭蛋：" + "、".join(
+                f"{c['name']}({c['quality']}{'+队友' if c['mate'] else ''}/{c['score']:.0f})"
+                for c in cards) + f" → 选「{best['name']}」")
+        else:
+            self.log_warning("扭蛋：三张卡都没认出来，只点确定兜底")
 
-        opts = self.texts_in_region(texts, "weekend_options")
-        opts = [t for t in opts if 2 <= len(t.name.strip()) <= 10]
-        clearing = [t for t in opts if self.is_stamina_clear(t.name)]
+        if self.click_text(("确定",), after_sleep=0.8, must=False):
+            self.log_info("扭蛋：确定")
+        else:
+            self.click(int(self.width * 0.5), int(self.height * 0.93), after_sleep=0.8)
+            self.log_warning("扭蛋：没认出「确定」，按底部中间兜底")
+        return True
 
-        if low and clearing:
-            pick = max(clearing, key=lambda t: (t.height, -t.y))
-            self.click_box(pick, after_sleep=0.4)
-            confirm = self.find_text(("确定", "确认"))
-            if confirm is not None:
-                self.click_box(confirm, after_sleep=0.45)
-            self.log_info(f"步行街：体力 {stamina} < {limit}，抽清空精力的「{pick.name.strip()}」")
-            return True
+    def read_gacha_cards(self, texts):
+        """解析扭蛋三选一：卡名 / 品质色 / 是否有队友加成 / 分值 / 点击坐标。
 
-        if clearing and not low:
-            self.log_info(f"步行街：体力 {stamina} ≥ {limit}，跳过会清空精力的选项 "
-                          + "、".join(t.name.strip() for t in clearing))
+        坐标靠「价格药丸」定位（每张卡底部一个 60/80 的数字），
+        卡名取价格正上方最近的短文本，品质色取卡头那一条横带的色相。
+        """
+        frame = self.frame
+        cards = []
+        for t in texts:
+            s = t.name.strip()
+            if not s.isdigit() or not (1 <= int(s) <= 999):
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if not (0.15 <= cx <= 0.85 and 0.60 <= cy <= 0.82):
+                continue
 
-        names = []
-        for attr in self.config.get("扭蛋优先属性", list(Defs.GACHA_OPTIONS)):
-            names.append(f"{attr}专注")
-            names.append(attr)
-        return self.choose_option(texts, tuple(names), after_sleep=0.4)
+            names = [n for n in texts
+                     if 0.28 <= (n.y + n.height / 2) / self.height <= 0.55
+                     and abs((n.x + n.width / 2) / self.width - cx) < 0.13
+                     and 2 <= len(n.name.strip()) <= 12
+                     and any("\u4e00" <= ch <= "\u9fff" for ch in n.name.strip())]
+            if not names:
+                continue
+            title = min(names, key=lambda n: abs(
+                (n.y + n.height / 2) / self.height - 0.41))
+
+            quality, hue, sat = self.card_band_quality(cx)
+            rank = {"金": 3, "紫": 2, "蓝": 1}.get(quality, 0)
+            mate = self.has_mate_badge(cx)
+            score = rank * 10 + (3 if mate else 0) + (1 if "+" in title.name else 0)
+            cards.append({
+                "name": title.name.strip(),
+                "price": int(s),
+                "quality": quality,
+                "mate": mate,
+                "hue": hue,
+                "sat": sat,
+                "score": score,
+                "x": int(title.x + title.width / 2),
+                "y": int(title.y + title.height / 2),
+            })
+        return cards
+
+    def card_band_quality(self, cx):
+        """取卡片标题条（y≈0.36~0.43）的底色，返回 金/紫/蓝/其他 与 H/S。"""
+        frame = self.frame
+        if frame is None:
+            return "其他", -1, -1
+        h, w = frame.shape[:2]
+        x1 = int(w * (cx - 0.06))
+        x2 = int(w * (cx + 0.06))
+        y1, y2 = int(h * 0.36), int(h * 0.43)
+        roi = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+        if roi.size == 0:
+            return "其他", -1, -1
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        hue, sat, val = cv2.split(hsv)
+        m = (sat > 60) & (val > 120)
+        if m.sum() < 50:
+            return "其他", -1, -1
+        hmed = float(np.median(hue[m]))
+        smed = float(np.median(sat[m]))
+        if 10 <= hmed <= 45 and smed >= 90:
+            return "金", hmed, smed
+        if 115 <= hmed <= 160:
+            return "紫", hmed, smed
+        if 90 <= hmed < 115:
+            return "蓝", hmed, smed
+        return "其他", hmed, smed
+
+    def has_mate_badge(self, cx):
+        """卡头左上角有没有橙色「!」气泡（= 这次带队友加成）。"""
+        frame = self.frame
+        if frame is None:
+            return False
+        h, w = frame.shape[:2]
+        x1 = int(w * (cx - 0.10))
+        x2 = int(w * (cx + 0.02))
+        y1, y2 = int(h * 0.17), int(h * 0.26)
+        roi = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+        if roi.size == 0:
+            return False
+        b = roi[:, :, 0].astype(int)
+        g = roi[:, :, 1].astype(int)
+        r = roi[:, :, 2].astype(int)
+        orange = (r > 200) & (g > 90) & (g < 200) & (b < 90)
+        return int(orange.sum()) > 200
 
     def exit_page(self, after_sleep=0.45):
         """点右上角返回箭头退出当前页面。
