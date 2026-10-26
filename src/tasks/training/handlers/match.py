@@ -173,8 +173,10 @@ class MatchHandlers:
                     continue
                 if not (0.30 <= cx <= 0.70 and 0.20 <= cy <= 0.70):
                     continue
-                if not (2 <= len(s) <= 10) or not all(
-                        "\u4e00" <= ch <= "\u9fff" for ch in s):
+                # 选项名允许书名号/间隔号：实测《巫术的起源与发展》也是选项，
+                # 旧的「必须全中文」会把它过滤掉，导致三选一只剩两个 → 整组不命中。
+                # 只排除带数字或百分比的（那是效果文案，不是选项名）。
+                if not (2 <= len(s) <= 20) or re.search(r"[0-9%]", s):
                     continue
                 if not self._has_white_band(t):
                     continue
