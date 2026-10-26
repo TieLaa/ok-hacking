@@ -338,6 +338,15 @@ class TrainingTask(BaseGirlsTask):
 
     # ---------- handlers（顺序 = 优先级）----------
 
+    @staticmethod
+    def exact_text(texts, names):
+        """整词匹配（`in` 的包含匹配会命中正文里的字，例如休息确认框正文里的「休息」）。"""
+        for name in names:
+            for t in texts:
+                if t.name.strip() == name:
+                    return t
+        return None
+
     def handle_rest_confirm(self, texts):
         """「休息需要一整天，可恢复体力，是否要休息？」确认框：点「确定」。
 
@@ -346,12 +355,17 @@ class TrainingTask(BaseGirlsTask):
         """
         if self.match_text(texts, Defs.REST_CONFIRM_TEXTS) is None:
             return False
-        target = next((t for t in texts if t.name.strip() == "确定"), None)
+        # 按钮是 [取消] [确认]；**不能**整词匹配「休息」——左上角标题就叫「休息」，
+        # 点了等于点对话框标题，什么都不发生（2026-10-26 实训卡死）。
+        target = self.exact_text(texts, ("确定", "确认"))
         if target is None:
-            target = next((t for t in texts if t.name.strip() == "休息"), None)
+            bottom = [t for t in texts
+                      if t.name.strip() == "休息"
+                      and (t.y + t.height / 2) / self.height > 0.62]
+            target = bottom[0] if bottom else None
         if target is not None:
             self.click_box(target, after_sleep=0.9)
-            self.log_info("休息确认：确定")
+            self.log_info(f"休息确认：点「{target.name.strip()}」")
             return True
         return False
 
