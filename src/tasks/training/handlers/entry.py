@@ -45,13 +45,13 @@ class EntryHandlers:
         return True
 
     def handle_story_arrow(self, texts):
-        """剧情对话：连点画面推进（有「跳过」的话 handle_dialog_continue 先处理）。
+        """剧情对话：点一下、确认界面变了就停，没变才补点（最多 3 下）。
 
         判据几经修正（2026-10-25 实机）：
         1. 不能只靠「白色 ▼」——**很多剧情页根本没有 ▼**，点屏幕任意位置就推进；
         2. 也不能靠「背景必须暗」——浅色场景的剧情页大量存在；
         3. 也不能靠「白色像素够多」——扭蛋页的黄色按钮/白底卡片会误判（实训死循环）；
-        4. 唯一可靠的特征是**底部台词条里的一行长中文**：y 0.72~0.96、8 字以上。
+        4. 唯一可靠的特征是**底部台词条里的一行长中文**：y 0.72~0.96、12 字以上。
 
         训练日/科目页/赛程页底部也有文字（属性、按钮），所以先排除这些关键词。
         """
@@ -85,17 +85,21 @@ class EntryHandlers:
             if any("\u4e00" <= ch <= "\u9fff" for ch in s):
                 lines.append(s)
 
-        white_hit = False
         if not lines:
             return False
-
-        cx = int(self.width * 0.5)
-        cy = int(self.height * 0.70)
+        # 旧做法是无条件连点 3 下。对话一下就能推进时，第 2、3 下会点在空处，
+        # 甚至点到刚弹出来的下一层 UI（加固训练卡片 / 确定）上
+        # （2026-10-26 用户观察：屏幕中间多点两下）。现在改成
+        # 「点一下 → 看界面变没变 → 没变才补」，最多 3 次。
+        sig = self._signature(texts)
+        clicks = 0
         for _ in range(3):
-            self.click(cx, cy, after_sleep=0.45)
-        self.log_info(f"剧情对话：连点 3 下推进（{lines[0][:16] if lines else '白字兜底'}）")
-        return True
-        self.log_info(f"剧情对话：连点 3 下推进（白 {white_ratio:.3f} 背景 {around.mean():.0f}）")
+            self.click(int(self.width * 0.5), int(self.height * 0.70), after_sleep=0.45)
+            clicks += 1
+            if self._signature(self._ocr_region()) != sig:
+                break
+        self.log_info(
+            f"剧情对话：点 {clicks} 下推进（{lines[0][:16] if lines else '白字兜底'}）")
         return True
 
     def has_story_arrow(self):
