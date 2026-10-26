@@ -1,22 +1,12 @@
-"""训练日、科目选择、结算、倍速。
+"""训练日、科目选择、加强训练。
 
 从 TrainingTask 拆出；方法仍通过 self 访问任务状态。
 禁止在这里 import TrainingTask（循环依赖），需要类时用 handler.__name__ 判断。
 """
 
-import random
-import re
 import time
 
-import os
-import threading
-from collections import deque
-
-import cv2
-import numpy as np
-
 from src.tasks.ui import Defs  # noqa: F401
-from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 
 
 class TrainingHandlers:
@@ -31,110 +21,6 @@ class TrainingHandlers:
             return False
         self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=0.6)
         self.log_info("训练结果：点屏幕继续")
-        return True
-
-    def try_speed_2x(self, texts):
-        """大师赛解锁 2x：把顶栏倍速按钮从 1x 切到 2x。
-
-        不作为独立 handler：只在「训练日主界面 / 赛前准备」这两个确定安全的时机调用，
-        避免在结算页、商店页乱点顶栏。
-
-        判据只看图标右侧三角是否实心蓝（1x 是灰白，2x 是实心蓝），不依赖 OCR 小字。
-        每周最多尝试一次：点了没变化就认为还没解锁，本周不再点，避免每拍刷屏。
-        """
-        if self.match_text(texts, Defs.WEEK_RE) is None:
-            return False
-        week_m = Defs.WEEK_RE.search("".join(t.name for t in texts).replace(" ", ""))
-        week = int(week_m.group(1)) if week_m else None
-
-        if self.speed_is_2x():
-            return False
-        if self._speed_week == week and self._speed_locked:
-            return False
-        if self._speed_week != week:
-            self._speed_week = week
-            self._speed_locked = False
-
-        x = int(self.width * Defs.SPEED_ICON_CLICK[0])
-        y = int(self.height * Defs.SPEED_ICON_CLICK[1])
-        self.click(x, y, after_sleep=0.5)
-        if self.speed_is_2x():
-            self.log_info("已切到 2x 速度")
-        else:
-            self._speed_locked = True
-            self.log_info("倍速按钮点了没变 2x（未到大师赛），本周不再尝试")
-        return True
-
-    def speed_is_2x(self):
-        """顶栏倍速图标：右三角实心蓝 = 2x。"""
-        frame = self.frame
-        if frame is None:
-            return False
-        h, w = frame.shape[:2]
-        x1, y1, x2, y2 = Defs.SPEED_ICON_TRIANGLE
-        roi = frame[int(h * y1):int(h * y2), int(w * x1):int(w * x2)]
-        if roi.size == 0:
-            return False
-        b = roi[:, :, 0].astype(int)
-        r = roi[:, :, 2].astype(int)
-        blue = (b > 150) & (b > r + 20)
-        return float(blue.mean()) > Defs.SPEED_BLUE_RATIO_2X
-
-    def handle_prepare(self, texts):
-        """赛前准备页：跳过比赛 / 前往比赛。
-
-        规则（用户实测）：只有**打赢过**的比赛才能跳过；没打赢的必须进比赛，
-        而且只能在比赛里点加速。所以这里做两级降级：
-        先点「跳过比赛」，下一拍如果还在这一页，就改点「前往比赛」。
-        """
-        skip = self.match_text(texts, "跳过比赛")
-        go = self.match_text(texts, "前往比赛")
-        if skip is None and go is None:
-            return False
-
-        if self.try_speed_2x(texts):
-            return True
-
-        mode = self.config.get("比赛日处理", "")
-        if mode.startswith("总是进比赛") and go is not None:
-            self._match_intro_at = time.monotonic()
-            self.click_box(go, after_sleep=0.6)
-            self.log_info("进比赛（等外部战斗脚本接管）")
-            return True
-
-        if skip is not None and self._skip_tries == 0:
-            self._skip_tries = 1
-            self.click_box(skip, after_sleep=0.5)
-            self.log_info("尝试跳过比赛")
-            return True
-
-        if go is not None:
-            self._skip_tries = 0
-            # 从这一刻进入「不可跳过的比赛开场」，到跳球前不要乱点（handle_match_wait）
-            self._match_intro_at = time.monotonic()
-            self.click_box(go, after_sleep=0.6)
-            self.log_info("跳过不可用，进入比赛（开场不可跳过，等跳球后再快进）")
-            return True
-
-        self.log_warning("赛前准备页：跳过和前往都没找到")
-        return False
-
-    def handle_result(self, texts):
-        """比赛/训练结算页：确认、继续、领取、下一步。
-
-        一局的终点（用户 2026-10-26）：最终结算点「下一步」会进入**注册球员编队**，
-        任务到这里就算跑完，不要再往下点。
-
-        2026-10-26 补充：地点活动（划船/野餐）成功页也是「成功！+ 属性 + 下一步」，
-        顶栏还在、没有评价大字，handle_match_result 的 RESULT_TITLE_RE 认不出来，
-        这里必须兜住「下一步」，否则会在结果页点中央空转到卡死。
-        """
-        target = self.match_text(texts, ("确认", "继续", "领取", "下一步"))
-        if not target:
-            return False
-        # 结算页的「确认」可能连点两次
-        self.click_box(target, after_sleep=0.45)
-        self.log_info(f"结算页「{target.name}」")
         return True
 
     def handle_training_hub(self, texts):

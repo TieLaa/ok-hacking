@@ -241,6 +241,24 @@ class SubjectRanking(unittest.TestCase):
                            FakeTask.subject_rank(2.0, False, None, 100))
 
 
+class QuickMatchTaskSmoke(unittest.TestCase):
+    """常驻快速比赛模块：类装配是否正确（不启动游戏）。"""
+
+    def test_handlers_and_state_exist(self):
+        from src.tasks.QuickMatchTask import QuickMatchTask
+        self.assertTrue(QuickMatchTask.HANDLERS)
+        for handler in QuickMatchTask.HANDLERS:
+            self.assertTrue(callable(handler))
+        for name in ("init_match_state", "handle_prepare", "handle_result",
+                     "handle_in_match", "handle_match_intro"):
+            self.assertTrue(hasattr(QuickMatchTask, name), name)
+
+    def test_registered_as_trigger_task(self):
+        from src.config import config
+        modules = [m for m, _ in config["trigger_tasks"]]
+        self.assertIn("src.tasks.QuickMatchTask", modules)
+
+
 class MatchIntroFastForward(unittest.TestCase):
     """开场（跳球前）左下角只有一个 ▶▶：也要点，别等（用户 2026-10-26 现场截图）。"""
 

@@ -27,7 +27,7 @@ HANDLERS = (
     TrainingHandlers.handle_boost_training,
     TrainingHandlers.handle_subject_select,
     MatchHandlers.handle_event_choice,
-    TrainingHandlers.handle_prepare,
+    MatchHandlers.handle_prepare,
     EntryHandlers.handle_dialog_continue,
     EntryHandlers.handle_lobby,
     EntryHandlers.handle_training_entry,
@@ -47,7 +47,7 @@ HANDLERS = (
     WeekendHandlers.handle_go_out,
     WeekendHandlers.handle_weekend,
     TrainingHandlers.handle_vacation,
-    TrainingHandlers.handle_result,
+    MatchHandlers.handle_result,
     EntryHandlers.handle_club_members,
     EntryHandlers.handle_story_arrow,
 )

@@ -94,7 +94,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
             "卡死判定(秒)": "连续这么多秒没有任何点击、界面文字也没变化，就判定卡住：存证 logs/debug/ 后点屏幕中央继续，连续 3 轮则停止",
         })
         self._steps = 0
-        self._skip_tries = 0
+        self.init_match_state()
         self._last_state = None
         self._picked_subject = False
         self._picked_index = 0
@@ -111,9 +111,6 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self._shop_at = 0.0             # 读不到星期时的兜底冷却（秒）
         self._shop_key = None           # 本次进店用的日期键（关店时写回 _shop_day）
         self._shop_spend_all = False    # 赛前一天：把零用钱花光
-        # 倍速：每周只尝试一次，避免在未解锁时每拍狂点
-        self._speed_week = None
-        self._speed_locked = False
         # 科目页：记录上次探测结果，防止同一天重复探测
         self._subject_cache = {"date": None, "best": None}
         # 商店：第一次遇到只存证，不买东西（等复盘确认界面）
@@ -122,8 +119,6 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self._force_rest = False
         # 最近一次点击的墙钟时间：run() 的「N 秒没点击」看门狗用
         self._last_click_at = 0.0
-        # 进入不可跳过的比赛开场（点「前往比赛」）的时刻；0 = 不在开场
-        self._match_intro_at = 0.0
 
     # 顺序见 training/handlers/__init__.py
     HANDLERS = HANDLERS
