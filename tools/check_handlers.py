@@ -111,6 +111,7 @@ class DryRunTask(TrainingTask):
         self._force_rest = False
         # run() 的 5 秒看门狗依赖这个时间戳（TrainingTask.__init__ 里初始化）
         self._last_click_at = 0.0
+        self._match_intro_at = 0.0
 
     # ---------- 坐标换算 ----------
     def width_of_screen(self, ratio):

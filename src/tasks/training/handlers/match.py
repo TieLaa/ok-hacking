@@ -22,20 +22,48 @@ from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 class MatchHandlers:
 
     def handle_match_intro(self, texts):
-        """比赛开场动画（NBA / VS / 两队名）：点左下角「跳过」。
+        """NBA 转场：**跳过比赛 / 赛后结算之后**一闪而过的 NBA logo，没有可点的控件。
 
-        动画页几乎没有可识别文字，只剩 NBA / VS / 校名；story_arrow 连点 ▼
-        也能过，但每次要 2~3 拍，决赛前实测很慢（2026-10-26 用户口径：
-        左下角有跳过按钮）。
+        2026-10-26 复盘：这个页面从不出现在比赛开场，只在「跳过比赛」成功和结算
+        返回之后出现，约 1 秒自己走完。点左下角（比赛内快进的位置）不会有任何反应，
+        所以这里只等，不点。
         """
         names = {t.name.strip() for t in texts}
         if not (names & {"NBA", "VS"}):
             return False
-        # 纯动画页：文字很少，避免在比赛结算/数据页误点
+        # 纯转场页：文字很少，避免在比赛结算/数据页误判
         if len([t for t in texts if len(t.name.strip()) >= 2]) > 6:
             return False
-        self.click(int(self.width * 0.07), int(self.height * 0.92), after_sleep=0.5)
-        self.log_info("比赛开场动画：点左下角跳过")
+        self.sleep(0.4)
+        return True
+
+    def handle_match_wait(self, texts):
+        """不可跳过的比赛开场：从点「前往比赛」到跳球前，点哪里都没用，只能等。
+
+        用户 2026-10-26：最终比赛的 intro 阶段不能快速跳过，跳球之后才开始正常快进。
+        实测 15:55:53→15:56:22 这 29 秒里，被事件/剧情/兜底三个 handler 乱点了 20+ 次，
+        全都没推进任何东西。这里用 `_match_intro_at` 标记开场窗口，窗口内不产生点击，
+        等 HUD（自动/手动）出现就交回 `handle_in_match` 点快进。
+        """
+        started = getattr(self, "_match_intro_at", 0.0)
+        if not started:
+            return False
+        if time.monotonic() - started > 90:
+            self._match_intro_at = 0.0
+            return False
+        # 赛前准备页还没点掉：交给 handle_prepare 继续点
+        if self.match_text(texts, ("跳过比赛", "前往比赛")) is not None:
+            return False
+        # HUD 出现 = 跳球结束，交回 handle_in_match
+        if self.match_text(self.texts_in_region(texts, "match_hud"),
+                           ("自动", "手动")) is not None:
+            self._match_intro_at = 0.0
+            return False
+        # 已经到结算/赛程页：开场窗口结束
+        if self.match_text(texts, ("胜利", "失败", "MVP")) is not None:
+            self._match_intro_at = 0.0
+            return False
+        self.sleep(0.4)
         return True
 
     def handle_in_match(self, texts):
@@ -47,6 +75,8 @@ class MatchHandlers:
         hud = self.texts_in_region(texts, "match_hud")
         if not hud:
             return False
+        # HUD 出现说明跳球结束，开场等待窗口可以关掉了
+        self._match_intro_at = 0.0
         manual = self.match_text(hud, "手动")
         if manual is not None:
             self.click_box(manual, after_sleep=0.35)

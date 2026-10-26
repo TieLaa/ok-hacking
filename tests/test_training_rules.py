@@ -11,6 +11,7 @@
 
 import os
 import sys
+import time
 import unittest
 
 import numpy as np
@@ -238,6 +239,45 @@ class SubjectRanking(unittest.TestCase):
     def test_unknown_value_loses(self):
         self.assertGreater(FakeTask.subject_rank(2.0, False, 900, 900),
                            FakeTask.subject_rank(2.0, False, None, 100))
+
+
+class MatchIntroWait(unittest.TestCase):
+    """比赛开场不可跳过（用户 2026-10-26）：到跳球前只等，不点。"""
+
+    LINEUP = [box(760, 300, "都立北空之丘", 300, 60),
+              box(1000, 300, "崇德馆高等学校", 300, 60),
+              box(700, 400, "真崎", 80, 40)]
+
+    def test_waits_without_clicking(self):
+        task = FakeTask(list(self.LINEUP))
+        task._match_intro_at = time.monotonic()
+        self.assertTrue(task.handle_match_wait(task._texts))
+        self.assertEqual(task.actions, [])
+
+    def test_hands_over_to_in_match_when_hud_appears(self):
+        texts = [box(40, 950, "自动", 80, 40)]
+        task = FakeTask(texts)
+        task._match_intro_at = time.monotonic()
+        self.assertFalse(task.handle_match_wait(texts))
+        self.assertEqual(task._match_intro_at, 0.0)
+
+    def test_expires_after_90s(self):
+        task = FakeTask([])
+        task._match_intro_at = time.monotonic() - 91
+        self.assertFalse(task.handle_match_wait([]))
+
+    def test_prepare_page_is_not_blocked(self):
+        texts = [box(1100, 950, "前往比赛", 200, 50)]
+        task = FakeTask(texts)
+        task._match_intro_at = time.monotonic()
+        self.assertFalse(task.handle_match_wait(texts))
+        self.assertNotEqual(task._match_intro_at, 0.0)
+
+    def test_nba_wipe_does_not_click(self):
+        texts = [box(800, 400, "NBA", 200, 100)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_match_intro(texts))
+        self.assertEqual(task.actions, [])
 
 
 class BoostTrainingClicks(unittest.TestCase):

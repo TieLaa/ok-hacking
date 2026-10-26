@@ -164,3 +164,21 @@ EV 28.8 > 12 → 点右卡 (1196,285)。
 - 新增 `parsers.read_attribute_values()`：从底部六维面板读当前值，
   兼容 OCR 把「999/1450」拆开、把等级粘在数值前（「C+354/±90」）
 - 单测增加到 **26 条**，`docs/RULES.md` 第 6 节同步更新
+
+### 比赛开场（15:55:53 → 15:56:22）
+
+用户指出：最终比赛的开场不能跳过，跳球之后才开始正常快进。复盘日志后确认：
+
+- `handle_match_intro` 名字骗人：它只在「跳过比赛」成功和赛后结算之后出现，
+  是 NBA logo 转场（约 1 秒），**从来不是比赛开场**；点左下角 (134,993) 没有任何作用。
+- 真正的开场（VS 名单 → 入场动画 → 跳球）没有任何 handler 认识，于是被
+  `handle_event_choice` 当成竖向三选一点了 5 次球员名，又被 `handle_story_arrow`
+  连点 12 次 ▼，再加兜底点中央，**29 秒里 20+ 次点击全部无效**。
+
+修复（`handlers/match.py`）：
+
+- 新增 `handle_match_wait`：`handle_prepare` 点「前往比赛」时记下 `_match_intro_at`，
+  到 HUD（自动/手动）出现前这个 handler 只 `sleep`、不点击；90 秒兜底关窗。
+- `handle_match_intro` 改成只等不点（NBA 转场没有可点控件）。
+- 顺序放在 `handle_in_match` 之后、事件/剧情 handler 之前。
+- 单测 **31 条**全过，回归 20 图全过。

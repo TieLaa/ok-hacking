@@ -83,9 +83,12 @@
 
 ## 9. 比赛
 
-实现：`handle_in_match` / `handle_match_result` / `handle_prepare`
+实现：`handle_in_match` / `handle_match_wait` / `handle_match_result` / `handle_prepare`
 
 - 没打赢过的比赛不能跳过 → 进比赛，切自动，连点「快进」。
+- **开场（前往比赛 → 跳球）不可跳过**：`handle_match_wait` 在窗口内只等不点，
+  HUD（自动/手动）出现才交回 `handle_in_match`（用户 2026-10-26）。
+- 「跳过比赛」成功后的 NBA logo 是转场，约 1 秒自己走完，`handle_match_intro` 只等不点。
 - 打赢过 → 点「跳过比赛」。
 - 结算/赛程页点「下一步」；最终结算进入「注册球员」= 一局终点。
 

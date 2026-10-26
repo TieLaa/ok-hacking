@@ -122,6 +122,8 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self._force_rest = False
         # 最近一次点击的墙钟时间：run() 的「N 秒没点击」看门狗用
         self._last_click_at = 0.0
+        # 进入不可跳过的比赛开场（点「前往比赛」）的时刻；0 = 不在开场
+        self._match_intro_at = 0.0
 
     # 顺序见 training/handlers/__init__.py
     HANDLERS = HANDLERS

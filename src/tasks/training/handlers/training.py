@@ -97,6 +97,7 @@ class TrainingHandlers:
 
         mode = self.config.get("比赛日处理", "")
         if mode.startswith("总是进比赛") and go is not None:
+            self._match_intro_at = time.monotonic()
             self.click_box(go, after_sleep=0.6)
             self.log_info("进比赛（等外部战斗脚本接管）")
             return True
@@ -109,8 +110,10 @@ class TrainingHandlers:
 
         if go is not None:
             self._skip_tries = 0
+            # 从这一刻进入「不可跳过的比赛开场」，到跳球前不要乱点（handle_match_wait）
+            self._match_intro_at = time.monotonic()
             self.click_box(go, after_sleep=0.6)
-            self.log_info("跳过不可用，进入比赛（只点加速）")
+            self.log_info("跳过不可用，进入比赛（开场不可跳过，等跳球后再快进）")
             return True
 
         self.log_warning("赛前准备页：跳过和前往都没找到")
