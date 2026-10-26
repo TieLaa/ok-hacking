@@ -1,6 +1,14 @@
 """训练业务的模块级常量。"""
 
+import os
+
 import cv2
+
+# 项目根目录：constants.py 在 src/tasks/training/ 下，向上 4 层。
+# 不要在各处用 dirname 数层数——重构目录时一定会数错（2026-10-26 踩过：
+# dump_unknown 写到 src/logs/unknown，导致存证"消失"）。
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
 
 # 流派 → 周末去哪（按优先级，每天一个）
 # 注意顺序：步行街扭蛋「消耗所有精力」，公园野餐「精力++」，

@@ -4,15 +4,19 @@
 禁止在这里 import TrainingTask（循环依赖），需要类时用 handler.__name__ 判断。
 """
 
+import os
 import random
 import re
+import threading
 import time
+from collections import deque
 
 import cv2
 import numpy as np
 
 from src.tasks.ui import Defs  # noqa: F401
-from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
+from src.tasks.training.constants import JPEG_PARAMS, PROJECT_ROOT, STYLE_PLACES  # noqa: F401
+from src.util.emergency_stop import STOP
 
 
 class TrainingFlowMixin:
@@ -106,6 +110,10 @@ class TrainingFlowMixin:
                 self._last_dump = time.monotonic()
                 self.log_warning("没见过这个界面 → 已存证，点一下继续")
 
+            # 兜底点击也要参与「点 3 次没变化」检测，否则不认识的界面
+            # 会一直静默点中央，既不 debug 也不停（2026-10-26 公园详情页踩过）。
+            self._sig_after_click = sig
+            self._last_state = "unknown"
             # 点画面中央：对话页能推进、空白处能关弹窗、大部分过场也吃这一下
             self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=interval)
 
@@ -128,9 +136,7 @@ class TrainingFlowMixin:
         产物在 logs/debug/<时间>_<tag>/，logs 已被 .gitignore 忽略。
         """
         try:
-            root = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                "logs", "debug")
+            root = os.path.join(PROJECT_ROOT, "logs", "debug")
             folder = os.path.join(root, f"{time.strftime('%m%d-%H%M%S')}_{tag}")
             os.makedirs(folder, exist_ok=True)
 
@@ -160,9 +166,7 @@ class TrainingFlowMixin:
         产物在 logs/unknown/（logs 已被 .gitignore 忽略，不会污染仓库）。
         """
         try:
-            folder = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                "logs", "unknown")
+            folder = os.path.join(PROJECT_ROOT, "logs", "unknown")
             os.makedirs(folder, exist_ok=True)
             name = f"{time.strftime('%m%d-%H%M%S')}_{tag}_s{self._steps}"
             frame = self.frame

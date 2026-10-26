@@ -37,6 +37,7 @@ HANDLERS = (
     TrainingHandlers.handle_daily_shop,
     TrainingHandlers.handle_training_day,
     TrainingHandlers.handle_training_hub,
+    WeekendHandlers.handle_activity_go,
     WeekendHandlers.handle_restaurant,
     WeekendHandlers.handle_park,
     WeekendHandlers.handle_street,

@@ -10,6 +10,8 @@
 本文件只负责：任务元数据、默认配置、状态初始化。
 """
 
+from collections import deque
+
 from src.tasks.BaseGirlsTask import BaseGirlsTask
 from src.tasks.training.constants import JPEG_PARAMS, STYLE_PLACES  # noqa: F401
 from src.tasks.training.flow import TrainingFlowMixin

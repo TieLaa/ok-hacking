@@ -8,6 +8,10 @@ import random
 import re
 import time
 
+import os
+import threading
+from collections import deque
+
 import cv2
 import numpy as np
 
@@ -16,6 +20,23 @@ from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 
 
 class WeekendHandlers:
+
+    # 地点详情弹窗的「前往XXX」：公园点「划船」只是打开详情，还要再点这个。
+    ACTIVITY_GO = re.compile(r"^前往(划船|野餐|散步|当服务员|桌游GM|游戏厅|商店|步行街|餐厅)")
+
+    def handle_activity_go(self, texts):
+        """地点详情弹窗：右下「前往划船 / 前往野餐」才是真正进入。
+
+        坑（2026-10-26）：公园点「划船」只弹出详情（推荐属性 / 随机属性+10 /
+        前往划船），必须再点「前往划船」。旧流程没有这个二级确认，
+        于是停在详情页、每拍点屏幕中央都没反应，最后被卡死检测停掉。
+        """
+        target = self.match_text(texts, self.ACTIVITY_GO)
+        if target is None:
+            return False
+        self.click_box(target, after_sleep=0.9)
+        self.log_info(f"地点确认：{target.name.strip()}")
+        return True
 
     def choose_option(self, texts, names, after_sleep=0.4):
         """在周末子页面的选项区里选一个，并处理可能的「确定」。
