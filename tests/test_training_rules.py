@@ -180,6 +180,26 @@ class GachaRules(unittest.TestCase):
 
 class EventRules(unittest.TestCase):
 
+    def test_result_page_not_vertical_choice(self):
+        """2026-10-27 事故：划船结算页「工资／获得／获得」被当成竖向三选一。
+
+        页面同时有「成功！…下一步」，是结算页；事件选项页没有「下一步」。
+        """
+        texts = [
+            box(500, 300, "成功！", 160, 40),
+            box(337, 235, "工资", 90, 34),
+            box(560, 300, "多精力+4", 120, 30),
+            box(900, 470, "获得", 90, 34),
+            box(900, 600, "获得", 90, 34),
+            box(1160, 680, "下一步", 140, 46),
+        ]
+        task = FakeTask(texts)
+        self.assertTrue(len(task.choice_candidates(texts)) >= 2)   # 形态上确实像三行
+        self.assertFalse(task.handle_event_choice(texts))          # 但不能当选项点
+        self.assertEqual(task.actions, [])
+        self.assertTrue(task.handle_result(texts))                 # 交给结算页
+        self.assertEqual(task.actions[-1][1], "下一步")
+
     def test_choice_candidates_ignore_big_titles(self):
         """训练入口页的「备战 / 东部大赛」是大标题，不能当成竖向选项。"""
         texts = [

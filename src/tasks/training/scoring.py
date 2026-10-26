@@ -22,14 +22,15 @@ from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 class TrainingScoringMixin:
 
     # 科目预览打分（用户 2026-10-26 简化版权重）
-    # 队友 1 / 道具 1 / 经理 1 / 黄框 +0.1 / 彩框 +0.2
-    # （用户分不清「经理暴击」和「道具暴击」，所以不再单独给暴击项加权，
-    #   只把黄框、彩框当作同分时的小加成。）
+    # 队友 1 / 道具 1 / 经理 1 / 黄框 +2.1 / 彩框 +3.1
+    # （用户分不清「经理暴击」和「道具暴击」，所以不再单独给暴击项加权。
+    #   2026-10-27 用户实测：有框时暴击训练加的属性很多，
+    #   黄框/彩框不再是「同分微调」，各自 2.1 / 3.1，能压过队友数量。）
     W_MATE = 1.0
     W_EQUIP = 1.0
     W_MANAGER = 1.0
-    W_GOLD_CRIT = 0.1
-    W_COLOR_CRIT = 0.2
+    W_GOLD_CRIT = 2.1
+    W_COLOR_CRIT = 3.1
 
     @classmethod
     def empty_preview(cls):

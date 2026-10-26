@@ -296,6 +296,11 @@ class MatchHandlers:
         if self.match_text(self.texts_in_region(texts, "main_action"),
                            ("VS", "比赛", "训练")) is not None:
             return False
+        # 2026-10-27 事故（第2周周日划船结算页）：中间「工资／获得／获得」
+        # 三行奖励条目被 choice_candidates 当成竖向三选一，连点 9 次都不动，
+        # 任务被判卡死停止。结算页底部一定有「下一步」，事件选项页没有。
+        if self.match_text(texts, "下一步") is not None:
+            return False
 
         # ---- 竖向 2/3 选 1（白底彩边，跳过是灰的）----
         # **不要求白底**：事件页背景有时偏暖/偏暗，_has_white_band 会漏判；
