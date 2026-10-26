@@ -139,6 +139,9 @@ class MatchHandlers:
         if self.match_text(texts, ("在公园", "在餐厅", "野餐", "散步", "划船",
                                    "当服务员", "桌游", "扭蛋")) is not None:
             return False
+        # 周末地图：地点名是导航，不是选项（2026-10-26 把「游戏厅/公园」当选项点了）。
+        if len([t for t in texts if t.name.strip() in Defs.WEEKEND_PLACES]) >= 2:
+            return False
         # 训练科目页也有黄色卡片（器材卡）和底部属性面板，但它们不是选项。
         # 科目页必有「失败率」和「决定」，事件页没有（实训 2026-10-26）。
         if self.match_text(texts, ("失败率", "决定")) is not None:

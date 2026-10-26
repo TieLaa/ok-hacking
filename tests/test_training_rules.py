@@ -126,6 +126,28 @@ class EventRules(unittest.TestCase):
         ]
         self.assertEqual(FakeTask(texts).choice_candidates(texts), [])
 
+    def test_map_places_not_choice(self):
+        """周末地图上的地点名是导航，不是事件选项。"""
+        texts = [
+            box(900, 250, "游戏厅", 200, 60),
+            box(900, 350, "公园", 200, 60),
+            box(900, 450, "步行街", 200, 60),
+        ]
+        self.assertEqual(FakeTask(texts).choice_candidates(texts), [])
+
+    def test_weekend_visited_not_reentered(self):
+        """游戏厅已经去过（没有可跳过的游戏）→ 不再进，改去公园。"""
+        texts = [
+            box(900, 250, "游戏厅", 200, 60),
+            box(900, 350, "公园", 200, 60),
+            box(900, 450, "餐厅", 200, 60),
+        ]
+        task = FakeTask(texts)
+        task._weekend = {"date": (None, None), "visited": {"游戏厅"},
+                         "shop_checked": False, "bought": False, "park_choice": None}
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertEqual(task.actions[0], ("click_box", "公园", 1000, 380))
+
     def test_dialog_continue_yields_to_choice(self):
         """三选一页的「跳过」是灰的，dialog_continue 必须让位。"""
         texts = [

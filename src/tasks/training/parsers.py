@@ -238,7 +238,11 @@ class TrainingParsersMixin:
         return int(orange.sum()) > 200
 
     def weekend_state(self):
-        """按「第N周 + 星期X」维护周末状态：周六是否看过商店、买了没、公园选什么。"""
+        """按「第N周 + 星期X」维护周末状态：去过哪些地点、商店看没看、公园选什么。
+
+        `visited` 是关键：游戏厅进去发现没有可跳过的小游戏会退出，
+        如果不记录「今天已经去过」，下一拍又会点进游戏厅，来回循环（2026-10-26）。
+        """
         state = self.top_bar()
         key = (state.get("week"), state.get("day"))
         if self._weekend.get("date") != key:
@@ -247,6 +251,7 @@ class TrainingParsersMixin:
                 "shop_checked": False,
                 "bought": False,
                 "park_choice": None,
+                "visited": set(),
             }
         return self._weekend
 
@@ -569,7 +574,9 @@ class TrainingParsersMixin:
         cands = []
         for t in texts:
             s = t.name.strip()
-            if s in ui or self.is_decor(s) or re.search(r"[0-9%]", s):
+            if s in ui or s in Defs.WEEKEND_PLACES or self.is_decor(s):
+                continue
+            if re.search(r"[0-9%]", s):
                 continue
             cx = (t.x + t.width / 2) / self.width
             cy = (t.y + t.height / 2) / self.height

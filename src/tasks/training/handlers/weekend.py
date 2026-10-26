@@ -351,16 +351,28 @@ class WeekendHandlers:
         """
         if not self.match_text(texts, Defs.WEEKEND_PLACES):
             return False
+        st = self.weekend_state()
+        visited = st.setdefault("visited", set())
+        day = st["date"][1] if st["date"] else None
+
         places = self.weekend_priority()
-        if self.style == "训练流" and self.config.get("周末第一天优先资源点", True):
-            st = self.weekend_state()
-            day = st["date"][1] if st["date"] else None
-            if day == "日":
-                places = ["公园"]
-            self.log_info(f"周末{'日' if day == '日' else '六'}：顺序 {places}")
-        for place in places:
+        if (self.style == "训练流"
+                and self.config.get("周末第一天优先资源点", True)
+                and day == "日"):
+            places = ["公园"]
+
+        # 今天已经去过的地方不再进：游戏厅没有可跳过的小游戏时会退回地图，
+        # 不记录「已去过」就会来回进出游戏厅（2026-10-26 实训）。
+        todo = [p for p in places if p not in visited]
+        if not todo:
+            self.log_info(f"周末：{sorted(visited)} 都去过了，不再进地点")
+            return False
+
+        self.log_info(f"周末{'日' if day == '日' else '六'}：待去 {todo}（已去 {sorted(visited)}）")
+        for place in todo:
             target = self.match_text(texts, place)
             if target:
+                visited.add(place)
                 self.click_box(target, after_sleep=0.5)
                 self.log_info(f"周末去「{place}」（{self.style}）")
                 return True
