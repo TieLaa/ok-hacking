@@ -198,21 +198,35 @@ class TopBarRules(unittest.TestCase):
 
 
 class BoostTrainingClicks(unittest.TestCase):
-    """加强训练：只点右卡 + 确定（2026-10-26 用户口径），不再按期望值比较。"""
+    """加强训练：按 收益×成功率 的期望值选卡，再点「确定」（2026-10-26 用户口径）。"""
 
-    def test_clicks_right_card_then_confirm(self):
+    CARDS = [
+        box(746, 125, "请选择一种加强训练", 426, 54),
+        box(654, 256, "100%", 126, 58),
+        box(1146, 256, "80%", 100, 58),
+        box(674, 379, "+12", 94, 50),
+        box(1152, 377, "+36", 92, 52),
+        box(906, 874, "确定", 98, 51),
+    ]
+
+    def test_picks_right_card_when_ev_higher(self):
+        task = FakeTask(list(self.CARDS))
+        self.assertTrue(task.handle_boost_training(list(self.CARDS)))
+        self.assertEqual(task.actions[0], ("click", 1196, 285))   # 80%/+36 = 28.8 > 12
+        self.assertTrue(any(a[0] == "click_box" and a[1] == "确定" for a in task.actions))
+
+    def test_picks_left_card_when_ev_higher(self):
         texts = [
             box(746, 125, "请选择一种加强训练", 426, 54),
             box(654, 256, "100%", 126, 58),
-            box(1146, 256, "95%", 100, 58),
-            box(674, 379, "+10", 94, 50),
+            box(1146, 256, "80%", 100, 58),
+            box(674, 379, "+50", 94, 50),
             box(1152, 377, "+30", 92, 52),
             box(906, 874, "确定", 98, 51),
         ]
         task = FakeTask(texts)
         self.assertTrue(task.handle_boost_training(texts))
-        self.assertEqual(task.actions[0], ("click", 1196, 285))
-        self.assertTrue(any(a[0] == "click_box" and a[1] == "确定" for a in task.actions))
+        self.assertEqual(task.actions[0], ("click", 717, 285))    # 100%/+50 = 50 > 24
 
 
 class StoryArrowClicks(unittest.TestCase):

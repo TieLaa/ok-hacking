@@ -388,24 +388,34 @@ class TrainingHandlers:
         return True
 
     def handle_boost_training(self, texts):
-        """加强训练二选一：**右卡永远是紫卡**（高收益/低成功率），点它再点「确定」。
+        """加强训练二选一：按 **收益 × 成功率** 的期望值选（2026-10-26 用户口径）。
 
-        实测三张图：100%/+12 vs 80%/+36、100%/+10 vs 95%/+30、100%/+10 vs 65%/+30，
-        右卡收益都更高，不需要再算期望值，也不需要一堆认不出数字时的兜底。
-        取最右边的成功率文字来点，布局微调也不会点到两张卡中间的空白。
+        实测 36×0.8=28.8 > 12×1.0=12；30×0.95=28.5、30×0.65=19.5 也都高于 10×1.0。
+        点选中卡片的成功率文字中心，再点「确定」——不要点两张卡中间的空白。
         """
         if self.match_text(texts, "加强训练") is None:
             return False
 
         rates = [t for t in texts if Defs.PERCENT_RE.match(t.name.strip())]
-        if rates:
-            card = max(rates, key=lambda t: t.x)
-            x = int(card.x + card.width / 2)
-            y = int(card.y + card.height / 2)
-        else:
-            x, y = int(self.width * 0.63), int(self.height * 0.30)
-        self.click(x, y, after_sleep=0.35)
+        gains = [t for t in texts if Defs.GAIN_RE.match(t.name.strip())]
+        if not rates:
+            # 加载/动画帧读不到数字：不盲点卡片，先按默认选择点「确定」，下一拍再判
+            self.click_text(("确定",), must=False)
+            return True
+
+        picks = []
+        for r in rates:
+            rx = r.x + r.width / 2
+            gain = min(gains, key=lambda g: abs(g.x + g.width / 2 - rx)) if gains else None
+            p = int(Defs.PERCENT_RE.match(r.name.strip()).group(1))
+            v = int(Defs.GAIN_RE.match(gain.name.strip()).group(1)) if gain else p
+            picks.append((v * p / 100.0, v, p, r))
+
+        ev, v, p, card = max(picks, key=lambda x: x[0])
+        self.click(int(card.x + card.width / 2), int(card.y + card.height / 2), after_sleep=0.35)
         self.click_text(("确定",), after_sleep=0.6)
-        self.log_info(f"加强训练：点右卡 ({x},{y}) + 确定")
+        detail = "  ".join(f"{pp}%/+{vv}={e:.0f}" for e, vv, pp, _ in picks)
+        self.log_info(f"加强训练：{detail} → 选 {p}%/+{v}")
         return True
+
 
