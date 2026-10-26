@@ -83,6 +83,16 @@ class WeekendHandlers:
         """
         self._weekend.setdefault("visited", set()).add(place)
 
+    def leave_street(self, after_sleep=0.5):
+        """退出扭蛋页：底部「放弃」才是出口，右上角 ↩ 在这页点不动。
+
+        2026-10-26 实测（1349x759）：点右上角 ↩ 十几次页面不动，点「放弃」
+        立即回到周末首页。「放弃」中心约 (0.346w, 0.896h)。
+        """
+        if self.click_text(("放弃",), after_sleep=after_sleep, must=False):
+            return
+        self.click(int(self.width * 0.346), int(self.height * 0.896), after_sleep=after_sleep)
+
     def handle_restaurant(self, texts):
         """餐厅内页：桌游GM（零用钱+）/ 当服务员（零用钱++）。"""
         if self.match_text(texts, Defs.RESTAURANT_TITLE) is None:
@@ -252,17 +262,23 @@ class WeekendHandlers:
         self.mark_visited("步行街")
         if not self.config.get("允许进步行街", True):
             self.log_info("步行街扭蛋：未开启，退出")
-            self.exit_page()
+            self.leave_street()
             return True
 
         cards = self.read_gacha_cards(texts)
         if not cards:
             self.log_warning("扭蛋：三张卡都没认出来，退出不买")
-            self.exit_page()
+            self.leave_street()
             return True
 
         stamina = self.top_bar().get("stamina")
         money = self.read_money(texts)
+        if money is None:
+            # 读不到零用钱就不能判断买不买得起：点「确定」买不起时游戏不会扣钱，
+            # 页面也不关，旧代码会一直「选卡 → 确定 → 没反应」（2026-10-26 实测）。
+            self.log_warning("扭蛋：读不到零用钱，保守退出不买")
+            self.leave_street()
+            return True
         clear_limit = int(self.config.get("扭蛋清空体力阈值", 30))
         allow_clear = stamina is not None and stamina < clear_limit
 
@@ -291,7 +307,7 @@ class WeekendHandlers:
         if not ok:
             self.log_info(f"扭蛋：{detail} → 没有可买的"
                           f"（零用钱 {money}，体力 {stamina}），退出")
-            self.exit_page()
+            self.leave_street()
             return True
 
         best = max(ok, key=lambda c: c["score"])

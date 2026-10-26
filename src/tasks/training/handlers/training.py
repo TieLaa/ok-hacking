@@ -4,6 +4,7 @@
 禁止在这里 import TrainingTask（循环依赖），需要类时用 handler.__name__ 判断。
 """
 
+import re
 import time
 
 from src.tasks.ui import Defs  # noqa: F401
@@ -128,7 +129,7 @@ class TrainingHandlers:
                 self._force_rest = True
                 self.log_warning(f"失败率 {fail}% > {limit}% → 退出科目页，回主界面休息")
                 # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
-                self.click(int(self.width * 0.958), int(self.height * 0.060), after_sleep=0.8)
+                self.exit_page(after_sleep=0.8)
                 return True
             self.log_warning(f"失败率 {fail}% 超过上限 {limit}%（配置为不休息，继续）")
 

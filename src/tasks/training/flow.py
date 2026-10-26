@@ -39,7 +39,7 @@ class TrainingFlowMixin:
 
         while self._steps < max_steps:
             if STOP.consume():
-                self.log_warning(f"按下紧急停止键（{STOP.label}）→ 立即中断，鼠标已释放",
+                self.log_warning(f"按下紧急停止键（{STOP.last_press or STOP.label}）→ 立即中断，鼠标已释放",
                                  notify=True)
                 return False
             if not self._enabled:
@@ -305,11 +305,14 @@ class TrainingFlowMixin:
         return s.endswith("！") or s.endswith("!") or "加成" in s or "比赛！" in s
 
     def exit_page(self, after_sleep=0.45):
-        """点右上角返回箭头退出当前页面。
+        """点右上角的返回箭头退出当前页面。
 
+        坐标来自 2026-10-26 实测帧（2418x1360）：返回箭头是顶栏最右边那个
+        「↩」按钮，按钮中心约 (0.945w, 0.040h)。旧值 (0.958, 0.060) 落在按钮
+        右下角的圆角外，点十几次都不关页面（扭蛋页实测）。
         坑：左上角 (70,55) 那个按钮在训练日会打开「训练计划」日历，不是返回。
         """
-        self.click(int(self.width * 0.958), int(self.height * 0.060), after_sleep=after_sleep)
+        self.click(int(self.width * 0.945), int(self.height * 0.040), after_sleep=after_sleep)
 
     @property
     def style(self):

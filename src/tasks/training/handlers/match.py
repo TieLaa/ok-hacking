@@ -226,7 +226,9 @@ class MatchHandlers:
         顶栏还在、没有评价大字，handle_match_result 的 RESULT_TITLE_RE 认不出来，
         这里必须兜住「下一步」，否则会在结果页点中央空转到卡死。
         """
-        target = self.match_text(texts, ("确认", "继续", "领取", "下一步"))
+        # 必须是整词按钮：match_text 的子串匹配会把台词里的「继续」当成按钮
+        # （2026-10-26 实测：点了「…请继续保持这份斗志…」这句台词）。
+        target = self.exact_text(texts, ("确认", "继续", "领取", "下一步"))
         if not target:
             return False
         # 结算页的「确认」可能连点两次
@@ -242,6 +244,8 @@ class MatchHandlers:
         """
         if self.match_text(texts, "请选择1个技能") is None:
             return False
+        if os.environ.get("OK_DUMP_CHOICES"):
+            self.dump_unknown(texts, "choice_skill")
 
         pref = list(self.config.get("技能标签优先", ["得分手"]))
         frame = self.frame
@@ -304,6 +308,8 @@ class MatchHandlers:
         group = self.choice_candidates(texts)
         if group and (has_skip or len(group) >= 3):
             pick = min(group, key=lambda t: t.y)
+            if os.environ.get("OK_DUMP_CHOICES"):
+                self.dump_unknown(texts, "choice_vertical")
             self.log_info("事件选项（竖向）：" + "、".join(t.name.strip() for t in group)
                           + f" → 选第一个「{pick.name.strip()}」")
             self.click_box(pick, after_sleep=0.45)
@@ -391,6 +397,8 @@ class MatchHandlers:
             f"{i['name']}({('%.0f' % i['ev']) if i['ev'] is not None else '?'}"
             f"{'·回精力' if i['flat'] else ''})" for i in infos)
         self.log_info(f"事件选项：{detail} → 选「{pick['name']}」（{why}）")
+        if os.environ.get("OK_DUMP_CHOICES"):
+            self.dump_unknown(texts, "choice_yellow")
         # 点文字框中心，不点黄色外框中心：外框可能横跨两卡，
         # 中心落在中间空白上（用户 2026-10-26 反馈）。
         self.click_box(pick["name_box"], after_sleep=0.45)

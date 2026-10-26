@@ -54,6 +54,7 @@ class EmergencyStop:
         self.event = threading.Event()
         self.ready = threading.Event()   # 注册尝试结束（成功或失败）
         self.label = None           # 真正抢到的按键名
+        self.last_press = None      # 最后一次实际触发的按键（轮询可能和注册键不同）
         self._thread = None
         self._poll_thread = None
         self._lock = threading.Lock()
@@ -109,6 +110,7 @@ class EmergencyStop:
             while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
                 if msg.message == WM_HOTKEY and msg.wParam == _HOTKEY_ID:
                     logger.warning(f"按下 {self.label} → 请求停止")
+                    self.last_press = self.label
                     self.event.set()
         finally:
             try:
@@ -129,6 +131,7 @@ class EmergencyStop:
                         logger.warning(f"按下 {label}（轮询兜底）→ 请求停止")
                         if not self.label:
                             self.label = label
+                        self.last_press = label
                         self.event.set()
                     was_down[vk] = down
             except Exception as e:                  # noqa: BLE001

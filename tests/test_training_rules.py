@@ -72,8 +72,8 @@ class GachaRules(unittest.TestCase):
             ("投射增加", "主力投射+30"),
         ], stamina="72/121"), qualities=["蓝", "蓝", "蓝"])
         self.assertTrue(task.handle_street(task._texts))
-        # exit_page -> (0.958w, 0.060h)
-        self.assertEqual(task.actions, [("click", 1839, 64)])
+        # leave_street -> 底部「放弃」(0.346w, 0.896h)
+        self.assertEqual(task.actions, [("click", 664, 967)])
 
     def test_clear_card_rejected_when_stamina_high(self):
         """体力 72 时，金卡但清空精力 → 拒绝，退出。"""
@@ -83,7 +83,17 @@ class GachaRules(unittest.TestCase):
             ("投射增加", "主力投射+30"),
         ], stamina="72/121"), qualities=["金", "蓝", "蓝"])
         self.assertTrue(task.handle_street(task._texts))
-        self.assertEqual(task.actions, [("click", 1839, 64)])
+        self.assertEqual(task.actions, [("click", 664, 967)])
+
+    def test_unknown_money_exits_without_buying(self):
+        """读不到零用钱时不能盲买：买不起会卡在扭蛋页（2026-10-26 实测）。"""
+        task = FakeTask(gacha_texts([
+            ("体能增加++", "主力体能+72"),
+            ("弹跳增加", "主力弹跳+30"),
+            ("体能增加+", "主力体能+48"),
+        ], stamina="52/121"), qualities=["金", "蓝", "紫"])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions, [("click", 664, 967)])
 
     def test_clear_card_allowed_when_stamina_low(self):
         """体力 10 < 阈值 30：允许买清空卡（拿体力换属性）。"""
@@ -91,10 +101,10 @@ class GachaRules(unittest.TestCase):
             ("精力转换", "消耗所有精力，意识训练"),
             ("防守增加", "主力防守+30"),
             ("投射增加", "主力投射+30"),
-        ], stamina="10/121"), qualities=["蓝", "蓝", "蓝"])
+        ], stamina="10/121", money="200"), qualities=["蓝", "蓝", "蓝"])
         self.assertTrue(task.handle_street(task._texts))
         self.assertEqual(task.actions[0][0], "click")      # 点卡片
-        self.assertNotEqual(task.actions[0][1], 1839)       # 不是退出
+        self.assertNotEqual(task.actions[0][1], 664)       # 不是退出
 
     def test_cannot_afford_should_exit(self):
         """零用钱 50、卡片 60：买不起就退出，不能点确定卡在扭蛋页。"""
@@ -104,7 +114,7 @@ class GachaRules(unittest.TestCase):
             ("投射增加", "主力投射+30"),
         ], stamina="72/121", money="50", price="60"), qualities=["蓝", "紫", "蓝"])
         self.assertTrue(task.handle_street(task._texts))
-        self.assertEqual(task.actions, [("click", 1839, 64)])
+        self.assertEqual(task.actions, [("click", 664, 967)])
 
     def test_affordable_pick_next(self):
         """前两张买不起时，选买得起的第三张（不是直接退出）。"""
@@ -124,7 +134,7 @@ class GachaRules(unittest.TestCase):
             ("训练增强", "训练可以额外获得1点主属性"),
             ("器材暴击+", "器材的暴击加成提高10%"),
             ("投射增加", "主力投射+30"),
-        ], stamina="72/121"), qualities=["蓝", "紫", "蓝"])
+        ], stamina="72/121", money="200"), qualities=["蓝", "紫", "蓝"])
         self.assertTrue(task.handle_street(task._texts))
         # 第二张卡的卡名中心 x=960+280/2=1100
         self.assertEqual(task.actions[0][0], "click")
@@ -241,6 +251,22 @@ class SubjectRanking(unittest.TestCase):
                            FakeTask.subject_rank(2.0, False, None, 100))
 
 
+class ResultButtonRules(unittest.TestCase):
+    """结算页按钮必须整词匹配，台词里的「继续」不能当成按钮。"""
+
+    def test_dialog_line_is_not_a_button(self):
+        texts = [box(400, 600, "呵呵，那就请继续保持这份斗志，向着目标再次出发吧！", 900, 50)]
+        task = FakeTask(texts)
+        self.assertFalse(task.handle_result(texts))
+        self.assertEqual(task.actions, [])
+
+    def test_exact_next_step_clicks(self):
+        texts = [box(800, 900, "下一步", 100, 50)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_result(texts))
+        self.assertEqual(task.actions[0][0], "click_box")
+
+
 class WeekendMapRules(unittest.TestCase):
     """周末地图：地点都去过要退回首页，且地图不能被当成剧情页连点 ▼。"""
 
@@ -271,6 +297,15 @@ class WeekendMapRules(unittest.TestCase):
         task.weekend_state()
         task.handle_park(texts)
         self.assertIn("公园", task._weekend["visited"])
+
+    def test_street_exit_clicks_give_up(self):
+        """扭蛋页右上角 ↩ 点不动，退出必须点底部「放弃」（2026-10-26 实测）。"""
+        texts = [box(700, 100, "请选择1个扭蛋", 300, 50),
+                 box(400, 660, "放弃", 260, 60)]
+        task = FakeTask(texts)
+        task.leave_street()
+        self.assertEqual(task.actions[-1][0], "click_box")
+        self.assertEqual(task.actions[-1][1], "放弃")
 
     def test_map_is_not_treated_as_dialog(self):
         task = FakeTask(list(self.MAP))
