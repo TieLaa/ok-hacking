@@ -570,6 +570,73 @@ class SubjectScoreWeights(unittest.TestCase):
         self.assertTrue(ring_is_border(0.333, None, floor=CRIT_RING_MIN))
 
 
+class RegisterPlayerFlow(unittest.TestCase):
+    """一局打完的注册球员六步（用户 2026-10-27 提供的 6 屏截图）。
+
+    下一步 → 编队 → 自动编队 → 保存调整 → 关闭 → 左上角 « 返回。
+    必须靠 `_register_stage` 串起来，不能凭「页面上有战术板」就动手。
+    """
+
+    def test_band_page_without_entry_is_untouched(self):
+        """玩家自己从阵容菜单进的战术板：没有走过第 1 步，一个字都不能点。"""
+        texts = [
+            box(100, 80, "战术板", 160, 40),
+            box(1120, 980, "自动编队", 280, 60),
+            box(600, 980, "保存调整", 280, 60),
+        ]
+        task = FakeTask(texts)
+        self.assertFalse(task.handle_register_player(texts))
+        self.assertEqual(task.actions, [])
+
+    def test_six_steps_in_order(self):
+        task = FakeTask([])
+
+        p1 = [box(700, 240, "注册球员", 200, 40),
+              box(1900, 950, "下一步", 300, 60),
+              box(400, 950, "记录笔记", 300, 60)]
+        self.assertTrue(task.handle_register_player(p1))
+        self.assertEqual(task.actions[-1][1], "下一步")
+        self.assertEqual(task._register_stage, "next")
+
+        p2 = [box(600, 200, "训练结束", 240, 40),
+              box(1600, 800, "编队", 200, 60),
+              box(700, 800, "前往主界面", 260, 60)]
+        self.assertTrue(task.handle_register_player(p2))
+        self.assertEqual(task.actions[-1][1], "编队")
+        self.assertEqual(task._register_stage, "team")
+
+        p3 = [box(100, 80, "战术板", 160, 40),
+              box(1120, 980, "自动编队", 280, 60),
+              box(600, 980, "保存调整", 280, 60)]
+        self.assertTrue(task.handle_register_player(p3))
+        self.assertEqual(task.actions[-1][1], "自动编队")
+        self.assertEqual(task._register_stage, "auto")
+
+        p4 = [box(100, 80, "战术板", 160, 40),
+              box(600, 980, "保存调整", 280, 60),
+              box(1400, 500, "评分上升", 200, 40)]
+        self.assertTrue(task.handle_register_player(p4))
+        self.assertEqual(task.actions[-1][1], "保存调整")
+        self.assertEqual(task._register_stage, "save")
+
+        p5 = [box(800, 300, "更新最高队伍等级", 400, 50),
+              box(900, 900, "关闭", 220, 60)]
+        self.assertTrue(task.handle_register_player(p5))
+        self.assertEqual(task.actions[-1][1], "关闭")
+        self.assertEqual(task._register_stage, "closed")
+
+        p6 = [box(100, 80, "战术板", 160, 40)]
+        self.assertTrue(task.handle_register_player(p6))
+        self.assertEqual(task.actions[-1][0], "click")     # 左上角没有文字，按坐标点
+        self.assertEqual(task._register_stage, "back")
+
+    def test_close_is_not_taken_by_popup_handler(self):
+        """「更新最高队伍等级」弹窗的关闭必须由注册流程处理，不能落到 handle_popup。"""
+        from src.tasks.training.handlers import HANDLERS
+        names = [h.__name__ for h in HANDLERS]
+        self.assertLess(names.index("handle_register_player"), names.index("handle_popup"))
+
+
 class EffectExpectation(unittest.TestCase):
     """效果文本 → 真实属性总量（用户 2026-10-27 口径）。"""
 

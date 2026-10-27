@@ -15,6 +15,9 @@ from .match import MatchHandlers
 from .entry import EntryHandlers
 
 HANDLERS = (
+    # 注册球员收尾流程必须排在 handle_popup 之前：它有「关闭」按钮，
+    # 排在后面会被 popup 抢走（用户 2026-10-27 提供的 6 屏流程）。
+    MatchHandlers.handle_register_player,
     PopupHandlers.handle_resume_training,
     PopupHandlers.handle_rest_confirm,
     PopupHandlers.handle_popup,

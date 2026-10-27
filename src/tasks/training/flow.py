@@ -116,9 +116,12 @@ class TrainingFlowMixin:
                 stuck, last_sig = 0, None
                 continue
 
-            # ---- 一局的终点：进入注册球员编队就算跑完（用户 2026-10-26）----
-            if self.in_registration_page(texts):
-                self.log_info("已到一局终点（注册球员编队）→ 任务完成", notify=True)
+            # ---- 一局的终点：注册球员六步走完（点过左上角「«」返回）才算跑完 ----
+            # 2026-10-27 用户补充：打完训练赛 → 注册球员 → 编队 → 保存 → 回大厅，
+            # 才是完整一局；旧版停在「注册球员」页就算完成，把最后 6 步留给玩家。
+            if (getattr(self, "_register_stage", None) == "back"
+                    and self.match_text(texts, "战术板") is None):
+                self.log_info("注册球员流程完成（已回大厅）→ 任务完成", notify=True)
                 return True
 
             if self._handle_any(texts):

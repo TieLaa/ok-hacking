@@ -216,6 +216,85 @@ class MatchHandlers:
         self.log_warning("赛前准备页：跳过和前往都没找到")
         return False
 
+    def handle_register_player(self, texts):
+        """一局打完的**注册球员**收尾流程（用户 2026-10-27 提供 6 屏截图）。
+
+        这是「训练赛 → 注册球员 → 编队 → 保存 → 回大厅」的固定六步，走完才算一局结束：
+
+        1. 恭喜获得 / 注册球员页：点「下一步」（左下还有「记录笔记」，不要点）
+        2. 「训练结束」弹窗：点「编队」（另一个「前往主界面」会跳过编队，不点）
+        3. 战术板页：点「自动编队」（一行阵容自动排好）
+        4. 同一页出现「评分上升」后：点「保存调整」（保存前是灰的，保存后变黄）
+        5. 「更新最高队伍等级」弹窗：点「关闭」
+        6. 战术板页：点左上角「«」（战术板标题左边的双箭头）回大厅
+
+        **必须靠 `_register_stage` 串起来**：战术板页玩家自己也能进（阵容菜单），
+        没有进入过第 1 步就绝不能在这里点「自动编队」，否则会改掉玩家的阵容。
+        同理「关闭」不能交给 handle_popup —— 它会在任何页面上点第一个「关闭」。
+        """
+        stage = getattr(self, "_register_stage", None)
+
+        # 1) 注册球员页（标题「注册球员」+ 黄色「下一步」）
+        if (self.in_registration_page(texts)
+                and self.exact_text(texts, ("下一步",)) is not None):
+            target = self.exact_text(texts, ("下一步",))
+            self.click_box(target, after_sleep=0.6)
+            self._register_stage = "next"
+            self.log_info("注册球员 1/6：下一步")
+            return True
+
+        # 2) 训练结束弹窗：编队（不是「前往主界面」）
+        if (self.match_text(texts, "训练结束") is not None
+                and self.exact_text(texts, ("编队",)) is not None):
+            target = self.exact_text(texts, ("编队",))
+            self.click_box(target, after_sleep=0.8)
+            self._register_stage = "team"
+            self.log_info("注册球员 2/6：编队")
+            return True
+
+        if stage is None:
+            return False
+
+        # 3) 战术板：自动编队
+        if (self.match_text(texts, "战术板") is not None
+                and self.exact_text(texts, ("自动编队",)) is not None
+                and stage in ("next", "team")):
+            target = self.exact_text(texts, ("自动编队",))
+            self.click_box(target, after_sleep=0.9)
+            self._register_stage = "auto"
+            self.log_info("注册球员 3/6：自动编队")
+            return True
+
+        # 4) 同一页出现「评分上升」后：保存调整
+        if (self.match_text(texts, "战术板") is not None
+                and self.exact_text(texts, ("保存调整",)) is not None
+                and stage == "auto"):
+            target = self.exact_text(texts, ("保存调整",))
+            self.click_box(target, after_sleep=0.8)
+            self._register_stage = "save"
+            self.log_info("注册球员 4/6：保存调整")
+            return True
+
+        # 5) 更新最高队伍等级弹窗：关闭
+        if (self.match_text(texts, "更新最高队伍等级") is not None
+                and self.exact_text(texts, ("关闭",)) is not None):
+            target = self.exact_text(texts, ("关闭",))
+            self.click_box(target, after_sleep=0.6)
+            self._register_stage = "closed"
+            self.log_info("注册球员 5/6：关闭升级弹窗")
+            return True
+
+        # 6) 回到战术板：左上角 « 返回大厅（没有文字，只能按坐标）
+        if (self.match_text(texts, "战术板") is not None
+                and stage in ("save", "closed", "back")):
+            self.click(int(self.width * 0.0505), int(self.height * 0.1075),
+                       after_sleep=0.8)
+            self._register_stage = "back"
+            self.log_info("注册球员 6/6：返回大厅")
+            return True
+
+        return False
+
     def handle_result(self, texts):
         """比赛/训练结算页：确认、继续、领取、下一步。
 
