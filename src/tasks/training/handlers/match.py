@@ -369,12 +369,15 @@ class MatchHandlers:
         排在专属 handler 之后（顺序见 handlers/__init__.py）：
         带「下一步 / 确定 / 跳过 / 放弃 / 继续」按钮的页面不抢，交给对应 handler。
         """
-        if self.match_text(texts, "点击屏幕继续") is None:
+        hint = self.match_text(texts, "点击屏幕继续")
+        if hint is None:
             return False
         if self.exact_text(texts, ("下一步", "确定", "跳过", "继续", "放弃")) is not None:
             return False
-        self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=0.5)
-        self.log_info("点击屏幕继续")
+        # **必须点这行字本身**（用户 2026-10-28）：MVP 页点屏幕正中没反应，
+        # 只有点在「点击屏幕继续」这段文字上才推进。
+        self.click_box(hint, after_sleep=0.5)
+        self.log_info(f"点击屏幕继续 @({hint.x + hint.width // 2},{hint.y + hint.height // 2})")
         return True
 
     def handle_result(self, texts):

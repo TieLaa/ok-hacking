@@ -728,7 +728,9 @@ class TapToContinue(unittest.TestCase):
         ]
         task = FakeTask(texts)
         self.assertTrue(task.handle_tap_to_continue(texts))
-        self.assertEqual(task.actions[-1][0], "click")
+        # 必须点在「点击屏幕继续」这行字上（点屏幕正中无效）
+        self.assertEqual(task.actions[-1][0], "click_box")
+        self.assertEqual(task.actions[-1][1], "点击屏幕继续")
 
     def test_page_with_buttons_is_not_stolen(self):
         texts = [box(560, 700, "点击屏幕继续", 200, 32),
