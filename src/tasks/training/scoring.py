@@ -22,7 +22,7 @@ from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 class TrainingScoringMixin:
 
     # 科目预览打分（用户 2026-10-27 定稿权重）
-    # 队友 1 / 装备 1 / 经理 2.1 / 金框 1 / 彩框 1.2
+    # 队友 1 / 装备 1 / 经理 2.1 / 金框 1.1 / 彩框 1.2
     # 关键口径：**金框/彩框指训练科目按钮外面那一圈**，不是底部预览区的器材卡。
     # 按卡上的金框算会和「装备」重复计分（框本来就是装备/经理经验满了才点亮），
     # 所以装备只按张数算一次，框只看按钮外圈。
@@ -38,7 +38,7 @@ class TrainingScoringMixin:
     W_MATE = 1.0
     W_EQUIP = 1.0
     W_MANAGER = 2.1
-    W_GOLD = 1.0
+    W_GOLD = 1.1
     W_COLOR = 1.2
 
     @classmethod
