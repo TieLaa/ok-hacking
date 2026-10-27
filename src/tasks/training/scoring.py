@@ -58,18 +58,50 @@ class TrainingScoringMixin:
         value = attr_value if attr_value is not None else 10 ** 6
         return (score, 1 if is_recommended else 0, -value, -y)
 
-    @staticmethod
-    def _effect_ev(effect_texts):
-        """从效果文本里算期望值：例如「精力+10」=10，'50%概率 精力+30'=15。
+    # 六维属性名：用来把「全属性+5」换算成真实的属性总量
+    ATTR_NAMES = ("投射", "弹跳", "运控", "体能", "防守", "意识")
+    # 精力只值一点钱：用户 2026-10-26「只回 10 精力，不如一点属性」
+    STAMINA_WEIGHT = 0.2
 
-        找不到可解析的 +N 返回 None。
+    @classmethod
+    def _effect_ev(cls, effect_texts):
+        """从效果文本里算**真实属性总量**（用户 2026-10-27 口径）。
+
+        关键：数字后面跟的说明决定倍率——「全属性+5」是六项各 +5 = **30 点**，
+        「投射+3」才是 3 点。旧实现只看数字大小，会出现
+        「全属性+5(30)」输给「精力+10(实际不值)」这种明显错误。
+
+        规则：
+        - 前缀含「全属性 / 所有属性 / 全体」→ ×6；
+        - 前缀里有 n 个属性名（「投射+2，弹跳+3」）→ 分别按 1 倍累加；
+        - 精力 → ×0.2（纯回精力的选项在挑选阶段还会被排除）；
+        - 带概率的（「50%概率 +5」）按 收益×概率 计，并与确定收益取较大值。
         """
         joined = "".join(t.name for t in effect_texts).replace(" ", "")
-        best = None
+        certain = 0.0
+        best_prob = 0.0
         for m in re.finditer(r"(?:(\d{1,3})%概率)?[^+\d]{0,8}\+(\d{1,3})", joined):
             p = int(m.group(1)) if m.group(1) else 100
             v = int(m.group(2))
-            ev = v * p / 100.0
-            if best is None or ev > best:
-                best = ev
-        return best
+            # 说明文字在「+N」前面，就在这次匹配里（不能看 m.start() 之前，
+            # 那个位置是空字符串，「全属性+5」会算成 5 而不是 30）
+            prefix = m.group(0).split("+")[0]
+            if ("全属性" in prefix or "所有属性" in prefix or "全体" in prefix
+                    or "六维" in prefix):
+                mult = len(cls.ATTR_NAMES)
+            else:
+                hits = sum(1 for a in cls.ATTR_NAMES if a in prefix)
+                if hits:
+                    mult = hits
+                elif "精力" in prefix:
+                    mult = cls.STAMINA_WEIGHT
+                else:
+                    mult = 1
+            ev = v * mult
+            if p >= 100:
+                certain += ev
+            else:
+                best_prob = max(best_prob, ev * p / 100.0)
+        if certain == 0.0 and best_prob == 0.0:
+            return None
+        return max(certain, best_prob)

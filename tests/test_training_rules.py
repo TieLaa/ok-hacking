@@ -469,6 +469,31 @@ class SubjectScoreWeights(unittest.TestCase):
         self.assertFalse(hasattr(task, "count_gold_cards"))
 
 
+class EffectExpectation(unittest.TestCase):
+    """效果文本 → 真实属性总量（用户 2026-10-27 口径）。"""
+
+    def ev(self, *lines):
+        return FakeTask._effect_ev([box(400, 300, t, 300, 40) for t in lines])
+
+    def test_full_attributes_count_six_times(self):
+        """「全属性+5」是六项各 +5 = 30 点，不是 5 点。"""
+        self.assertEqual(self.ev("全属性+5"), 30)
+        self.assertEqual(self.ev("全属性+10"), 60)
+
+    def test_single_and_double_attributes_add_up(self):
+        self.assertEqual(self.ev("投射+3"), 3)
+        self.assertEqual(self.ev("投射+2，弹跳+3"), 5)
+
+    def test_stamina_is_worth_little(self):
+        """精力只有 1/5 价值（纯回精力在挑选阶段还会被排除）。"""
+        self.assertAlmostEqual(self.ev("精力+10"), 2.0)
+        self.assertAlmostEqual(self.ev("精力+10，投射+5"), 7.0)
+
+    def test_probability_multiplies(self):
+        self.assertAlmostEqual(self.ev("50%概率 全属性+5"), 15.0)
+        self.assertIsNone(self.ev("没有数值"))
+
+
 class TopBarRules(unittest.TestCase):
 
     def test_zero_stamina_parsed(self):
