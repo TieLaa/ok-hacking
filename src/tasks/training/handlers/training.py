@@ -193,9 +193,13 @@ class TrainingHandlers:
         pool = with_team or list(boxes)
         name = max(pool, key=rank)
         r = results.get(name) or self.empty_preview()
+        # 2026-10-27：这一行必须同时打「金框」和「彩虹」。
+        # 代码里彩框会让金框恒为 0（互斥），只打金框时彩框会被统计成「无框」，
+        # 事后无法校准彩框权重（实测 118 次训练里彩框就是这么丢的）。
         self.log_info(
             f"选科目「{name}」（队友 {r['mates']}｜经理 {r['manager']}｜装备 {r['equip']}"
-            f"｜满经验 {r['full']}｜金框 {r['gold']}｜得分 {self.subject_score(r):.2f}"
+            f"｜满经验 {r['full']}｜金框 {r['gold']}｜彩虹 {int(r['crit'])}"
+            f"｜得分 {self.subject_score(r):.2f}"
             f"｜当前值 {attr_values.get(name, '?')}"
             f"｜{'推荐' if name in recommended else '非推荐'}）")
 
