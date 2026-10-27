@@ -30,12 +30,80 @@ from tools.abs_mouse import click_screen, ensure_foreground  # noqa: E402
 
 LOG = os.path.join(ROOT, "logs", "ok-script.log")
 
-# 相对于 ok-script 主窗口左上角的「开始」按钮候选位置（窗口固定 1200x800）
+# 相对于 ok-script 主窗口左上角的「开始」按钮候选位置（兜底用：
+# 优先按 OCR 找「训练循环」那一行的「开始」按钮，因为用户可以拖窗口改尺寸，
+# 2026-10-27 10:43 窗口被缩到 1170x749，固定坐标就点歪到第 4 张卡了）
 CANDIDATE_Y = (89, 470, 350, 210)
 BUTTON_X = 1089
 
 # 只有排上这些任务名才算成功（否则是点到了别的任务卡）
 TARGET_KEYWORDS = ("训练循环", "TrainingTask")
+
+
+def locate_start_button(ok):
+    """OCR 定位：「训练循环」标题同一行右侧的「开始」按钮，返回窗口内相对坐标。
+
+    找不到就返回 None，交给固定候选坐标兜底。
+    """
+    try:
+        import cv2                      # noqa: PLC0415
+        from ok.device.capture_methods.windows_graphics import (  # noqa: PLC0415
+            WindowsGraphicsCaptureMethod)
+        from onnxocr.onnx_paddleocr import ONNXPaddleOcr  # noqa: PLC0415
+
+        from tools.wgc_capture import MockWindow  # noqa: PLC0415
+
+        cap = WindowsGraphicsCaptureMethod(MockWindow(ok))
+        frame = None
+        for _ in range(10):
+            frame = cap.get_frame()
+            if frame is not None:
+                break
+        cap.close()
+        if frame is None:
+            return None
+        ocr = ONNXPaddleOcr(use_angle_cls=False, use_openvino=True, show_log=False)
+        result = ocr.ocr(frame)
+        page = result[0] if isinstance(result, list) and len(result) == 1 else result
+        boxes = []
+        for entry in page or []:
+            try:
+                poly, (text, score) = entry[0], entry[1]
+            except Exception:                    # noqa: BLE001
+                continue
+            if not text or score is None or score < 0.5:
+                continue
+            xs = [int(p[0]) for p in poly]
+            ys = [int(p[1]) for p in poly]
+            boxes.append((text.strip(), min(xs), min(ys),
+                          max(xs) - min(xs), max(ys) - min(ys)))
+
+        title = None
+        for text, x, y, w, h in boxes:
+            if any(k in text for k in TARGET_KEYWORDS):
+                title = (x, y, w, h)
+                break
+        if title is None:
+            print("OCR 没找到「训练循环」标题，改用固定候选坐标")
+            return None
+        ty = title[1] + title[3] / 2
+        best = None
+        for text, x, y, w, h in boxes:
+            if "开始" not in text:
+                continue
+            cy = y + h / 2
+            if abs(cy - ty) > 40:
+                continue
+            if best is None or x > best[0]:
+                best = (x + w / 2, cy)
+        if best is None:
+            print("OCR 找到标题但没找到同一行的「开始」按钮，改用固定候选坐标")
+            return None
+        print(f"OCR 定位开始按钮：窗口内 ({int(best[0])}, {int(best[1])})")
+        return int(best[0]), int(best[1])
+    except Exception as e:                        # noqa: BLE001
+        print(f"OCR 定位失败（{type(e).__name__}: {e}），改用固定候选坐标")
+        return None
 
 
 def find_ok_window():
@@ -109,9 +177,17 @@ def main():
     mark = time.strftime("%Y-%m-%d %H:%M:%S")
     clicked = None
     wrong = None
-    for dy in CANDIDATE_Y:
-        rect = win32gui.GetWindowRect(ok)
-        x, y = rect[0] + BUTTON_X, rect[1] + dy
+
+    # 先按 OCR 找「训练循环」那一行的「开始」按钮（窗口尺寸被拖过也不会点歪）
+    rect = win32gui.GetWindowRect(ok)
+    located = locate_start_button(ok)
+    candidates = []
+    if located:
+        candidates.append((rect[0] + located[0], rect[1] + located[1]))
+    candidates += [(rect[0] + BUTTON_X, rect[1] + dy) for dy in CANDIDATE_Y]
+
+    for x, y in candidates:
+        print(f"点击结束位置 ({x}, {y})")
         real_click(x, y)
         # App 刚启动时头几秒的点击会被吞（2026-10-27 09:41 实训），所以每个位置
         # 都轮询 4 秒再换下一个候选
