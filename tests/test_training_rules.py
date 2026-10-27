@@ -325,6 +325,17 @@ class EventRules(unittest.TestCase):
         self.assertTrue(task.handle_event_choice(texts))
         self.assertEqual(task.actions[-1][1], "更衣室加设空衣柜")
 
+    def test_manager_help_animation_is_claimed(self):
+        """2026-10-27 用户截图：「球队经理的帮助！」过场动画以前被当成未知界面。
+
+        代价是每 3 秒存证一张（一局 16 张「没见过这个界面」），日志也误导成识别不了。
+        """
+        texts = [box(300, 30, "第3周", 120, 40),
+                 box(400, 120, "球队经理的帮助！", 600, 90)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_popup(texts))
+        self.assertEqual(task.actions[-1][0], "click")
+
     def test_multi_choice_skips_flat_stamina(self):
         """2026-10-27 10:09 实机：三个选项里「不理会(精力+10)」被选中，实际该选属性。
 
@@ -903,6 +914,52 @@ class StallWatchdog(unittest.TestCase):
     def test_click_point_uses_box_center(self):
         task = self.make()
         self.assertEqual(task._click_point(box(100, 200, "x", 200, 60), -1), (200, 230))
+
+
+class ShopGrid(unittest.TestCase):
+    """商店网格容量：现在 5 件（3 + 2），强化「商品+1」后 6 件（3 + 3）。
+
+    坐标来自 2026-10-27 商店帧实测（1920x1080）：
+    列中心 0.223 / 0.357 / 0.490；行名称 0.276 / 0.544；行价格 0.479 / 0.746。
+
+    第二行价格 0.746 距离旧上限 0.75 只有 4px，布局抖一下整行就会消失
+    （表现是「第二行商品永远不买」，不报错）。这里把它钉死：
+    谁把价格区上限改回 0.75 以下，这条测试直接红。
+    """
+
+    COLS = (0.223, 0.357, 0.490)
+    ROWS = ((0.276, 0.479), (0.544, 0.746))
+    NAMES = ("投射教科书+", "特训牛奶", "精力饮料",
+             "器材手册", "弹跳秘籍", "防守教科书")
+    PRICES = (150, 50, 30, 80, 60, 100)
+
+    def make(self):
+        texts = []
+        for i, name in enumerate(self.NAMES):
+            cx = self.COLS[i % 3]
+            name_y, price_y = self.ROWS[i // 3]
+            texts.append(box(int(1920 * cx) - 75, int(1080 * name_y) - 21, name, 150, 42))
+            texts.append(box(int(1920 * cx) - 35, int(1080 * price_y) - 18,
+                             str(self.PRICES[i]), 70, 36))
+        return FakeTask(texts)
+
+    def test_grid_capacity_is_six(self):
+        self.assertEqual(FakeTask([]).SHOP_MAX_ITEMS, 6)
+
+    def test_sixth_slot_is_parsed(self):
+        """第 6 格（第二行第三列）必须被读出来，而且名称与价格配成对。"""
+        task = self.make()
+        items = task.read_shop_items(task._texts)
+        self.assertEqual(
+            sorted((i["name"], i["price"]) for i in items),
+            sorted(zip(self.NAMES, self.PRICES)))
+
+    def test_click_point_between_name_and_price(self):
+        """点击点要落在名称与价格之间，否则会点到数量或空白。"""
+        task = self.make()
+        item = next(i for i in task.read_shop_items(task._texts) if i["name"] == "防守教科书")
+        self.assertGreater(item["y"], int(1080 * 0.544))
+        self.assertLess(item["y"], int(1080 * 0.746))
 
 
 if __name__ == "__main__":

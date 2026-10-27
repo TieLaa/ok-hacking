@@ -84,6 +84,13 @@ class PopupHandlers:
             self.click(int(self.width * 0.5), int(self.height * 0.4), after_sleep=0.35)
             self.log_info("弹窗：点击屏幕继续")
             return True
+        # 训练后的过场动画（2026-10-27 用户截图）：「球队经理的帮助！」+ 经理立绘，
+        # 点屏幕任意位置继续。以前没人认领 → 走 unknown 兜底 + 每 3 秒存证一张
+        # （一局攒了 16 张「没见过这个界面」，日志看起来像识别不了）。
+        if self.match_text(texts, "球队经理的帮助") is not None:
+            self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=0.5)
+            self.log_info("过场：球队经理的帮助")
+            return True
         target = self.match_text(texts, ("今日不再提示", "关闭"))
         if target:
             self.click_box(target, after_sleep=0.35)
