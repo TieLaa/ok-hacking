@@ -271,7 +271,9 @@ class EntryHandlers:
             s = t.name.strip()
             if s in ui_words or not s or self.is_decor(s):
                 continue
-            if not (0.20 <= cx <= 0.80 and 0.15 <= cy <= 0.75):
+            # 竖排选项是**居中**的一列（实测 story-choice: cx=0.50）；贴边的列是
+            # 表格列或字幕（周结算左列 cx≈0.26、周末前对话字幕 cx≈0.68）。
+            if not (0.38 <= cx <= 0.62 and 0.15 <= cy <= 0.75):
                 continue
             if len(s) < 3 or len(s) > 20:
                 continue

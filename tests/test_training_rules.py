@@ -259,15 +259,27 @@ class EventRules(unittest.TestCase):
         self.assertEqual(task.actions, [])
 
     def test_movie_dialogue_without_punct_still_not_choice(self):
-        """OCR 漏读顿号时，靠书名号把作品名排掉，仍然只剩 1 项 → 不是选项。"""
+        """OCR 漏读顿号时，靠「居中」判据挡住：字幕在 cx≈0.68，选项在 0.50。"""
         texts = [
             box(1073, 202, "我要去和小式一起去看电影", 444, 50),
             box(1073, 305, "《飞天鱼人大战十三头鲨》", 444, 50),
             box(1600, 50, "跳过", 90, 40),
         ]
         task = FakeTask(texts)
-        self.assertEqual(task.choice_candidates(texts), [])
         self.assertFalse(task.handle_event_choice(texts))
+        self.assertEqual(task.actions, [])
+
+    def test_centered_vertical_choice_still_hits(self):
+        """真竖向三选一必须仍然命中（几何取自 2026-10-26-story-choice.png：cx=0.50）。"""
+        texts = [
+            box(810, 331, "更衣室加设空衣柜", 300, 50),
+            box(810, 483, "JellyRabbit毛绒玩具", 300, 50),
+            box(810, 612, "了解千圣的想法", 300, 50),
+            box(1700, 120, "跳过", 90, 40),
+        ]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_event_choice(texts))
+        self.assertEqual(task.actions[-1][1], "更衣室加设空衣柜")
 
     def test_week_summary_not_choice(self):
         """2026-10-27 00:02 实机：本周总结页左列位置名被当成竖向三选一。

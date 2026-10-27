@@ -336,6 +336,16 @@ class MatchHandlers:
         # （2026-10-27 00:02 周结算页 5 个位置名「控卫…中锋」就是这样被当成选项的）
         if group and len(group) > 3:
             return False
+        # 竖向选项是**居中**的一列卡片：实测 `2026-10-26-story-choice.png` 三项
+        # cx 全是 0.50。靠这条排除「贴边的一列短文本」——这类几乎都是表格列或字幕：
+        #   周结算左列「控卫/分卫/小前/大前/中锋」cx≈0.26，
+        #   周末前对话「我要去和小式一起去看电影」cx≈0.68。
+        # 比按文字内容/符号做排除可靠：台词里什么符号都可能出现。
+        if group:
+            centers = [(t.x + t.width / 2) / self.width for t in group]
+            if (max(centers) - min(centers) > 0.06
+                    or not 0.38 <= sum(centers) / len(centers) <= 0.62):
+                return False
         # 只有 1 项也不是选项：剧情页右上角同样有「跳过」，has_skip 会把它放进来
         # （2026-10-27 10:07 周末前对话「我要去和小式一起去看电影」被点 5 次空点）
         if group and len(group) >= 2 and (has_skip or len(group) >= 3):
