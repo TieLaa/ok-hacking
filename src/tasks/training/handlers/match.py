@@ -235,30 +235,74 @@ class MatchHandlers:
         stage = getattr(self, "_register_stage", None)
 
         # 1) 注册球员页（标题「注册球员」+ 黄色「下一步」）
-        if (self.in_registration_page(texts)
-                and self.exact_text(texts, ("下一步",)) is not None):
+        if self.in_registration_page(texts):
             target = self.exact_text(texts, ("下一步",))
-            self.click_box(target, after_sleep=0.6)
-            self._register_stage = "next"
-            self.log_info("注册球员 1/6：下一步")
-            return True
+            if target is None:
+                # OCR 偶尔把「下一步」读成「下一」（丢字），按前缀兜底
+                target = next((t for t in texts
+                               if t.name.strip().startswith("下一")
+                               and len(t.name.strip()) <= 4), None)
+            if target is not None:
+                self.click_box(target, after_sleep=0.6)
+                self._register_stage = "next"
+                self.log_info("注册球员 1/6：下一步")
+                return True
 
         # 2) 训练结束弹窗：编队（不是「前往主界面」）
-        if (self.match_text(texts, "训练结束") is not None
-                and self.exact_text(texts, ("编队",)) is not None):
+        if self.match_text(texts, "训练结束") is not None:
             target = self.exact_text(texts, ("编队",))
-            self.click_box(target, after_sleep=0.8)
-            self._register_stage = "team"
-            self.log_info("注册球员 2/6：编队")
-            return True
+            if target is not None:
+                self.click_box(target, after_sleep=0.8)
+                self._register_stage = "team"
+                self.log_info("注册球员 2/6：编队")
+                return True
+            # OCR 经常读不出黄色按钮里的「编队」（样张 2026-10-27-register-2-team.png
+            # 只认出左边的「前往主界面」）。这页固定「左前往主界面 / 右编队」且
+            # 两个按钮关于弹窗中线对称：拿正文框的中心当中线，把左边按钮镜像过去。
+            left = self.exact_text(texts, ("前往主界面",))
+            body = next((t for t in texts if "成为注册球员" in t.name), None)
+            if left is not None and body is not None:
+                mid = body.x + body.width / 2
+                x = int(2 * mid - (left.x + left.width / 2))
+                y = int(left.y + left.height / 2)
+                self.click(x, y, after_sleep=0.8)
+                self._register_stage = "team"
+                self.log_info(f"注册球员 2/6：编队（镜像左侧按钮 @{x},{y}）")
+                return True
+            btns = self._yellow_buttons()
+            if len(btns) >= 2:
+                bx, by, bw, bh = max(btns, key=lambda b: b[0])
+                self.click(int(bx + bw / 2), int(by + bh / 2), after_sleep=0.8)
+                self._register_stage = "team"
+                self.log_info("注册球员 2/6：编队（黄色按钮兜底）")
+                return True
 
         if stage is None:
             return False
 
+        # 2b) 编队详情页（右侧是「注册球员」名单，底部 重置/自动选择/保存编队）
+        #     这一步在用户截图里没有出现，但实跑（2026-10-27 16:18）确实会进：
+        #     「编队」→ 详情页 → 自动选择 → 保存编队 → 回到战术板。
+        in_team_edit = (self.exact_text(texts, ("保存编队",)) is not None
+                        and self.exact_text(texts, ("自动选择",)) is not None)
+        if in_team_edit:
+            if stage in ("team", "next"):
+                target = self.exact_text(texts, ("自动选择",))
+                self.click_box(target, after_sleep=0.8)
+                self._register_stage = "team_auto"
+                self.log_info("注册球员 2b：编队详情 → 自动选择")
+                return True
+            if stage == "team_auto":
+                target = self.exact_text(texts, ("保存编队",))
+                self.click_box(target, after_sleep=1.0)
+                self._register_stage = "team_saved"
+                self.log_info("注册球员 2b：保存编队")
+                return True
+
         # 3) 战术板：自动编队
         if (self.match_text(texts, "战术板") is not None
                 and self.exact_text(texts, ("自动编队",)) is not None
-                and stage in ("next", "team")):
+                and stage in ("next", "team", "team_saved")):
             target = self.exact_text(texts, ("自动编队",))
             self.click_box(target, after_sleep=0.9)
             self._register_stage = "auto"
@@ -284,14 +328,22 @@ class MatchHandlers:
             self.log_info("注册球员 5/6：关闭升级弹窗")
             return True
 
-        # 6) 回到战术板：左上角 « 返回大厅（没有文字，只能按坐标）
-        if (self.match_text(texts, "战术板") is not None
-                and stage in ("save", "closed", "back")):
-            self.click(int(self.width * 0.0505), int(self.height * 0.1075),
-                       after_sleep=0.8)
-            self._register_stage = "back"
-            self.log_info("注册球员 6/6：返回大厅")
-            return True
+        # 6) 返回大厅：左上角 « **没有文字**，用标题框当锚点向左推
+        #    2026-10-27 16:18 事故：按截图比例写成 (0.0505w, 0.1075h)，
+        #    但截图带系统标题栏（比游戏画面高约 29px），点在按钮下沿外面，
+        #    连点 19 拍没反应、走到最大步数才停。改成「标题框左边 3% 宽、同一行高」。
+        if stage in ("save", "closed", "back"):
+            title = self.exact_text(texts, ("战术板", "首发"))
+            if title is not None or in_team_edit:
+                if title is not None:
+                    x = int(title.x - self.width * 0.030)
+                    y = int(title.y + title.height / 2)
+                else:
+                    x, y = int(self.width * 0.0505), int(self.height * 0.068)
+                self.click(x, y, after_sleep=0.9)
+                self._register_stage = "back"
+                self.log_info(f"注册球员 6/6：返回大厅 @({x},{y})")
+                return True
 
         return False
 

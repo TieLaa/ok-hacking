@@ -116,11 +116,13 @@ class TrainingFlowMixin:
                 stuck, last_sig = 0, None
                 continue
 
-            # ---- 一局的终点：注册球员六步走完（点过左上角「«」返回）才算跑完 ----
+            # ---- 一局的终点：注册球员六步走完（点过左上角「«」返回大厅）才算跑完 ----
             # 2026-10-27 用户补充：打完训练赛 → 注册球员 → 编队 → 保存 → 回大厅，
             # 才是完整一局；旧版停在「注册球员」页就算完成，把最后 6 步留给玩家。
-            if (getattr(self, "_register_stage", None) == "back"
-                    and self.match_text(texts, "战术板") is None):
+            at_board = (self.match_text(texts, "战术板") is not None
+                        or self.match_text(texts, "首发") is not None
+                        or self.match_text(texts, "保存编队") is not None)
+            if getattr(self, "_register_stage", None) == "back" and not at_board:
                 self.log_info("注册球员流程完成（已回大厅）→ 任务完成", notify=True)
                 return True
 

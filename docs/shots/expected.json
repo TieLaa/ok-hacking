@@ -28,5 +28,7 @@
   "2026-10-26-team.png": "handle_team",
   "2026-10-26-training-day.png": "handle_popup",
   "2026-10-27-broadcast-event.png": "handle_event_choice",
-  "2026-10-27-race-ladder.png": "-"
+  "2026-10-27-race-ladder.png": "-",
+  "2026-10-27-register-1.png": "handle_register_player",
+  "2026-10-27-register-2-team.png": "handle_register_player"
 }

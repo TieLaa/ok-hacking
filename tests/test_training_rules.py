@@ -630,6 +630,25 @@ class RegisterPlayerFlow(unittest.TestCase):
         self.assertEqual(task.actions[-1][0], "click")     # 左上角没有文字，按坐标点
         self.assertEqual(task._register_stage, "back")
 
+    def test_team_edit_page_auto_select_then_save(self):
+        """编队详情页（右侧注册球员名单 + 重置/自动选择/保存编队）。
+
+        用户截图里没有这一屏，但 2026-10-27 16:18 实跑确实进了：编队 → 详情页。
+        顺序必须是 自动选择 → 保存编队，反过来会把空阵容存下去。
+        """
+        task = FakeTask([])
+        task._register_stage = "team"
+        page = [box(940, 550, "重置", 90, 34),
+                box(1120, 550, "自动选择", 190, 40),
+                box(1000, 645, "保存编队", 240, 50)]
+        self.assertTrue(task.handle_register_player(page))
+        self.assertEqual(task.actions[-1][1], "自动选择")
+        self.assertEqual(task._register_stage, "team_auto")
+
+        self.assertTrue(task.handle_register_player(page))
+        self.assertEqual(task.actions[-1][1], "保存编队")
+        self.assertEqual(task._register_stage, "team_saved")
+
     def test_close_is_not_taken_by_popup_handler(self):
         """「更新最高队伍等级」弹窗的关闭必须由注册流程处理，不能落到 handle_popup。"""
         from src.tasks.training.handlers import HANDLERS
