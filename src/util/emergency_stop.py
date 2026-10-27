@@ -32,13 +32,19 @@ MOD_SHIFT = 0x0004
 WM_HOTKEY = 0x0312
 _HOTKEY_ID = 0xB601          # 0x0000~0xBFFF 之间，避开 ok-script 自带的 999
 
-# **只用组合键**（2026-10-27 改）：单键 F8/F12 会被别的东西按下 —— 实测有两次
-# 整局被误停，其中一次是猫踩到键盘。组合键要求真的同时按住 Ctrl+Alt，误触概率极低。
+# **只用三键组合**（2026-10-27 二次收紧）：
+#   1) 单键 F8/F12 会被别的东西按下（一次是猫踩键盘）；
+#   2) 只按 Ctrl+Alt+F12 仍然会误停 —— 因为点击时 GirlsInteraction 会
+#      `keybd_event(VK_MENU)` 注入一次 Alt，如果这时用户恰好按了 F12
+#      （Steam 截图默认就是 F12），RegisterHotKey 立刻满足 Ctrl+Alt+F12。
+#      19:27:36 那次误停就是「注入的 Alt + 用户 F12」撞出来的。
+# 所以注册键要求再多按住 Shift：注入的 Alt 单靠自己凑不齐，必须真人三键同按。
 DEFAULT_KEYS = (
-    (MOD_CONTROL | MOD_ALT, 0x7B, "Ctrl+Alt+F12"),
-    (MOD_CONTROL | MOD_ALT, 0x77, "Ctrl+Alt+F8"),
-    (MOD_CONTROL | MOD_SHIFT, 0x7B, "Ctrl+Shift+F12"),
+    (MOD_CONTROL | MOD_ALT | MOD_SHIFT, 0x7B, "Ctrl+Alt+Shift+F12"),
 )
+
+# 轮询兜底要求 Ctrl+Alt 连续按住 3 拍（150ms），注入的 Alt（约 20ms）凑不满，
+# 用户单按 F12 也不会触发。
 
 # 轮询兜底：RegisterHotKey 是全局独占的，F8 被别的程序抢走时注册会静默失败。
 # GetAsyncKeyState 不占用按键、也不需要注册，别的程序占了照样能读到物理按下。
