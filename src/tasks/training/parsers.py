@@ -413,8 +413,12 @@ class TrainingParsersMixin:
         """
         scene = self.read_scene(texts)
         equip, full = self.read_equipment(texts)
-        gold = 1 if self.has_gold_border(texts) else 0
         crit = self.has_crit_border(texts)
+        # 彩框和金框**互斥**：彩虹边框里本来就有一段橙黄，若不互斥，
+        # 同一个按钮会同时算「金框 1.0 + 彩框 1.2」，等于一物两记。
+        # 而且两者同源（装备/经理经验满了才亮），本来就不该叠加
+        # （用户 2026-10-27 截图：科目按钮彩框 ↔ 中间装备卡彩框）。
+        gold = 0 if crit else (1 if self.has_gold_border(texts) else 0)
         return {
             "names": scene["names"],
             "mates": scene["mates"],
