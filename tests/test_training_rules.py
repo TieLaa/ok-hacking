@@ -336,6 +336,22 @@ class EventRules(unittest.TestCase):
         self.assertTrue(task.handle_popup(texts))
         self.assertEqual(task.actions[-1][0], "click")
 
+    def test_boost_training_not_stolen_by_manager_help(self):
+        """加强训练页左上角也写着「球队经理的帮助」，不能被过场 handler 点掉。
+
+        那页有真正的二选一卡（handle_boost_training 处理），抢走就等于随机选一张。
+        """
+        texts = [box(60, 200, "球队经理的帮助", 240, 60),
+                 box(700, 180, "请选择一种加强训练", 600, 60),
+                 box(590, 260, "100%", 80, 40),
+                 box(990, 260, "100%", 80, 40),
+                 box(590, 430, "+12", 90, 50),
+                 box(990, 430, "+36", 90, 50),
+                 box(590, 640, "确定", 200, 60)]
+        task = FakeTask(texts)
+        self.assertFalse(task.handle_popup(texts))
+        self.assertTrue(task.handle_boost_training(texts))
+
     def test_multi_choice_skips_flat_stamina(self):
         """2026-10-27 10:09 实机：三个选项里「不理会(精力+10)」被选中，实际该选属性。
 

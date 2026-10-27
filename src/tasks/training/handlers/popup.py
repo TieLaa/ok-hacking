@@ -85,9 +85,11 @@ class PopupHandlers:
             self.log_info("弹窗：点击屏幕继续")
             return True
         # 训练后的过场动画（2026-10-27 用户截图）：「球队经理的帮助！」+ 经理立绘，
-        # 点屏幕任意位置继续。以前没人认领 → 走 unknown 兜底 + 每 3 秒存证一张
-        # （一局攒了 16 张「没见过这个界面」，日志看起来像识别不了）。
-        if self.match_text(texts, "球队经理的帮助") is not None:
+        # 点屏幕任意位置继续。以前没人认领 → 走 unknown 兜底 + 每 3 秒存证一张。
+        # **必须排除加强训练页**：那页左上角也写着「球队经理的帮助」，
+        # 而它有真正的二选一卡（handle_boost_training 处理），不能被这里点掉。
+        if (self.match_text(texts, "球队经理的帮助") is not None
+                and self.match_text(texts, "加强训练") is None):
             self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=0.5)
             self.log_info("过场：球队经理的帮助")
             return True
