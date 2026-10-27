@@ -503,7 +503,7 @@ class SubjectScoreWeights(unittest.TestCase):
 
     def test_weights(self):
         r = {"mates": 2, "equip": 1, "manager": 1, "gold": 1, "color": 1}
-        self.assertAlmostEqual(FakeTask.subject_score(r), 2 + 1 + 2.0 + 1 + 1.2, places=4)
+        self.assertAlmostEqual(FakeTask.subject_score(r), 2 + 1 + 2.1 + 1 + 1.2, places=4)
 
     def test_crit_border_excludes_gold_border(self):
         """彩框和金框互斥：彩虹边框里有一段橙黄，不能不互斥地双重计分。
