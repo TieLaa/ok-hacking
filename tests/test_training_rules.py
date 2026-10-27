@@ -239,6 +239,36 @@ class EventRules(unittest.TestCase):
         self.assertTrue(task.handle_result(texts))                 # 交给结算页
         self.assertEqual(task.actions[-1][1], "下一步")
 
+    def test_weekend_movie_dialogue_not_choice(self):
+        """2026-10-27 10:07 实机：周末前「和角色去看电影」的对话被当成竖向三选一。
+
+        日志原文：`事件选项（竖向）：我要去和小式一起去看电影、《飞天鱼人、大战十三头鲨》
+        → 选第一个「我要去和小式一起去看电影」`，连点 5 拍都是空点；
+        这页正确做法是点一下推进，回到周末首页再点「出行」。
+        """
+        texts = [
+            box(1073, 202, "我要去和小式一起去看电影", 444, 50),
+            box(1073, 305, "《飞天鱼人、大战十三头鲨》", 444, 50),
+            box(1600, 50, "跳过", 90, 40),
+        ]
+        task = FakeTask(texts)
+        # 右上角「跳过」确实在 top_right 区域（has_skip 成立，旧逻辑就靠它命中）
+        self.assertIsNotNone(
+            task.match_text(task.texts_in_region(texts, "top_right"), "跳过"))
+        self.assertFalse(task.handle_event_choice(texts))
+        self.assertEqual(task.actions, [])
+
+    def test_movie_dialogue_without_punct_still_not_choice(self):
+        """OCR 漏读顿号时，靠书名号把作品名排掉，仍然只剩 1 项 → 不是选项。"""
+        texts = [
+            box(1073, 202, "我要去和小式一起去看电影", 444, 50),
+            box(1073, 305, "《飞天鱼人大战十三头鲨》", 444, 50),
+            box(1600, 50, "跳过", 90, 40),
+        ]
+        task = FakeTask(texts)
+        self.assertEqual(task.choice_candidates(texts), [])
+        self.assertFalse(task.handle_event_choice(texts))
+
     def test_week_summary_not_choice(self):
         """2026-10-27 00:02 实机：本周总结页左列位置名被当成竖向三选一。
 
@@ -409,6 +439,42 @@ class WeekendMapRules(unittest.TestCase):
 
     MAP = [box(814, 461, "游戏厅", 148, 57), box(1538, 606, "公园", 102, 51),
            box(258, 748, "餐厅", 104, 60), box(1010, 897, "步行街", 148, 58)]
+
+    def _home_texts(self, day):
+        return [box(30, 20, "第1周", 120, 40),
+                box(200, 20, day, 130, 40),
+                box(380, 16, "120/130", 210, 53),
+                box(950, 560, "商店", 130, 50),
+                box(1150, 700, "出行", 160, 70)]
+
+    def test_sunday_enters_shop_too(self):
+        """周六、周日首页都有商店入口（用户 2026-10-27 现场确认）。
+
+        旧版判据里写了 `day != "日"`，把周日挡掉，等于每周少逛一次店。
+        """
+        task = FakeTask(self._home_texts("星期日"), config={"流派": "商店流"})
+        self.assertTrue(task.handle_go_out(task._texts))
+        self.assertEqual(task.actions[-1][0], "click_box")
+        self.assertEqual(task.actions[-1][1], "商店")
+
+    def test_saturday_enters_shop(self):
+        task = FakeTask(self._home_texts("星期六"), config={"流派": "商店流"})
+        self.assertTrue(task.handle_go_out(task._texts))
+        self.assertEqual(task.actions[-1][1], "商店")
+
+    def test_shop_only_once_per_day(self):
+        """同一天不重复进店：第二拍直接点「出行」。"""
+        task = FakeTask(self._home_texts("星期日"), config={"流派": "商店流"})
+        task.handle_go_out(task._texts)
+        task.actions.clear()
+        self.assertTrue(task.handle_go_out(task._texts))
+        self.assertEqual(task.actions[-1][1], "出行")
+
+    def test_training_style_never_enters_shop(self):
+        """训练流不逛商店（钱优先换步行街/游戏厅的黄道具）。"""
+        task = FakeTask(self._home_texts("星期六"), config={"流派": "训练流"})
+        task.handle_go_out(task._texts)
+        self.assertEqual(task.actions[-1][1], "出行")
 
     def test_all_places_visited_exits_map(self):
         task = FakeTask(list(self.MAP))

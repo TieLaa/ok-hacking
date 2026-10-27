@@ -336,7 +336,9 @@ class MatchHandlers:
         # （2026-10-27 00:02 周结算页 5 个位置名「控卫…中锋」就是这样被当成选项的）
         if group and len(group) > 3:
             return False
-        if group and (has_skip or len(group) >= 3):
+        # 只有 1 项也不是选项：剧情页右上角同样有「跳过」，has_skip 会把它放进来
+        # （2026-10-27 10:07 周末前对话「我要去和小式一起去看电影」被点 5 次空点）
+        if group and len(group) >= 2 and (has_skip or len(group) >= 3):
             pick = min(group, key=lambda t: t.y)
             if os.environ.get("OK_DUMP_CHOICES"):
                 self.dump_unknown(texts, "choice_vertical")

@@ -409,16 +409,12 @@ class WeekendHandlers:
         # 商店只有「商店流」才进（用户 2026-10-26：训练流的钱优先换步行街/游戏厅的黄色道具）
         if self.style == "商店流":
             st = self.weekend_state()
-            day = st["date"][1] if st["date"] else None
-            week = st["date"][0] if st["date"] else None
-            if week is None:
-                # 顶栏 OCR 偶尔读不到周数；沿用上次的周，避免同一周重复进店
-                week = self._shop_week
             shop = self.match_text(texts, "商店")
-            if (shop is not None and day != "日" and not st["shop_checked"]
-                    and self._shop_week != week):
+            # 周六、周日首页都有商店入口（用户 2026-10-27 确认），两天各进一次。
+            # weekend_state 按「第N周+星期X」重置，shop_checked 天然就是"每天一次"；
+            # 旧版用 `day != "日"` 把周日挡掉了，等于每周少逛一次店。
+            if shop is not None and not st["shop_checked"]:
                 st["shop_checked"] = True
-                self._shop_week = week
                 self.click_box(shop, after_sleep=0.9)
                 self.log_info("周末：商店流，先去商店")
                 return True

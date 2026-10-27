@@ -106,7 +106,6 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self._stuck_rounds = 0          # 已经被判定「点不动」的轮数
         # 周末状态：按「第N周+星期X」区分，跨天自动重置
         self._weekend = {"date": None, "shop_checked": False, "bought": False, "park_choice": None}
-        self._shop_week = None          # 同一周只逛一次商店（顶栏星期 OCR 抖动时防止重复进店）
         self._shop_day = None           # 每天逛一次商店：按（第N周, 星期X）去重
         self._shop_at = 0.0             # 读不到星期时的兜底冷却（秒）
         self._shop_key = None           # 本次进店用的日期键（关店时写回 _shop_day）
