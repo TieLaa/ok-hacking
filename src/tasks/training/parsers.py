@@ -281,13 +281,21 @@ class TrainingParsersMixin:
 
     def card_band_quality(self, cx):
         """取卡片标题条（y≈0.36~0.43）的底色，返回 金/紫/蓝/其他 与 H/S。"""
+        return self.card_quality_at(cx, 0.36, 0.43)
+
+    def card_quality_at(self, cx, y1f, y2f):
+        """按比例框取卡片底色判断品质，返回 金/紫/蓝/其他 与中位 H/S。
+
+        `cx` / `y1f` / `y2f` 都是比例（0~1）：扭蛋页用标题条 0.36~0.43，
+        游戏厅卡片用自己的卡面区间（2026-10-27），两种情况共用同一套色相阈值。
+        """
         frame = self.frame
         if frame is None:
             return "其他", -1, -1
         h, w = frame.shape[:2]
         x1 = int(w * (cx - 0.06))
         x2 = int(w * (cx + 0.06))
-        y1, y2 = int(h * 0.36), int(h * 0.43)
+        y1, y2 = int(h * y1f), int(h * y2f)
         roi = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
         if roi.size == 0:
             return "其他", -1, -1

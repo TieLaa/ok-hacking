@@ -463,16 +463,31 @@ class WeekendHandlers:
                 if not (t.y < d.y < t.y + self.height * 0.12):
                     continue
                 price = int(v) if price is None else min(price, int(v))
+            # 品质：取卡片「名字那一行 → 奖励那一行」之间的底色（用户 2026-10-27：
+            # 只买金/紫，蓝卡和白卡不买）。名字框在同一列、奖励上方。
+            name_box = next((o for o in texts
+                             if o.name.strip() == m.group(1)
+                             and abs((o.x + o.width / 2) - cx) < band
+                             and o.y < t.y), None)
+            y1f = ((name_box.y / self.height) if name_box is not None
+                   else t.y / self.height - 0.10)
+            q, qh, qs = self.card_quality_at(cx / self.width, y1f,
+                                             t.y / self.height)
             cards.append({"attr": m.group(1), "hi": int(m.group(3)),
-                          "box": t, "auto": auto, "price": price})
+                          "box": t, "auto": auto, "price": price,
+                          "quality": q, "hue": qh, "sat": qs})
+            self.log_debug(f"游戏厅卡片：{m.group(1)} 奖励{m.group(2)}~{m.group(3)}"
+                           f" 自动={auto} 品质={q}(H={qh:.0f} S={qs:.0f}) 价格={price}")
 
-        auto_cards = [c for c in cards if c["auto"]]
-        if not auto_cards:
-            self.log_warning("游戏厅：没有带「自动」的小游戏（都没打过，进去要真人打），退出")
-            # 游戏厅选择页没有「跳过」时，back() 点左上角无效（2026-10-26 卡死），
-            # 返回箭头在右上角，和商店/公园一致。
+        ok_cards = [c for c in cards if c["auto"] and c["quality"] in ("金", "紫")]
+        if not ok_cards:
+            self.log_warning("游戏厅：没有「自动」+ 金/紫的小游戏（"
+                             + "、".join(f"{c['attr']}/{c['quality']}"
+                                        f"{'/自动' if c['auto'] else ''}"
+                                        for c in cards) + "），退出")
             self.exit_page()
             return True
+        auto_cards = ok_cards
 
         auto_cards.sort(key=lambda c: -c["hi"])
         pick = None

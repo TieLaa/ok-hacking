@@ -719,9 +719,11 @@ class RingDetection(unittest.TestCase):
 class ArcadeRules(unittest.TestCase):
     """游戏厅：「自动」= 打过的小游戏，只能买带它那几张（用户 2026-10-27）。"""
 
-    def _task(self, texts, money=300, pay=True):
+    def _task(self, texts, money=300, pay=True, quality="金"):
         task = FakeTask(texts, config={"游戏厅付费": pay})
         task.read_money = lambda texts=None: money
+        # 品质靠帧取色，测试里直接给结论（金/紫才买）
+        task.card_quality_at = lambda cx, y1, y2: (quality, 30 if quality == "金" else 100, 150)
         return task
 
     def test_only_auto_card_is_bought(self):
@@ -737,6 +739,19 @@ class ArcadeRules(unittest.TestCase):
         task = self._task(texts)
         self.assertTrue(task.handle_arcade(texts))
         self.assertEqual(task.actions[-2][1], "弹跳20~70")
+
+    def test_blue_card_is_not_bought(self):
+        """蓝色品质不买（用户 2026-10-27：只买黄/紫 + 带自动）。"""
+        texts = [
+            box(600, 115, "请选择一个小游戏", 220, 36),
+            box(199, 236, "自动", 64, 30),
+            box(308, 238, "弹跳", 70, 42),
+            box(251, 370, "弹跳20~70", 155, 31),
+            box(615, 646, "确定", 71, 39),
+        ]
+        task = self._task(texts, quality="蓝")
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertEqual(task.actions[-1][0], "click")      # 只退出，不买
 
     def test_no_auto_card_exits(self):
         texts = [
