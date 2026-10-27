@@ -4,9 +4,11 @@
 - ok-script GUI 会自己乱飘（每次 ShowWindow/geometry 事件都可能换位置），
   所以每次点击都必须**当场读窗口矩形**，不能用记下来的屏幕坐标；
 - 任务卡位置会变（跑完之后顶部会展开「已完成」面板，卡片整体下移），
-  所以按候选 y 逐个试，用日志里的 `queued onetime_task` 确认是否真的点上了；
-- 点完必须把 ok-script 窗口**最小化**，否则它会突然抢到前台，
-  真实鼠标事件就全打到 GUI 上（实训：点击全落空，看起来像"点在没反应的地方"）。
+  所以按候选 y 逐个试，用日志里的 `queued onetime_task` 确认是否真的点上了
+  （**要连任务名一起核对**：4 张卡都会打这行日志，点歪到示例卡也"成功"，
+  实训 2026-10-27 09:42 白跑一轮）；
+- 点完不用最小化 GUI，也不用把游戏拉前台：输入层是后台点击（PostMessage，
+  2026-10-27 起），前台是谁都不影响点击落点。
 
 用法：
     python tools/start_ok_task.py
@@ -31,6 +33,9 @@ LOG = os.path.join(ROOT, "logs", "ok-script.log")
 # 相对于 ok-script 主窗口左上角的「开始」按钮候选位置（窗口固定 1200x800）
 CANDIDATE_Y = (89, 470, 350, 210)
 BUTTON_X = 1089
+
+# 只有排上这些任务名才算成功（否则是点到了别的任务卡）
+TARGET_KEYWORDS = ("训练循环", "TrainingTask")
 
 
 def find_ok_window():
@@ -68,11 +73,20 @@ def log_tail(n=200):
         return []
 
 
-def queued_since(mark):
+def queued_task_since(mark):
+    """返回 mark 之后排队的任务名（没有则 None）。
+
+    只判断「有没有排上队」不够：任务卡有 4 张，点歪到示例卡也会打日志
+    （实训 2026-10-27 09:42：点成 Configuration Demo Task，白跑一轮）。
+    """
     for line in log_tail(400):
         if "queued onetime_task" in line and line[:19] >= mark:
-            return True
-    return False
+            return line.split("queued onetime_task", 1)[1].strip()
+    return None
+
+
+def is_target(name):
+    return any(k in name for k in TARGET_KEYWORDS)
 
 
 def main():
@@ -94,35 +108,36 @@ def main():
 
     mark = time.strftime("%Y-%m-%d %H:%M:%S")
     clicked = None
+    wrong = None
     for dy in CANDIDATE_Y:
         rect = win32gui.GetWindowRect(ok)
         x, y = rect[0] + BUTTON_X, rect[1] + dy
         real_click(x, y)
-        time.sleep(1.6)
-        if queued_since(mark):
+        # App 刚启动时头几秒的点击会被吞（2026-10-27 09:41 实训），所以每个位置
+        # 都轮询 4 秒再换下一个候选
+        name = None
+        for _ in range(8):
+            time.sleep(0.5)
+            name = queued_task_since(mark)
+            if name:
+                break
+        if name and is_target(name):
             clicked = (x, y)
+            break
+        if name:
+            wrong = (y, name)
             break
 
     if clicked is None:
+        if wrong:
+            print(f"排上的是别的任务（y={wrong[0]} → {wrong[1]}），请先停掉它再重试")
+            return 2
         print("点了所有候选位置都没排队成功")
         return 1
     print(f"已排队，点击位置 {clicked}")
 
-    # 关键：立刻最小化 GUI，别让它抢前台
-    win32gui.ShowWindow(ok, win32con.SW_MINIMIZE)
-    time.sleep(0.4)
-
-    game = find_game_window()
-    if game:
-        win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
-        time.sleep(0.02)
-        try:
-            win32gui.SetForegroundWindow(game)
-        except Exception:
-            pass
-        win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
-        time.sleep(0.4)
-        print("游戏前台:", win32gui.GetForegroundWindow() == game)
+    # 2026-10-27 起输入层是后台点击（PostMessage），不再需要最小化 GUI，
+    # 也不需要把游戏拉回前台：GUI 留着让用户看见状态就行。
     return 0
 
 

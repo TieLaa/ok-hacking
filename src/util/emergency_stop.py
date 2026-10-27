@@ -45,6 +45,11 @@ DEFAULT_KEYS = (
 # 2026-10-26 实机：F8 被占用后只抢到 Ctrl+Alt+F12，用户按 F8 完全没反应。
 POLL_KEYS = ((0x77, "F8"), (0x7B, "F12"))
 
+# 轮询必须连续 N 拍为按下才算真按：0.05s 单拍噪声（手柄/其他软件转发按键、
+# GetAsyncKeyState 的瞬时抖动）会在用户没按键时误触发。2026-10-27 09:47 实机
+# 误报一次，任务白停。真按住 F8 一般 ≥200ms，3 拍（~150ms）不会漏。
+POLL_CONFIRM_TICKS = 3
+
 
 class EmergencyStop:
     """一个可复用的“紧急停止”信号。"""
@@ -121,19 +126,23 @@ class EmergencyStop:
     def _poll(self):
         """GetAsyncKeyState 轮询兜底：不注册、不独占，别的程序占了 F8 也能收到。"""
         user32 = ctypes.windll.user32
-        was_down = {vk: False for vk, _ in POLL_KEYS}
+        counts = {vk: 0 for vk, _ in POLL_KEYS}
         while True:
             time.sleep(0.05)
             try:
                 for vk, label in POLL_KEYS:
-                    down = bool(user32.GetAsyncKeyState(vk) & 0x8000)
-                    if down and not was_down[vk]:
-                        logger.warning(f"按下 {label}（轮询兜底）→ 请求停止")
-                        if not self.label:
-                            self.label = label
-                        self.last_press = label
-                        self.event.set()
-                    was_down[vk] = down
+                    if user32.GetAsyncKeyState(vk) & 0x8000:
+                        counts[vk] += 1
+                        if counts[vk] == POLL_CONFIRM_TICKS:
+                            logger.warning(f"按住 {label}（轮询兜底 {counts[vk]} 拍）→ 请求停止")
+                            if not self.label:
+                                self.label = label
+                            self.last_press = label
+                            self.event.set()
+                        elif counts[vk] < POLL_CONFIRM_TICKS:
+                            logger.debug(f"{label} 单拍按下（{counts[vk]} 拍），等确认")
+                    else:
+                        counts[vk] = 0
             except Exception as e:                  # noqa: BLE001
                 logger.debug(f"轮询热键异常: {type(e).__name__}: {e}")
                 time.sleep(1)
