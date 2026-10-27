@@ -26,6 +26,8 @@ sys.path.insert(0, ROOT)
 
 from ok.feature.Box import Box  # noqa: E402
 from tools.check_handlers import DryRunTask  # noqa: E402
+from src.tasks.training.parsers import (  # noqa: E402
+    CRIT_RING_MIN, ring_is_border)
 
 
 def box(x, y, name, w=240, h=60):
@@ -512,8 +514,8 @@ class SubjectScoreWeights(unittest.TestCase):
         科目按钮彩框 ↔ 中间装备卡彩框，是同一个来源。
         """
         task = FakeTask([])
-        task.has_crit_border = lambda texts=None: True
-        task.has_gold_border = lambda texts=None: True     # 即使金框也判 True
+        task.has_crit_border = lambda texts=None, subject=None: True
+        task.has_gold_border = lambda texts=None, subject=None: True   # 即使金框也判 True
         task.read_equipment = lambda texts: (1, 1)
         task.read_scene = lambda texts: {"names": [], "mates": 0, "manager": 0}
         r = task.analyze_preview([])
@@ -525,8 +527,8 @@ class SubjectScoreWeights(unittest.TestCase):
     def test_borders_come_from_button_not_from_cards(self):
         """金框/彩框只看科目按钮外圈；器材卡再多也不额外加分（避免重复计分）。"""
         task = FakeTask([])
-        task.has_gold_border = lambda texts=None: True
-        task.has_crit_border = lambda texts=None: False
+        task.has_gold_border = lambda texts=None, subject=None: True
+        task.has_crit_border = lambda texts=None, subject=None: False
         task.read_equipment = lambda texts: (3, 2)          # 3 张卡、2 张满经验
         task.read_scene = lambda texts: {"names": [], "mates": 0, "manager": 0}
         r = task.analyze_preview([])
@@ -537,6 +539,20 @@ class SubjectScoreWeights(unittest.TestCase):
         self.assertAlmostEqual(task.subject_score(r), 3 + 2.2, places=4)
         # 旧实现「数器材卡上的金框」已经删掉，防止有人再把它加回来重复计分
         self.assertFalse(hasattr(task, "count_gold_cards"))
+
+    def test_ring_threshold_ignores_selection_highlight(self):
+        """选中行天然就比别的行橙（0.075~0.114），不能当成金框。
+
+        2026-10-27 第六局：21 次选科目报 13 次金框，用户当场指出「刚才没有金框」。
+        真彩虹框实测 0.333，西瓜图标那行 0.100。
+        """
+        self.assertFalse(ring_is_border(0.114, 0.027))      # 旧门限 0.10 会误判
+        self.assertFalse(ring_is_border(0.103, 0.027))
+        self.assertFalse(ring_is_border(0.100, 0.024))      # 西瓜图标
+        self.assertFalse(ring_is_border(0.150, 0.005))      # 低于绝对下限
+        self.assertTrue(ring_is_border(0.333, 0.024))       # 真彩虹/金框
+        self.assertFalse(ring_is_border(0.431, 0.554))      # 度假页：整屏都黄，基线也高
+        self.assertTrue(ring_is_border(0.333, None, floor=CRIT_RING_MIN))
 
 
 class EffectExpectation(unittest.TestCase):

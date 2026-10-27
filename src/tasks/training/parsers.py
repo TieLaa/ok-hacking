@@ -18,6 +18,31 @@ import numpy as np
 from src.tasks.ui import Defs  # noqa: F401
 from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 
+# 科目按钮外圈「框」的判定门限（比例 = 环带上命中像素 / 环带总像素）。
+# 2026-10-27 第六局实跑 + 用户当场复核：
+#   - 普通科目页里被点开的那一行，环带天然就有 0.075~0.114 的橙黄（选中高亮 +
+#     科目图标本身），旧门限 0.10 全被当成金框（21 次选科目报 13 次，用户指出
+#     「刚才没有金框」）；
+#   - 真彩虹框同一套环形采样是 0.333，西瓜图标那一行是 0.100。
+# 所以两者都取 0.20 作下限，金框再加「明显高于其它行中位数」这一条。
+GOLD_RING_MIN = 0.20
+GOLD_RING_FACTOR = 2.0
+CRIT_RING_MIN = 0.20
+
+
+def ring_is_border(ratio, baseline=None, floor=GOLD_RING_MIN,
+                   factor=GOLD_RING_FACTOR):
+    """环带命中比例 → 是不是「真外圈」。
+
+    绝对下限挡掉选中高亮/科目图标自带的那点颜色；给了 baseline（其它行中位数）
+    时还要求明显高于基线，度假页那种整屏偏黄就不会误判。
+    """
+    if ratio <= floor:
+        return False
+    if baseline is None:
+        return True
+    return ratio > baseline * factor
+
 
 class TrainingParsersMixin:
 
@@ -396,12 +421,13 @@ class TrainingParsersMixin:
 
     def probe_subject(self, box):
         """点开一个科目，返回预览信息：队友数 / 装备数 / 满经验数 / 彩虹边框。"""
+        name = (box.name or "").strip()
         self.click_box(box, after_sleep=0.55)
         texts = self._ocr_region()
         self.log_debug(f"场上角色名：{self.scene_names(texts)}")
-        return self.analyze_preview(texts)
+        return self.analyze_preview(texts, subject=name)
 
-    def analyze_preview(self, texts):
+    def analyze_preview(self, texts, subject=None):
         """读一帧科目预览，返回打分要用的全部字段。
 
         - 队友 / 经理：场景里飘在角色头顶的名字（经理的名字牌就是「球队经理」，
@@ -410,15 +436,19 @@ class TrainingParsersMixin:
         - 金框 / 彩框：**训练科目按钮外面那一圈**（用户 2026-10-27 口径）。
           框本来就是装备/经理经验满了才点亮的，如果再去数器材卡上的金框，
           等于和「装备」重复计分，所以器材卡只按张数算一次。
+
+        `subject` = 这次要评分的科目名。框是**常驻**的（用户 2026-10-27：
+        「金框彩框很显眼，不需要选中也会亮起」），所以按科目名找它自己那一行，
+        不要用「决定按钮所在行」去猜（旧做法在 56 次探测里错了 10 次）。
         """
         scene = self.read_scene(texts)
         equip, full = self.read_equipment(texts)
-        crit = self.has_crit_border(texts)
+        crit = self.has_crit_border(texts, subject=subject)
         # 彩框和金框**互斥**：彩虹边框里本来就有一段橙黄，若不互斥，
         # 同一个按钮会同时算「金框 1.0 + 彩框 1.2」，等于一物两记。
         # 而且两者同源（装备/经理经验满了才亮），本来就不该叠加
         # （用户 2026-10-27 截图：科目按钮彩框 ↔ 中间装备卡彩框）。
-        gold = 0 if crit else (1 if self.has_gold_border(texts) else 0)
+        gold = 0 if crit else (1 if self.has_gold_border(texts, subject=subject) else 0)
         return {
             "names": scene["names"],
             "mates": scene["mates"],
@@ -513,15 +543,21 @@ class TrainingParsersMixin:
             full += max_count
         return equip, full
 
-    def has_gold_border(self, texts=None):
-        """选中的科目大按钮有没有**金色边框**（装备/经理经验满了会点亮）。
+    def has_gold_border(self, texts=None, subject=None):
+        """科目按钮外圈有没有金色边框。
 
-        用户 2026-10-27 口径：金框/彩框都指科目按钮外面那一圈，不是器材卡。
+        用户 2026-10-27 口径：金框/彩框都指科目按钮外面那一圈，不是器材卡；
+        而且**框是常驻的，不需要选中也会亮**，所以按科目名找它自己那一行。
 
         **必须用「相对亮度」判，不能只看绝对值**：海边度假那套界面里所有科目
         按钮本身就是橙黄色（等级强制 MAX），固定阈值会把 6 行全判成有金框。
-        做法：把 6 个科目按钮的环带都量一遍，只有选中行明显亮于其余行（中位数）
-        才算有框——整屏偏黄时基线也跟着抬高，自然判 False。
+        做法：把 6 个科目按钮的环带都量一遍，看目标行是否明显亮于其余行（中位数）。
+
+        门限 0.20（2026-10-27 第六局实跑 + 用户当场复核）：普通科目页里被点开的
+        那一行本来就比其它行更橙（选中高亮 + 科目图标本身），实测 0.075~0.114，
+        旧门限 0.10 把整批高亮都当成了金框（21 次选科目报了 13 次，用户指出
+        「刚才没有金框」）。真彩虹框同一套环形采样是 0.333，0.20 能把
+        「选中高亮」和「真外圈」分开；倍数条件同步抬到 2.0。
         """
         frame = self.frame
         if frame is None:
@@ -529,13 +565,21 @@ class TrainingParsersMixin:
         texts = texts if texts is not None else self._ocr_region()
         subjects = [t for t in texts
                     if t.name.strip() in Defs.TRAINING_SUBJECTS
-                    and (t.x + t.width / 2) / self.width > 0.7]
+                    and (t.x + t.width / 2) / max(self.width, 1) > 0.7]
         if len(subjects) < 2:
             return False
         h, w = frame.shape[:2]
-        decide = self.match_text(texts, "决定")
-        sel_cy = ((decide.y + decide.height / 2) if decide is not None
-                  else self.height / 2)
+
+        target = None
+        if subject:
+            target = next((t for t in subjects if t.name.strip() == subject), None)
+        if target is None:
+            # 没有指定科目（离线工具）才退回「决定按钮所在行」
+            decide = self.match_text(texts, "决定")
+            sel_cy = ((decide.y + decide.height / 2) if decide is not None
+                      else self.height / 2)
+            target = min(subjects,
+                         key=lambda t: abs((t.y + t.height / 2) - sel_cy))
 
         x1, x2 = int(w * 0.752), int(w * 0.968)
         t_ring = max(6, int(h * 0.012))
@@ -556,36 +600,44 @@ class TrainingParsersMixin:
             ring[:, -t_ring:] = True
             return float((gold & ring).sum()) / max(int(ring.sum()), 1)
 
-        rows = []
-        for s in subjects:
-            cy = s.y + s.height / 2
-            rows.append((abs(cy - sel_cy), ring_gold_ratio(cy), s.name.strip()))
-        rows.sort()
-        sel_ratio = rows[0][1]
-        others = sorted(r for _d, r, _n in rows[1:])
+        ratio = ring_gold_ratio(target.y + target.height / 2)
+        others = sorted(ring_gold_ratio(s.y + s.height / 2)
+                        for s in subjects if s is not target)
         baseline = others[len(others) // 2] if others else 0.0
-        self.log_debug(f"科目金框：选中 {rows[0][2]} 占比 {sel_ratio:.3f}，"
+        self.log_debug(f"科目金框：{target.name.strip()} 占比 {ratio:.3f}，"
                        f"其它行中位数 {baseline:.3f}")
-        # 比其它行明显更黄才算有框；整屏都黄（度假/全 MAX）时差值自然趋近 0
-        return sel_ratio > 0.10 and sel_ratio > baseline * 1.5
+        return ring_is_border(ratio, baseline)
 
-    def has_crit_border(self, texts=None):
-        """选中的科目大按钮有没有彩虹边框（= 有满经验器材，训练会暴击）。
+    def has_crit_border(self, texts=None, subject=None):
+        """科目按钮外圈有没有彩虹边框（= 有满经验器材，训练会暴击）。
 
-        注意：大按钮的位置随科目行变化（选中的科目会停在它原来的行），
-        所以不能写死 y=0.12~0.30；要用「决定」按钮的 y 找到它所在的那一行。
+        框常驻、不需要选中（用户 2026-10-27），所以按科目名定位那一行；
+        没有指定科目时退回「决定按钮所在行」。
         只采样按钮**边缘一圈**：按钮内部的科目图标（西瓜/鞋）有绿色/红色，
         采样整块会把普通科目误判成彩虹（实训 2026-10-26）。
+
+        门限 0.20：实测真彩虹框 = 0.333，西瓜图标那一行 = 0.100，
+        旧门限 0.06 会把西瓜当彩虹。
         """
         frame = self.frame
         if frame is None:
             return False
         texts = texts if texts is not None else self._ocr_region()
-        decide = self.match_text(texts, "决定")
-        if decide is None:
-            return False
         h, w = frame.shape[:2]
-        cy = decide.y + decide.height / 2
+
+        cy = None
+        if subject:
+            row = next((t for t in texts
+                        if t.name.strip() == subject
+                        and (t.x + t.width / 2) / max(self.width, 1) > 0.7), None)
+            if row is not None:
+                cy = row.y + row.height / 2
+        if cy is None:
+            decide = self.match_text(texts, "决定")
+            if decide is None:
+                return False
+            cy = decide.y + decide.height / 2
+
         x1, x2 = int(w * 0.66), int(w * 0.93)
         y1 = max(0, int(cy - h * 0.06))
         y2 = min(h, int(cy + h * 0.06))
@@ -604,9 +656,8 @@ class TrainingParsersMixin:
         ring[:, -t:] = True
         hit = (magenta | green) & ring
         ratio = float(hit.sum()) / max(int(ring.sum()), 1)
-        if ratio > 0.02:
-            self.log_debug(f"科目大按钮彩虹占比 {ratio:.3f}")
-        return ratio > 0.06
+        self.log_debug(f"科目彩框：{subject or '当前行'} 占比 {ratio:.3f}")
+        return ring_is_border(ratio, floor=CRIT_RING_MIN)
 
     def scene_names(self, texts):
         """过滤出训练场景里飘在角色头顶的名字。"""

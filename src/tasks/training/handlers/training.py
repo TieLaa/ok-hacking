@@ -156,7 +156,7 @@ class TrainingHandlers:
         current = self.current_subject(texts)
         results = {}
         if current in boxes:
-            results[current] = self.analyze_preview(texts)
+            results[current] = self.analyze_preview(texts, subject=current)
             r = results[current]
             self.log_info(
                 f"当前已选「{current}」：队友 {r['mates']}｜经理 {r['manager']}"
