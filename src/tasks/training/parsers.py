@@ -504,18 +504,28 @@ class TrainingParsersMixin:
 
         min_w, max_w = int(w * 0.05), int(w * 0.20)
         count = 0
+        rejects = []
         for i in range(1, n):
             x, y, ww, hh, area = stats[i]
+            reason = None
             if area < 800:
-                continue
-            if not (min_w <= ww <= max_w and min_w <= hh <= max_w):
-                continue
-            if not (0.6 <= ww / max(hh, 1) <= 1.6):
-                continue
-            if area < ww * hh * 0.30:
+                reason = "太小"
+            elif not (min_w <= ww <= max_w and min_w <= hh <= max_w):
+                reason = f"尺寸 {ww}x{hh} 不在 {min_w}~{max_w}"
+            elif not (0.6 <= ww / max(hh, 1) <= 1.6):
+                reason = f"长宽比 {ww / max(hh, 1):.2f}"
+            elif area < ww * hh * 0.30:
+                reason = f"实心 {area / (ww * hh):.2f}"
+            if reason:
+                rejects.append((area, f"{reason} @({x + ww // 2},{y + hh // 2})"))
                 continue
             count += 1
             self.log_debug(f"金框器材 @({x + ww // 2},{y + hh // 2}) {ww}x{hh} 实心 {area / (ww * hh):.2f}")
+        if not count and rejects:
+            # 没数到金框时把最像的几个候选和淘汰原因打出来，方便下次实跑校准阈值
+            # （2026-10-27 10:08 整局科目页都是「金框 0」，需要现场数据判断是没金卡还是阈值不中）
+            top = sorted(rejects)[-3:]
+            self.log_debug("金框：无合格块，候选 " + "｜".join(t for _a, t in top))
         return count
 
     def has_crit_border(self, texts=None):
