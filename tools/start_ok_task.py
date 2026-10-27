@@ -7,8 +7,9 @@
   所以按候选 y 逐个试，用日志里的 `queued onetime_task` 确认是否真的点上了
   （**要连任务名一起核对**：4 张卡都会打这行日志，点歪到示例卡也"成功"，
   实训 2026-10-27 09:42 白跑一轮）；
-- 点完不用最小化 GUI，也不用把游戏拉前台：输入层是后台点击（PostMessage，
-  2026-10-27 起），前台是谁都不影响点击落点。
+- 点完不用最小化 GUI：输入层是**真实 mouse_event（物理鼠标）**，不是 PostMessage
+  （2026-10-25 实测 PostMessage 对这个 Unity 客户端完全无效）。
+  所以调用方要把游戏拉回前台——GirlsInteraction 每次点击前都会 ensure_foreground()。
 
 用法：
     python tools/start_ok_task.py

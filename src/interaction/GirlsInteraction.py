@@ -87,7 +87,9 @@ class GirlsInteraction(BaseInteraction):
         for attempt in range(tries):
             fg = win32gui.GetForegroundWindow()
 
-            # 1) Alt 技巧
+            # 1) Alt 技巧（只在游戏不在前台时才会走到这里：
+            #    上面已经「前台就是游戏 → 直接 return True」）
+            logger.debug(f"抢前台 attempt {attempt}：注入 Alt + SetForegroundWindow")
             win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
             time.sleep(0.02)
             try:
