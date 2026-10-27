@@ -423,6 +423,46 @@ class WeekendHandlers:
                 self.click_box(confirm, after_sleep=0.45)
             self.log_info("游戏厅：跳过已三星小游戏")
             return True
+        # 2) 没有可跳过的：直接花钱进一个「自动」小游戏（2026-10-27 用户要求）。
+        # 页面结构（实拍 2026-10-27 18:34）：
+        #   请选择一个小游戏
+        #   [自动 弹跳 普通] 奖励：弹跳20~70   打折 64
+        #   [自动 运控 普通] 奖励：运控20~70   打折 64
+        #   [自动 投射 困难] 奖励：投射30~100  打折 80
+        #   [能力详情] [确定]
+        # 探针实测：点「确定」会扣零用钱（219→155）并进入小游戏，**全程自动打完**，
+        # 之后是普通剧情/结算页，交给通用 handler 推进。所以这里只要选一张卡 + 确定。
+        if not self.config.get("游戏厅付费", True):
+            self.log_info("游戏厅：未开启付费，退出")
+            self.exit_page()
+            return True
+        cards = []
+        for t in texts:
+            m = re.search(r"(投射|弹跳|防守|体能|运控|意识)\s*(\d+)\s*[~～]\s*(\d+)",
+                          t.name)
+            if m:
+                cards.append({"attr": m.group(1), "hi": int(m.group(3)), "box": t})
+        money = self.read_money(texts)
+        cards.sort(key=lambda c: -c["hi"])
+        pick = None
+        if cards:
+            if money is None or money >= 100:
+                pick = cards[0]                    # 最贵那档，奖励最高
+            elif money >= 64:
+                pick = cards[-1]                   # 钱不够就买最便宜的
+        confirm = self.exact_text(texts, ("确定",))
+        if pick is not None and confirm is not None:
+            self.click_box(pick["box"], after_sleep=0.4)
+            self.click_box(confirm, after_sleep=1.0)
+            self.log_info(f"游戏厅：买了「{pick['attr']}」小游戏（奖励上限 "
+                          f"{pick['hi']}，零用钱 {money}），等它自己打完")
+            return True
+        if money is not None:
+            self.log_warning(f"游戏厅：零用钱 {money} 买不起（最低 64），退出")
+            # 游戏厅选择页没有「跳过」时，back() 点左上角无效（2026-10-26 卡死），
+            # 返回箭头在右上角，和商店/公园一致。
+            self.exit_page()
+            return True
         self.log_warning("游戏厅：没有可跳过的小游戏（未三星），点右上角返回")
         # 游戏厅选择页没有「跳过」时，back() 点左上角无效（2026-10-26 卡死），
         # 返回箭头在右上角，和商店/公园一致。

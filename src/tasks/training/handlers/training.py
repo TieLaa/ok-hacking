@@ -133,11 +133,9 @@ class TrainingHandlers:
                 return True
             self.log_warning(f"失败率 {fail}% 超过上限 {limit}%（配置为不休息，继续）")
 
-        boxes = {}
-        for name in Defs.TRAINING_SUBJECTS:
-            box = self.match_text(subjects, name)
-            if box is not None:
-                boxes[name] = box
+        # 用 subjects_from_texts：它会把被 OCR 拆成两个字的科目名合起来
+        # （2026-10-27 第 4 周度假页「防守」被读成「防」「守」→ 整个科目漏掉）
+        boxes = self.subjects_from_texts(texts)
         # 按屏幕从上到下探测（旧版按配置表扫，看起来像随机乱点 —— 用户 2026-10-26）
         boxes = dict(sorted(boxes.items(), key=lambda kv: kv[1].y))
 
@@ -234,8 +232,7 @@ class TrainingHandlers:
         （2026-10-27 17:04 实跑：找「防守」返回了「失败率0%」框，点到 (895,118)，
         等于没点开科目，预览还是别人的）。
         """
-        subjects = self.texts_in_region(self._ocr_region(), "subject_list")
-        return self.exact_text(subjects, (name,))
+        return self.subjects_from_texts(self._ocr_region()).get(name)
 
     def handle_daily_shop(self, texts):
         """训练日主界面：按零用钱余额决定要不要进商店。

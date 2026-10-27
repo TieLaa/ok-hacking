@@ -15,6 +15,8 @@ from collections import deque
 import cv2
 import numpy as np
 
+from ok.feature.Box import Box
+
 from src.tasks.ui import Defs  # noqa: F401
 from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 
@@ -352,6 +354,41 @@ class TrainingParsersMixin:
         if m := Defs.FAIL_RATE_RE.search(joined):
             return int(m.group(1))
         return None
+
+    def subjects_from_texts(self, texts):
+        """从 OCR 结果取「科目名 -> 框」，并把被 OCR 拆成两个字的科目合起来。
+
+        2026-10-27 第 4 周度假页实跑：「防守」被读成「防」「守」两个单字框，
+        科目直接漏掉（用户：「两次防守有队友都没有被识别到就直接跳过了」）。
+        这里把同一行相邻的两个单字拼回科目名，再用并集框当点击目标。
+        """
+        pool = self.texts_in_region(texts, "subject_list")
+        found = {}
+        for t in pool:
+            name = t.name.strip()
+            if name in Defs.TRAINING_SUBJECTS:
+                found.setdefault(name, t)
+        singles = [t for t in pool if len(t.name.strip()) == 1]
+        for i, a in enumerate(singles):
+            sa = a.name.strip()
+            acy = a.y + a.height / 2
+            for b in singles[i + 1:]:
+                name = sa + b.name.strip()
+                if name not in Defs.TRAINING_SUBJECTS or name in found:
+                    continue
+                if abs((b.y + b.height / 2) - acy) > a.height * 0.8:
+                    continue
+                gap = b.x - (a.x + a.width)
+                if gap > a.width * 1.5:
+                    continue
+                x = min(a.x, b.x)
+                y = min(a.y, b.y)
+                w = max(a.x + a.width, b.x + b.width) - x
+                h = max(a.y + a.height, b.y + b.height) - y
+                found[name] = Box(name=name, x=x, y=y, width=w, height=h)
+                self.log_debug(f"科目名被拆开，已合并：{sa}+{b.name.strip()} → {name}")
+                break
+        return found
 
     def current_subject(self, texts):
         """当前已选中的科目：右边有「决定」的那一行。"""
