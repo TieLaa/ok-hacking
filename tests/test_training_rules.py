@@ -656,6 +656,50 @@ class RegisterPlayerFlow(unittest.TestCase):
         self.assertLess(names.index("handle_register_player"), names.index("handle_popup"))
 
 
+class RingDetection(unittest.TestCase):
+    """金框/彩框必须量**指名科目的那一行**；指名的行不存在时判无框。
+
+    2026-10-27 17:04 事故：探测「防守」时 OCR 没认出防守那行，代码兜底退回
+    「决定所在行」= 投射，于是投射的金框 0.482 被记到防守头上，
+    两个科目同分 4.30，真正的金框科目被挤掉。
+    """
+
+    def _frame_with_gold_ring(self, cy):
+        frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        h, w = frame.shape[:2]
+        y1, y2 = int(cy - h * 0.055), int(cy + h * 0.055)
+        x1, x2 = int(w * 0.752), int(w * 0.968)
+        t = 14
+        orange = (30, 140, 255)                    # BGR
+        frame[y1:y1 + t, x1:x2] = orange
+        frame[y2 - t:y2, x1:x2] = orange
+        frame[y1:y2, x1:x1 + t] = orange
+        frame[y1:y2, x2 - t:x2] = orange
+        return frame
+
+    def test_named_row_only(self):
+        cy_hit, cy_other = 300, 700
+        frame = self._frame_with_gold_ring(cy_hit)
+        texts = [
+            box(1500, cy_hit - 30, "投射", 110, 66),
+            box(1500, cy_other - 30, "体能", 110, 66),
+        ]
+        task = DryRunTask(frame, texts)
+        self.assertTrue(task.has_gold_border(texts, subject="投射"))
+        self.assertFalse(task.has_gold_border(texts, subject="体能"))
+
+    def test_missing_row_is_not_gold(self):
+        """指名的科目这一帧没认出来 → 不能拿「决定所在行」顶替。"""
+        frame = self._frame_with_gold_ring(300)
+        texts = [
+            box(1500, 270, "投射", 110, 66),
+            box(1500, 670, "体能", 110, 66),
+            box(1700, 830, "决定", 158, 111),
+        ]
+        task = DryRunTask(frame, texts)
+        self.assertFalse(task.has_gold_border(texts, subject="防守"))
+
+
 class EffectExpectation(unittest.TestCase):
     """效果文本 → 真实属性总量（用户 2026-10-27 口径）。"""
 

@@ -573,6 +573,12 @@ class TrainingParsersMixin:
         target = None
         if subject:
             target = next((t for t in subjects if t.name.strip() == subject), None)
+            # 指定了科目但这一帧没找到它那一行 → 直接判「无框」。
+            # 2026-10-27 17:04 事故：探测「防守」时 OCR 没认出防守那行，
+            # 兜底退回「决定所在行」= 投射，把投射的金框 0.482 记到防守头上，
+            # 结果两个科目同分 4.30，把真正的金框科目挤掉了。
+            if target is None:
+                return False
         if target is None:
             # 没有指定科目（离线工具）才退回「决定按钮所在行」
             decide = self.match_text(texts, "决定")
@@ -631,8 +637,10 @@ class TrainingParsersMixin:
             row = next((t for t in texts
                         if t.name.strip() == subject
                         and (t.x + t.width / 2) / max(self.width, 1) > 0.7), None)
-            if row is not None:
-                cy = row.y + row.height / 2
+            if row is None:
+                # 同上：指名了科目却找不到，不能拿别的行顶替
+                return False
+            cy = row.y + row.height / 2
         if cy is None:
             decide = self.match_text(texts, "决定")
             if decide is None:

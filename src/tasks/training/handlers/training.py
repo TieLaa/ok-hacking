@@ -228,9 +228,14 @@ class TrainingHandlers:
         return True
 
     def find_subject_box(self, name):
-        """重新 OCR 当前帧，按名字找科目框（选中后按钮会整体上移，不能复用旧坐标）。"""
+        """重新 OCR 当前帧，按名字找科目框（选中后按钮会整体上移，不能复用旧坐标）。
+
+        必须**整词匹配**：match_text 的「拼接兜底」在没有匹配时会返回最大的那个框
+        （2026-10-27 17:04 实跑：找「防守」返回了「失败率0%」框，点到 (895,118)，
+        等于没点开科目，预览还是别人的）。
+        """
         subjects = self.texts_in_region(self._ocr_region(), "subject_list")
-        return self.match_text(subjects, name)
+        return self.exact_text(subjects, (name,))
 
     def handle_daily_shop(self, texts):
         """训练日主界面：按零用钱余额决定要不要进商店。
