@@ -233,7 +233,11 @@ class TrainingHandlers:
             return False
         if self.match_text(texts, "星期") is None or self.match_text(texts, "休息") is None:
             return False
-        if self.match_text(texts, "出行") is not None:
+        # 2026-10-27：改期角色入队后，训练日也会出现「出行」入口。
+        # 旧写法「有出行就不是训练日」会把这类训练日一整天都挡在商店外。
+        # 真正的区别是「休息」：训练日一定有休息/训练按钮，周末首页没有。
+        if (self.match_text(texts, "出行") is not None
+                and self.match_text(texts, "休息") is None):
             return False
         shop = self.match_text(texts, "商店")
         if shop is None:

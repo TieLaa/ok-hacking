@@ -21,6 +21,16 @@ from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 
 class TrainingParsersMixin:
 
+    # 商店商品格：实测 3 列 × 2 行（2026-10-27 商店帧 1920x1080）。
+    # 列中心 0.223 / 0.357 / 0.490（间距 0.134），行中心 0.368 / 0.634（间距 0.266）。
+    # 现状 5 件 = 3 + 2（第二行居中）；全局强化「商品+1」后是 6 件 = 3 + 3，
+    # 第 6 件与第 3 件同列（名称 y≈0.544、价格 y≈0.746），区域天然覆盖，不需要改判据。
+    # 注意：名称与价格只靠「水平距离 < 0.10w」配对，列间距实测 0.134，
+    # 余量只有 0.034。如果哪天变成 4 列（间距≈0.10）就会配错，必须同时改阈值。
+    SHOP_COLS = 3
+    SHOP_ROWS = 2
+    SHOP_MAX_ITEMS = SHOP_COLS * SHOP_ROWS
+
     def read_money(self, texts):
         """顶栏金币：体力条右边的独立数字（不含斜杠）。"""
         best = None
@@ -35,7 +45,12 @@ class TrainingParsersMixin:
         return best
 
     def read_shop_items(self, texts):
-        """解析商店左侧商品：名称 + 价格 + 卡片中心点击坐标。"""
+        """解析商店左侧商品：名称 + 价格 + 卡片中心点击坐标。
+
+        区域是**按实测网格**留的，不是按商品件数写死的：
+        第二行价格实测 y≈0.746，旧上限 0.75 只剩 4px 余量，
+        布局抖一下（换分辨率、强化加格子）第二行就整行消失 → 静默不买。
+        """
         prices = []
         for t in texts:
             s = t.name.strip()
@@ -43,7 +58,9 @@ class TrainingParsersMixin:
                 continue
             cx = (t.x + t.width / 2) / self.width
             cy = (t.y + t.height / 2) / self.height
-            if 0.15 <= cx <= 0.58 and 0.38 <= cy <= 0.75:
+            # 上限 0.82：覆盖第二行价格（0.746）并留 0.07 余量；
+            # 底部「上新时间」在 0.93 附近，不会被吃进来。
+            if 0.15 <= cx <= 0.58 and 0.38 <= cy <= 0.82:
                 prices.append((int(s), t))
 
         names = []
@@ -81,6 +98,12 @@ class TrainingParsersMixin:
                 "x": int(name.x + name.width / 2),
                 "y": int((name.y + name.height / 2 + pt.y) / 2),
             })
+        if len(items) > self.SHOP_MAX_ITEMS:
+            # 超容量说明布局变了（强化又加格子？）——不做截断，截断可能把最贵的丢掉，
+            # 但必须喊一声，否则就是静默少买/买错。
+            self.log_warning(
+                f"商店解析出 {len(items)} 件商品，超过 {self.SHOP_COLS}x{self.SHOP_ROWS} "
+                f"网格容量 {self.SHOP_MAX_ITEMS} 件，请补一张商店截图核区域")
         return items
 
     def card_quality(self, name_box, price_box):
@@ -278,7 +301,13 @@ class TrainingParsersMixin:
         """
         state = self.top_bar()
         key = (state.get("week"), state.get("day"))
-        if self._weekend.get("date") != key:
+        prev = self._weekend.get("date")
+        if prev != key:
+            if prev is not None:
+                # 观测用：改期角色「跳进其他流程」后顶栏日期会不会变还不知道。
+                # 先把这个切换记下来，等角色到手跑一局，就能从日志判断
+                # day_state 的键该不该带上「流程实例」（变了就重置今日行程，不变就沿用）。
+                self.log_info(f"日期键 {prev} → {key}（今日行程重置）")
             self._weekend = {
                 "date": key,
                 "shop_checked": False,
