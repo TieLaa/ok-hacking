@@ -716,6 +716,28 @@ class RingDetection(unittest.TestCase):
         self.assertFalse(task.has_gold_border(texts, subject="防守"))
 
 
+class TapToContinue(unittest.TestCase):
+    """MVP / 胜负过场：只有一行「点击屏幕继续」，必须点一下推进（2026-10-28 用户实测）。"""
+
+    def test_mvp_screen_is_clicked(self):
+        texts = [
+            box(500, 300, "MVP", 300, 120),
+            box(900, 300, "真崎", 200, 90),
+            box(305, 477, "得分", 90, 40),
+            box(560, 700, "点击屏幕继续", 200, 32),
+        ]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_tap_to_continue(texts))
+        self.assertEqual(task.actions[-1][0], "click")
+
+    def test_page_with_buttons_is_not_stolen(self):
+        texts = [box(560, 700, "点击屏幕继续", 200, 32),
+                 box(1000, 900, "下一步", 200, 60)]
+        task = FakeTask(texts)
+        self.assertFalse(task.handle_tap_to_continue(texts))
+        self.assertEqual(task.actions, [])
+
+
 class ArcadeRules(unittest.TestCase):
     """游戏厅：「自动」= 打过的小游戏，只能买带它那几张（用户 2026-10-27）。"""
 

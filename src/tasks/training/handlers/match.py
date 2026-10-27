@@ -360,6 +360,23 @@ class MatchHandlers:
 
         return False
 
+    def handle_tap_to_continue(self, texts):
+        """「点击屏幕继续」类过场：MVP 结算、胜负动画 —— 点屏幕中央推进。
+
+        2026-10-28 用户实测：比赛打赢后的 MVP 页只有一行「点击屏幕继续」，
+        没有任何按钮，训练流程和快速比赛的 handler 都不认领，于是卡在那儿。
+
+        排在专属 handler 之后（顺序见 handlers/__init__.py）：
+        带「下一步 / 确定 / 跳过 / 放弃 / 继续」按钮的页面不抢，交给对应 handler。
+        """
+        if self.match_text(texts, "点击屏幕继续") is None:
+            return False
+        if self.exact_text(texts, ("下一步", "确定", "跳过", "继续", "放弃")) is not None:
+            return False
+        self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=0.5)
+        self.log_info("点击屏幕继续")
+        return True
+
     def handle_result(self, texts):
         """比赛/训练结算页：确认、继续、领取、下一步。
 

@@ -50,6 +50,7 @@ HANDLERS = (
     WeekendHandlers.handle_go_out,
     WeekendHandlers.handle_weekend,
     TrainingHandlers.handle_vacation,
+    MatchHandlers.handle_tap_to_continue,
     MatchHandlers.handle_result,
     EntryHandlers.handle_club_members,
     EntryHandlers.handle_story_arrow,

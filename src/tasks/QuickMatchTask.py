@@ -43,6 +43,7 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
         MatchHandlers.handle_skill_select,
         MatchHandlers.handle_event_choice,
         MatchHandlers.handle_prepare,
+        MatchHandlers.handle_tap_to_continue,
     )
 
     def __init__(self, *args, **kwargs):
