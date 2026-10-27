@@ -716,6 +716,52 @@ class RingDetection(unittest.TestCase):
         self.assertFalse(task.has_gold_border(texts, subject="防守"))
 
 
+class ArcadeRules(unittest.TestCase):
+    """游戏厅：「自动」= 打过的小游戏，只能买带它那几张（用户 2026-10-27）。"""
+
+    def _task(self, texts, money=300, pay=True):
+        task = FakeTask(texts, config={"游戏厅付费": pay})
+        task.read_money = lambda texts=None: money
+        return task
+
+    def test_only_auto_card_is_bought(self):
+        texts = [
+            box(600, 115, "请选择一个小游戏", 220, 36),
+            box(199, 236, "自动", 64, 30),
+            box(308, 238, "弹跳", 70, 42),
+            box(251, 370, "弹跳20~70", 155, 31),
+            box(520, 236, "运控", 70, 39),          # 没有「自动」= 没打过，不能买
+            box(539, 370, "运控20~70", 178, 31),
+            box(615, 646, "确定", 71, 39),
+        ]
+        task = self._task(texts)
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertEqual(task.actions[-2][1], "弹跳20~70")
+
+    def test_no_auto_card_exits(self):
+        texts = [
+            box(600, 115, "请选择一个小游戏", 220, 36),
+            box(520, 236, "运控", 70, 39),
+            box(539, 370, "运控20~70", 178, 31),
+            box(615, 646, "确定", 71, 39),
+        ]
+        task = self._task(texts)
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertEqual(task.actions[-1][0], "click")      # exit_page：点右上角返回
+
+    def test_paid_flag_off_exits(self):
+        texts = [
+            box(600, 115, "请选择一个小游戏", 220, 36),
+            box(199, 236, "自动", 64, 30),
+            box(308, 238, "弹跳", 70, 42),
+            box(251, 370, "弹跳20~70", 155, 31),
+            box(615, 646, "确定", 71, 39),
+        ]
+        task = self._task(texts, pay=False)
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertEqual(task.actions[-1][0], "click")
+
+
 class EffectExpectation(unittest.TestCase):
     """效果文本 → 真实属性总量（用户 2026-10-27 口径）。"""
 
