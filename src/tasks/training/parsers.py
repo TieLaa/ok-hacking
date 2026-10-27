@@ -543,7 +543,7 @@ class TrainingParsersMixin:
             full += max_count
         return equip, full
 
-    def has_gold_border(self, texts=None, subject=None):
+    def has_gold_border(self, texts=None, subject=None, quiet=False):
         """科目按钮外圈有没有金色边框。
 
         用户 2026-10-27 口径：金框/彩框都指科目按钮外面那一圈，不是器材卡；
@@ -604,11 +604,12 @@ class TrainingParsersMixin:
         others = sorted(ring_gold_ratio(s.y + s.height / 2)
                         for s in subjects if s is not target)
         baseline = others[len(others) // 2] if others else 0.0
-        self.log_debug(f"科目金框：{target.name.strip()} 占比 {ratio:.3f}，"
-                       f"其它行中位数 {baseline:.3f}")
+        if not quiet:
+            self.log_debug(f"科目金框：{target.name.strip()} 占比 {ratio:.3f}，"
+                           f"其它行中位数 {baseline:.3f}")
         return ring_is_border(ratio, baseline)
 
-    def has_crit_border(self, texts=None, subject=None):
+    def has_crit_border(self, texts=None, subject=None, quiet=False):
         """科目按钮外圈有没有彩虹边框（= 有满经验器材，训练会暴击）。
 
         框常驻、不需要选中（用户 2026-10-27），所以按科目名定位那一行；
@@ -656,7 +657,8 @@ class TrainingParsersMixin:
         ring[:, -t:] = True
         hit = (magenta | green) & ring
         ratio = float(hit.sum()) / max(int(ring.sum()), 1)
-        self.log_debug(f"科目彩框：{subject or '当前行'} 占比 {ratio:.3f}")
+        if not quiet:
+            self.log_debug(f"科目彩框：{subject or '当前行'} 占比 {ratio:.3f}")
         return ring_is_border(ratio, floor=CRIT_RING_MIN)
 
     def scene_names(self, texts):

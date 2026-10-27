@@ -145,19 +145,25 @@ class TrainingHandlers:
             self.log_warning("认不出任何训练科目")
             return False
 
-        # 橙色小人只表示「有队友」，而且**会漏判**：2026-10-27 16:48 实跑，
-        # 当前已选「投射」预读到 队友 2｜经理 1｜装备 3｜满经验 1｜得分 8.30，
-        # 但小人图标没扫到投射 → 它不在 with_team 里 → 直接没进候选池，
-        # 最后选了只有 1.00 的「防守」，白丢一次 8.30 的课。
-        # 现在**逐个科目都点开探测**（小人只用来打日志），代价是每个训练日多 3 秒。
+        # 候选科目 = 有橙色小人 **或** 按钮外圈已经亮（金框/彩框）**或** 当前已选。
+        # 2026-10-27 16:48 事故：当前已选「投射」预读 队友 2｜经理 1｜装备 3｜
+        # 满经验 1｜金框 1 = 8.30，但小人图标漏判 → 不在 with_team → 连候选都不是，
+        # 最后选了 1.00 的「防守」。用户指出：**金框已经识别到了，是筛选逻辑的锅**，
+        # 所以候选池必须把「圈已经亮了」的科目一起收进来，而不是只信小人图标。
         icons = self.find_teammate_icons()
         with_team = [n for n in boxes if self.has_teammate_icon(boxes[n], icons)]
-        self.log_info("有队友的科目（图标扫描，仅供参考）："
-                      + ("、".join(with_team) if with_team else "无"))
+        ring_hit = [n for n in boxes
+                    if self.has_gold_border(texts, subject=n, quiet=True)
+                    or self.has_crit_border(texts, subject=n, quiet=True)]
+        current = self.current_subject(texts)
+        candidates = [n for n in boxes
+                      if n in with_team or n in ring_hit or n == current]
+        self.log_info("候选科目（小人 " + ("、".join(with_team) if with_team else "无")
+                      + "｜圈亮 " + ("、".join(ring_hit) if ring_hit else "无")
+                      + "｜当前 " + (current or "无") + "）：" + "、".join(candidates))
 
         # 当前已经选中的科目（右边有「决定」的那一行）不要点：点它有直接开练的风险。
         # 它的预览信息直接读当前帧（彩虹边框在开页第一帧就有，器材卡随后出现）。
-        current = self.current_subject(texts)
         results = {}
         if current in boxes:
             results[current] = self.analyze_preview(texts, subject=current)
@@ -168,7 +174,7 @@ class TrainingHandlers:
                 f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}")
 
         last_probed = None
-        for name in boxes:
+        for name in candidates:
             if name == current:
                 continue
             box = self.find_subject_box(name)
@@ -192,8 +198,8 @@ class TrainingHandlers:
                                      attr_values.get(name),
                                      boxes[name].y)
 
-        # 候选池 = 屏幕上能看到的所有科目（不再按小人图标过滤，见上：会漏判）
-        pool = list(boxes)
+        # 候选池 = 小人 / 金边 / 彩边 / 当前已选（用户 2026-10-27：三种信号都算）
+        pool = candidates or list(boxes)
         name = max(pool, key=rank)
         r = results.get(name) or self.empty_preview()
         # 2026-10-27：这一行必须同时打「金框」和「彩虹」。
