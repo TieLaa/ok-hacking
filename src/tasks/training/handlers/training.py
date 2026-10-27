@@ -133,7 +133,6 @@ class TrainingHandlers:
                 return True
             self.log_warning(f"失败率 {fail}% 超过上限 {limit}%（配置为不休息，继续）")
 
-        recommended = set(self.config.get("推荐属性", []))
         boxes = {}
         for name in Defs.TRAINING_SUBJECTS:
             box = self.match_text(subjects, name)
@@ -149,7 +148,7 @@ class TrainingHandlers:
         # 橙色小人只表示「有队友」；数量/装备必须点开看。
         icons = self.find_teammate_icons()
         with_team = [n for n in boxes if self.has_teammate_icon(boxes[n], icons)]
-        self.log_info("有队友的科目：" + ("、".join(with_team) if with_team else "无（按推荐属性选）"))
+        self.log_info("有队友的科目：" + ("、".join(with_team) if with_team else "无"))
 
         # 当前已经选中的科目（右边有「决定」的那一行）不要点：点它有直接开练的风险。
         # 它的预览信息直接读当前帧（彩虹边框在开页第一帧就有，器材卡随后出现）。
@@ -183,9 +182,8 @@ class TrainingHandlers:
             self.log_debug(f"六维当前值：{attr_values}")
 
         def rank(name):
-            """分数 → 队长推荐属性 → 当前数值低的 → 屏幕上靠前的（兜底）。"""
+            """分数 → 当前数值低的 → 屏幕上靠前的（兜底）。推荐属性已取消。"""
             return self.subject_rank(self.subject_score(results.get(name)),
-                                     name in recommended,
                                      attr_values.get(name),
                                      boxes[name].y)
 
@@ -200,8 +198,7 @@ class TrainingHandlers:
             f"选科目「{name}」（队友 {r['mates']}｜经理 {r['manager']}｜装备 {r['equip']}"
             f"｜满经验 {r['full']}｜金框 {r['gold']}｜彩虹 {int(r['crit'])}"
             f"｜得分 {self.subject_score(r):.2f}"
-            f"｜当前值 {attr_values.get(name, '?')}"
-            f"｜{'推荐' if name in recommended else '非推荐'}）")
+            f"｜当前值 {attr_values.get(name, '?')}）")
 
         # 若最佳科目不是当前选中的那个，先点一下选中（点两下会直接开练，
         # 所以统一只点一下，再按右上角「决定」）

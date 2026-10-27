@@ -64,14 +64,16 @@ class TrainingScoringMixin:
                 + r["color"] * cls.W_COLOR)
 
     @staticmethod
-    def subject_rank(score, is_recommended, attr_value, y):
-        """科目排序键（用户 2026-10-26 口径）。
+    def subject_rank(score, attr_value, y):
+        """科目排序键（2026-10-27 用户口径）。
 
-        分数 → 队长推荐属性 → 当前数值**低**的（成长空间大）→ 屏幕上靠前的（兜底）。
+        分数 → 当前数值**低**的（成长空间大）→ 屏幕上靠前的（兜底）。
+        **推荐属性（绿色大拇指）已取消**：用户实测训练完成后的总评分不受优势属性
+        影响，练哪条都等价，所以它不再参与排序。
         读不到数值的属性用 10^6 垫底，不能靠「读不到」白捡便宜。
         """
         value = attr_value if attr_value is not None else 10 ** 6
-        return (score, 1 if is_recommended else 0, -value, -y)
+        return (score, -value, -y)
 
     # 六维属性名：用来把「全属性+5」换算成真实的属性总量
     ATTR_NAMES = ("投射", "弹跳", "运控", "体能", "防守", "意识")

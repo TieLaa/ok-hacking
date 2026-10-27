@@ -661,23 +661,19 @@ class AttributeValues(unittest.TestCase):
 
 
 class SubjectRanking(unittest.TestCase):
-    """科目排序：分数 → 队长推荐属性 → 数值低的 → 屏幕靠上（2026-10-26 用户口径）。"""
+    """科目排序：分数 → 数值低的 → 屏幕靠上（2026-10-27：推荐属性已取消）。"""
 
     def test_score_wins_first(self):
-        self.assertGreater(FakeTask.subject_rank(3.0, False, 999, 900),
-                           FakeTask.subject_rank(2.0, True, 100, 100))
+        self.assertGreater(FakeTask.subject_rank(3.0, 999, 900),
+                           FakeTask.subject_rank(2.0, 100, 100))
 
-    def test_recommended_wins_when_score_tied(self):
-        self.assertGreater(FakeTask.subject_rank(2.0, True, 900, 900),
-                           FakeTask.subject_rank(2.0, False, 100, 100))
-
-    def test_lower_value_wins_when_both_tied(self):
-        self.assertGreater(FakeTask.subject_rank(2.0, False, 400, 900),
-                           FakeTask.subject_rank(2.0, False, 800, 300))
+    def test_lower_value_wins_when_score_tied(self):
+        self.assertGreater(FakeTask.subject_rank(2.0, 400, 900),
+                           FakeTask.subject_rank(2.0, 800, 300))
 
     def test_unknown_value_loses(self):
-        self.assertGreater(FakeTask.subject_rank(2.0, False, 900, 900),
-                           FakeTask.subject_rank(2.0, False, None, 100))
+        self.assertGreater(FakeTask.subject_rank(2.0, 900, 900),
+                           FakeTask.subject_rank(2.0, None, 100))
 
 
 class ResultButtonRules(unittest.TestCase):
