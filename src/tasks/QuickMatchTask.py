@@ -74,6 +74,9 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
         self._repeat_count = 0
         self._mute_sig = None           # 正在停手的画面（OCR 文本集合）
         self._mute_ticks = 0
+        # 是否「在比赛中」：技能三选一 / 事件二选一这两类 handler 形态太通用
+        # （大厅「强化」页三张升级卡也能凑成横向多选一），必须先进了比赛才允许动。
+        self._in_match = False
 
     def _is_muted(self, sig):
         """停手期判断：同一画面已经连点 N 拍没变化就先不动，过期后自动重试一次。"""
@@ -115,14 +118,34 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
             return False
 
         auto_pick = self.config.get("比赛内自动选技能和事件", True)
+        in_match = self._in_match or self._has_match_hud(texts)
         for handler in self.HANDLERS:
             if (not auto_pick
                     and handler in (MatchHandlers.handle_skill_select,
                                     MatchHandlers.handle_event_choice)):
                 continue
+            # 三选一 / 二选一只有在比赛里才处理：
+            # 2026-10-28 用户反馈「只开了快速比赛，为什么在大厅强化页被点升级卡」——
+            # 强化页三张卡的黄色价格条正好中了 handle_event_choice 的「横向多选一」。
+            if (handler in (MatchHandlers.handle_skill_select,
+                            MatchHandlers.handle_event_choice)
+                    and not in_match):
+                continue
             if handler(self, texts):
                 self._last_state = handler.__name__
                 self._note_hit(texts, sig, handler.__name__)
                 self.log_debug(f"命中 {handler.__name__}")
+                if handler in (MatchHandlers.handle_match_intro,
+                               MatchHandlers.handle_in_match):
+                    self._in_match = True
+                elif handler is MatchHandlers.handle_match_result:
+                    self._in_match = False
                 return True
         return False
+
+    @staticmethod
+    def _has_match_hud(texts):
+        """画面上有没有比赛 HUD（比分/节次/加速），用来判断「现在在比赛里」。"""
+        joined = "".join(t.name for t in texts)
+        return any(k in joined for k in (
+            "比分", "第1节", "第2节", "第3节", "第4节", "暂停", "跳过比赛", "VS"))

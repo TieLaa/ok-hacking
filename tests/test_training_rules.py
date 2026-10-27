@@ -716,6 +716,20 @@ class RingDetection(unittest.TestCase):
         self.assertFalse(task.has_gold_border(texts, subject="防守"))
 
 
+class QuickMatchGate(unittest.TestCase):
+    """快速比赛：三选一/二选一必须先进比赛才处理（2026-10-28 用户反馈）。"""
+
+    def test_match_hud_detected(self):
+        from src.tasks.QuickMatchTask import QuickMatchTask
+        texts = [box(100, 20, "第2节", 80, 30), box(400, 20, "比分", 60, 30)]
+        self.assertTrue(QuickMatchTask._has_match_hud(texts))
+
+    def test_lobby_page_is_not_match(self):
+        from src.tasks.QuickMatchTask import QuickMatchTask
+        texts = [box(60, 60, "强化", 90, 40), box(300, 660, "+99", 90, 40)]
+        self.assertFalse(QuickMatchTask._has_match_hud(texts))
+
+
 class LobbySubpage(unittest.TestCase):
     """大厅子菜单（强化/招募/卡池）任务一律不动（2026-10-28 用户反馈）。"""
 
