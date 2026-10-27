@@ -957,7 +957,7 @@ class BoostTrainingClicks(unittest.TestCase):
     def test_picks_right_card_when_ev_higher(self):
         task = FakeTask(list(self.CARDS))
         self.assertTrue(task.handle_boost_training(list(self.CARDS)))
-        self.assertEqual(task.actions[0], ("click", 1196, 285))   # 80%/+36 = 28.8 > 12
+        self.assertEqual(task.actions[0], ("click", 1196, 540))   # 80%/+36 = 28.8 > 12，点卡片正中
         self.assertTrue(any(a[0] == "click_box" and a[1] == "确定" for a in task.actions))
 
     def test_picks_left_card_when_ev_higher(self):
@@ -971,7 +971,7 @@ class BoostTrainingClicks(unittest.TestCase):
         ]
         task = FakeTask(texts)
         self.assertTrue(task.handle_boost_training(texts))
-        self.assertEqual(task.actions[0], ("click", 717, 285))    # 100%/+50 = 50 > 24
+        self.assertEqual(task.actions[0], ("click", 717, 540))    # 100%/+50 = 50 > 24
 
 
 class StoryArrowClicks(unittest.TestCase):

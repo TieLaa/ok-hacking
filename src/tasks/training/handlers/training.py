@@ -337,7 +337,7 @@ class TrainingHandlers:
                     gain_box = max(ggroup, key=lambda b: b.height)
                     gain = gain_box
             v = int(Defs.GAIN_RE.match(gain.name.strip()).group(1)) if gain else p
-            picks.append((v * p / 100.0, v, p, rate_box))
+            picks.append((v * p / 100.0, v, p, cx))
         if not picks:
             return False
 
@@ -348,10 +348,12 @@ class TrainingHandlers:
                 f"（{'；'.join(','.join(b.name.strip() for b in bs) for _c, bs in rate_cols)}），已存证")
             self.dump_unknown(texts, "boost")
 
-        ev, v, p, card = max(picks, key=lambda x: x[0])
-        self.click(int(card.x + card.width / 2), int(card.y + card.height / 2), after_sleep=0.35)
+        ev, v, p, card_cx = max(picks, key=lambda x: x[0])
+        # 点**卡片正中**：只点成功率文字框（在卡片顶部）实测会落在两卡之间偏上的位置
+        # （用户 2026-10-27 录屏：两张卡中间出现了一次多余点击）。
+        self.click(int(card_cx * self.width), int(self.height * 0.5), after_sleep=0.35)
         self.click_text(("确定",), after_sleep=0.6)
-        detail = "  ".join(f"{pp}%/+{vv}={e:.0f}" for e, vv, pp, _ in picks)
+        detail = "  ".join(f"{pp}%/+{vv}={e:.0f}" for e, vv, pp, _cx in picks)
         self.log_info(f"加强训练：{detail} → 选 {p}%/+{v}")
         return True
 
