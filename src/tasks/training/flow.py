@@ -247,26 +247,6 @@ class TrainingFlowMixin:
         except Exception as e:                       # noqa: BLE001
             self.log_debug(f"调试包保存失败: {type(e).__name__}: {e}")
 
-    def dump_unknown(self, texts, tag):
-        """把不认识的界面存证下来：截图 + OCR 文本，事后复盘补判据用。
-
-        产物在 logs/unknown/（logs 已被 .gitignore 忽略，不会污染仓库）。
-        """
-        try:
-            folder = os.path.join(PROJECT_ROOT, "logs", "unknown")
-            os.makedirs(folder, exist_ok=True)
-            name = f"{time.strftime('%m%d-%H%M%S')}_{tag}_s{self._steps}"
-            frame = self.frame
-            if frame is not None:
-                # 同 dump_debug：q95 + 4:4:4，颜色可复核。
-                cv2.imwrite(os.path.join(folder, name + ".jpg"), frame, JPEG_PARAMS)
-            with open(os.path.join(folder, name + ".txt"), "w", encoding="utf-8") as f:
-                f.write("\n".join(
-                    f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
-            self.log_info(f"存证 logs/unknown/{name}.jpg")
-        except Exception as e:
-            self.log_debug(f"存证失败: {type(e).__name__}: {e}")
-
     def _handle_any(self, texts):
         for handler in self.HANDLERS:
             try:
@@ -291,15 +271,6 @@ class TrainingFlowMixin:
                 self.log_error(f"{handler.__name__} 异常: {type(e).__name__}: {e}")
                 return True  # 吞掉这一拍，避免同一异常反复刷屏
         return False
-
-    @staticmethod
-    def exact_text(texts, names):
-        """整词匹配（`in` 的包含匹配会命中正文里的字，例如休息确认框正文里的「休息」）。"""
-        for name in names:
-            for t in texts:
-                if t.name.strip() == name:
-                    return t
-        return None
 
     @staticmethod
     def is_label(name):

@@ -28,6 +28,48 @@ class BaseGirlsTask(BaseTask):
             return []
 
     @staticmethod
+    def exact_text(texts, names):
+        """整词匹配：框里的文字**完全等于** names 之一才返回。
+
+        为什么要它：match_text 是包含匹配，还会在整段拼接命中时返回「最长的框」，
+        于是「找防守」能返回「失败率0%」、「找决定」能命中正文里的「…决定通过…」。
+        按钮类判据一律用这个。
+
+        2026-10-27 起放在基类：QuickMatchTask 组合的是 MatchHandlers，
+        不含训练流程 mixin，之前 GUI 里启用「快速比赛」直接报
+        `'QuickMatchTask' object has no attribute 'exact_text'`。
+        """
+        for name in names:
+            for t in texts:
+                if t.name.strip() == name:
+                    return t
+        return None
+
+    def dump_unknown(self, texts, tag):
+        """把不认识的界面存证：截图 + OCR 文本（logs/ 已被 .gitignore 忽略）。
+
+        同样放在基类：TrainingTask 和 QuickMatchTask 都要用。
+        """
+        try:
+            import os
+            import cv2
+            from src.tasks.training.constants import JPEG_PARAMS
+            root = os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))))
+            folder = os.path.join(root, "logs", "unknown")
+            os.makedirs(folder, exist_ok=True)
+            name = f"{time.strftime('%m%d-%H%M%S')}_{tag}_s{getattr(self, '_steps', 0)}"
+            frame = self.frame
+            if frame is not None:
+                cv2.imwrite(os.path.join(folder, name + ".jpg"), frame, JPEG_PARAMS)
+            with open(os.path.join(folder, name + ".txt"), "w", encoding="utf-8") as f:
+                f.write("\n".join(
+                    f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
+            self.log_info(f"存证 logs/unknown/{name}.jpg")
+        except Exception as e:
+            self.log_debug(f"存证失败: {type(e).__name__}: {e}")
+
+    @staticmethod
     def match_text(texts, names):
         """在一批 OCR 结果里找名字匹配的框。names 支持字符串 / 元组 / 正则。"""
         if isinstance(names, str) or hasattr(names, "search"):
