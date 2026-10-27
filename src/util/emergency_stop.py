@@ -32,22 +32,24 @@ MOD_SHIFT = 0x0004
 WM_HOTKEY = 0x0312
 _HOTKEY_ID = 0xB601          # 0x0000~0xBFFF 之间，避开 ok-script 自带的 999
 
-# 单键优先（抢控制权时手忙，最好一下就到），其次才用组合键
+# **只用组合键**（2026-10-27 改）：单键 F8/F12 会被别的东西按下 —— 实测有两次
+# 整局被误停，其中一次是猫踩到键盘。组合键要求真的同时按住 Ctrl+Alt，误触概率极低。
 DEFAULT_KEYS = (
-    (0, 0x7B, "F12"),
-    (0, 0x77, "F8"),
     (MOD_CONTROL | MOD_ALT, 0x7B, "Ctrl+Alt+F12"),
+    (MOD_CONTROL | MOD_ALT, 0x77, "Ctrl+Alt+F8"),
     (MOD_CONTROL | MOD_SHIFT, 0x7B, "Ctrl+Shift+F12"),
 )
 
 # 轮询兜底：RegisterHotKey 是全局独占的，F8 被别的程序抢走时注册会静默失败。
 # GetAsyncKeyState 不占用按键、也不需要注册，别的程序占了照样能读到物理按下。
 # 2026-10-26 实机：F8 被占用后只抢到 Ctrl+Alt+F12，用户按 F8 完全没反应。
-POLL_KEYS = ((0x77, "F8"), (0x7B, "F12"))
+# 这里同样**要求 Ctrl+Alt 同时按下**，单按 F8/F12 一律忽略。
+POLL_KEYS = ((0x7B, "F12"), (0x77, "F8"))
+POLL_MODS = ((0x11, "Ctrl"), (0x12, "Alt"))
 
 # 轮询必须连续 N 拍为按下才算真按：0.05s 单拍噪声（手柄/其他软件转发按键、
 # GetAsyncKeyState 的瞬时抖动）会在用户没按键时误触发。2026-10-27 09:47 实机
-# 误报一次，任务白停。真按住 F8 一般 ≥200ms，3 拍（~150ms）不会漏。
+# 误报一次，任务白停。真按住一般 ≥200ms，3 拍（~150ms）不会漏。
 POLL_CONFIRM_TICKS = 3
 
 
@@ -124,20 +126,27 @@ class EmergencyStop:
                 pass
 
     def _poll(self):
-        """GetAsyncKeyState 轮询兜底：不注册、不独占，别的程序占了 F8 也能收到。"""
+        """GetAsyncKeyState 轮询兜底：不注册、不独占，别的程序占了也能收到。
+
+        只认 Ctrl+Alt+F8 / Ctrl+Alt+F12：单键会被别的程序或宠物误按（实测两次整局
+        被误停，其中一次是猫踩键盘），所以必须同时按住两个修饰键。
+        """
         user32 = ctypes.windll.user32
         counts = {vk: 0 for vk, _ in POLL_KEYS}
         while True:
             time.sleep(0.05)
             try:
+                mods_down = all(user32.GetAsyncKeyState(vk) & 0x8000
+                                for vk, _ in POLL_MODS)
                 for vk, label in POLL_KEYS:
-                    if user32.GetAsyncKeyState(vk) & 0x8000:
+                    if mods_down and user32.GetAsyncKeyState(vk) & 0x8000:
                         counts[vk] += 1
                         if counts[vk] == POLL_CONFIRM_TICKS:
-                            logger.warning(f"按住 {label}（轮询兜底 {counts[vk]} 拍）→ 请求停止")
+                            combo = "+".join(m for _vk, m in POLL_MODS) + "+" + label
+                            logger.warning(f"按住 {combo}（轮询兜底 {counts[vk]} 拍）→ 请求停止")
                             if not self.label:
-                                self.label = label
-                            self.last_press = label
+                                self.label = combo
+                            self.last_press = combo
                             self.event.set()
                         elif counts[vk] < POLL_CONFIRM_TICKS:
                             logger.debug(f"{label} 单拍按下（{counts[vk]} 拍），等确认")
