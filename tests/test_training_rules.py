@@ -332,6 +332,21 @@ class EventRules(unittest.TestCase):
         self.assertTrue(task.handle_event_choice(texts))
         self.assertEqual(task.actions[-1][1], "更衣室加设空衣柜")
 
+    def test_prose_with_decision_word_is_not_subject_page(self):
+        """2026-10-27 事故：「球星卡训练事件·广播站支持」正文里有「决定」二字。
+
+        旧判据用包含匹配找「决定」→ 事件页被当成科目页，3 次点屏幕中央没反应，
+        任务被判「点不动」停止。科目页的「决定」永远是独立按钮框（整词匹配）。
+        端到端回归见 docs/shots/2026-10-27-broadcast-event.png。
+        """
+        texts = [
+            box(353, 366, "成功后，决定通过广播站平台支持球队。", 492, 33),
+            box(313, 594, "开设球队广播时段", 284, 44),
+        ]
+        task = FakeTask(texts)
+        self.assertIsNotNone(task.match_text(texts, "决定"))     # 包含匹配会命中正文
+        self.assertIsNone(task.exact_text(texts, ("决定",)))     # 但没有独立的按钮框
+
     def test_manager_help_animation_is_claimed(self):
         """2026-10-27 用户截图：「球队经理的帮助！」过场动画以前被当成未知界面。
 

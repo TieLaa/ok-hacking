@@ -306,8 +306,13 @@ class MatchHandlers:
         if len([t for t in texts if t.name.strip() in Defs.WEEKEND_PLACES]) >= 2:
             return False
         # 训练科目页也有黄色卡片（器材卡）和底部属性面板，但它们不是选项。
-        # 科目页必有「失败率」和「决定」，事件页没有（实训 2026-10-26）。
-        if self.match_text(texts, ("失败率", "决定")) is not None:
+        # 科目页必有「失败率」，并且「决定」是**独立的按钮框**（实训 2026-10-26）。
+        # 2026-10-27 事故（第3周「球星卡训练事件·广播站支持」）：正文里有
+        # 「成功后，决定通过广播站平台支持球队。」——旧判据用包含匹配找「决定」，
+        # 把事件页当成科目页直接 return False，结果 3 次点屏幕中央没反应、卡死停止。
+        if self.match_text(texts, "失败率") is not None:
+            return False
+        if self.exact_text(texts, ("决定",)) is not None:
             return False
         if self.match_text(texts, ("上新时间", "能力详情")) is not None:
             return False
