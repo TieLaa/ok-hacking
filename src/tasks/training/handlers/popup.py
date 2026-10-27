@@ -75,14 +75,28 @@ class PopupHandlers:
         return True
 
     def handle_popup(self, texts):
-        """公告 / 领奖 / 月卡 / 提示 / 「点击屏幕继续」：先关掉，否则什么都点不动。
+        """公告 / 领奖 / 月卡 / 提示：先关掉，否则什么都点不动。
 
-        「点击屏幕继续」= 整屏任意位置可点（训练日开场的「新目标」弹窗就是这种），
-        所以点**屏幕中央**最稳 —— 点它那行文字反而容易碰到下面的「训练/休息」。
+        「点击屏幕继续」类过场交给 handle_tap_to_continue（点那行字）。
         """
-        if self.match_text(texts, "点击屏幕继续") is not None:
-            self.click(int(self.width * 0.5), int(self.height * 0.4), after_sleep=0.35)
-            self.log_info("弹窗：点击屏幕继续")
+        # 「点击屏幕继续」：**点那行字本身**（用户 2026-10-28：MVP 页点屏幕正中
+        # 没反应）。同一画面第二拍还是这页，才退回点屏幕中央（训练日开场的
+        # 「新目标」弹窗是整屏可点，点文字可能被下面的按钮挡住）。
+        hint = self.match_text(texts, "点击屏幕继续")
+        if hint is not None:
+            sig = frozenset(t.name.strip() for t in texts)
+            if getattr(self, "_tap_sig", None) == sig:
+                self._tap_count = getattr(self, "_tap_count", 1) + 1
+            else:
+                self._tap_sig, self._tap_count = sig, 1
+            if self._tap_count <= 1:
+                self.click_box(hint, after_sleep=0.4)
+                self.log_info(f"弹窗：点击屏幕继续（点文字 "
+                              f"@{hint.x + hint.width // 2},{hint.y + hint.height // 2}）")
+            else:
+                self._tap_count = 0
+                self.click(int(self.width * 0.5), int(self.height * 0.4), after_sleep=0.4)
+                self.log_info("弹窗：点击屏幕继续（文字没反应，改点中央）")
             return True
         # 训练后的过场动画（2026-10-27 用户截图）：「球队经理的帮助！」+ 经理立绘，
         # 点屏幕任意位置继续。以前没人认领 → 走 unknown 兜底 + 每 3 秒存证一张。

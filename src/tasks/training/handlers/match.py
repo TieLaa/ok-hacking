@@ -374,10 +374,22 @@ class MatchHandlers:
             return False
         if self.exact_text(texts, ("下一步", "确定", "跳过", "继续", "放弃")) is not None:
             return False
-        # **必须点这行字本身**（用户 2026-10-28）：MVP 页点屏幕正中没反应，
-        # 只有点在「点击屏幕继续」这段文字上才推进。
-        self.click_box(hint, after_sleep=0.5)
-        self.log_info(f"点击屏幕继续 @({hint.x + hint.width // 2},{hint.y + hint.height // 2})")
+        # **先点这行字自身**（用户 2026-10-28：MVP 页点屏幕正中没反应）。
+        # 但训练日开场的「新目标」弹窗是整屏可点、点文字可能被底下的按钮挡住，
+        # 所以同一画面第二拍还没变化时退回点屏幕中央。
+        sig = frozenset(t.name.strip() for t in texts)
+        if getattr(self, "_tap_sig", None) == sig:
+            self._tap_count = getattr(self, "_tap_count", 1) + 1
+        else:
+            self._tap_sig, self._tap_count = sig, 1
+        if self._tap_count <= 1:
+            self.click_box(hint, after_sleep=0.5)
+            self.log_info("点击屏幕继续（点文字 "
+                          f"@{hint.x + hint.width // 2},{hint.y + hint.height // 2}）")
+        else:
+            self._tap_count = 0
+            self.click(int(self.width * 0.5), int(self.height * 0.4), after_sleep=0.5)
+            self.log_info("点击屏幕继续（文字没反应，改点屏幕中央）")
         return True
 
     def handle_result(self, texts):

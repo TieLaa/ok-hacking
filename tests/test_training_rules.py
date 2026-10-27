@@ -716,6 +716,28 @@ class RingDetection(unittest.TestCase):
         self.assertFalse(task.has_gold_border(texts, subject="防守"))
 
 
+class LobbySubpage(unittest.TestCase):
+    """大厅子菜单（强化/招募/卡池）任务一律不动（2026-10-28 用户反馈）。"""
+
+    def test_upgrade_page_is_ignored(self):
+        texts = [
+            box(60, 60, "强化", 90, 40),
+            box(300, 420, "等级27", 120, 36),
+            box(300, 600, "额外零用钱", 140, 32),
+            box(300, 660, "+99", 90, 40),
+        ]
+        task = FakeTask(texts)
+        self.assertTrue(task.is_lobby_subpage(texts))
+
+    def test_training_flow_not_ignored(self):
+        """真正训练页里也有「强化」字样（器材强化），不能误伤。"""
+        texts = [box(60, 60, "强化", 90, 40),
+                 box(600, 120, "失败率0%", 120, 32),
+                 box(1700, 800, "决定", 150, 60)]
+        task = FakeTask(texts)
+        self.assertFalse(task.is_lobby_subpage(texts))
+
+
 class TapToContinue(unittest.TestCase):
     """MVP / 胜负过场：只有一行「点击屏幕继续」，必须点一下推进（2026-10-28 用户实测）。"""
 

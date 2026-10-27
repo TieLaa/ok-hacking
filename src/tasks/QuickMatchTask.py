@@ -107,6 +107,9 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
             return False
         self._steps += 1
 
+        if self.is_lobby_subpage(texts):        # 大厅子菜单：不操作
+            return False
+
         sig = frozenset(t.name.strip() for t in texts)
         if self._is_muted(sig):
             return False

@@ -27,6 +27,25 @@ class BaseGirlsTask(BaseTask):
             self.log_debug(f"ocr failed: {e}")
             return []
 
+    # 大厅子菜单页（强化 / 招募 / 卡池…）：玩家自己点进去的界面，**任务不该动它们**。
+    # 2026-10-28 用户反馈：跑着任务时在大厅点进「强化」，脚本一直替他点升级卡；
+    # 招募页被 handle_story_arrow 当成剧情页点了一下。
+    LOBBY_SUBPAGES = ("强化", "招募", "卡池", "商店兑换", "飞跃计划",
+                      "问卷", "新生集训", "冠军之路", "社团GO")
+
+    def is_lobby_subpage(self, texts):
+        """当前画面是不是大厅里玩家自己开的子菜单（任务不管这种页面）。"""
+        names = "".join(t.name for t in texts)
+        hits = [k for k in self.LOBBY_SUBPAGES if k in names]
+        if not hits:
+            return False
+        # 训练/比赛流程的关键标记出现时，说明这不是纯子菜单页（比如强化页里的
+        # 器材选择、比赛里的结算），交回给正常 handler。
+        flow_marks = ("失败率", "决定", "休息", "出行", "下一步", "VS", "跳过")
+        if any(k in names for k in flow_marks):
+            return False
+        return True
+
     @staticmethod
     def exact_text(texts, names):
         """整词匹配：框里的文字**完全等于** names 之一才返回。

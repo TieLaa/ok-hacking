@@ -248,6 +248,11 @@ class TrainingFlowMixin:
             self.log_debug(f"调试包保存失败: {type(e).__name__}: {e}")
 
     def _handle_any(self, texts):
+        # 大厅子菜单（强化/招募/卡池…）：玩家自己点进去的，任务一律不动，
+        # 也不要走「不认识的界面 → 点屏幕中央」兜底（2026-10-28 用户反馈：
+        # 强化页被当成三选一点升级卡、招募页被 story_arrow 点了一下）。
+        if self.is_lobby_subpage(texts):
+            return True
         for handler in self.HANDLERS:
             try:
                 if handler(self, texts):
