@@ -259,7 +259,10 @@ class MatchHandlers:
                 return True
 
         # 2) 训练结束弹窗：编队（不是「前往主界面」）
-        if self.match_text(texts, "训练结束") is not None:
+        # **必须整词匹配**：事件页正文里也有「训练结束后，米歇尔理事长拿来了一本…」
+        # （2026-10-27 18:12 实跑），包含匹配会把事件页当成收尾弹窗，
+        # 结果随手点了最右边的黄按钮，等于把三选一事件乱选了。
+        if self.exact_text(texts, ("训练结束",)) is not None:
             target = self.exact_text(texts, ("编队",))
             if target is not None:
                 self.click_box(target, after_sleep=0.8)

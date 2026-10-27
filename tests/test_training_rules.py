@@ -649,6 +649,22 @@ class RegisterPlayerFlow(unittest.TestCase):
         self.assertEqual(task.actions[-1][1], "保存编队")
         self.assertEqual(task._register_stage, "team_saved")
 
+    def test_event_prose_with_training_end_is_not_register_popup(self):
+        """事件页正文含「训练结束后…」不能被当成本局收尾弹窗。
+
+        2026-10-27 18:12 实跑：「训练结束后，米歇尔理事长拿来了一本穴位按摩秘籍」
+        三选一事件被判成收尾弹窗，随手点了最右边的黄按钮，事件等于乱选。
+        """
+        texts = [
+            box(360, 300, "训练结束后，米歇尔理事长拿来了一本穴位按摩秘籍", 700, 30),
+            box(300, 620, "放弃按摩", 200, 40),
+            box(700, 620, "安心按摩", 200, 40),
+        ]
+        task = FakeTask(texts)
+        self.assertIsNotNone(task.match_text(texts, "训练结束"))     # 包含匹配会命中正文
+        self.assertIsNone(task.exact_text(texts, ("训练结束",)))      # 但没有独立标题框
+        self.assertFalse(task.handle_register_player(texts))
+
     def test_close_is_not_taken_by_popup_handler(self):
         """「更新最高队伍等级」弹窗的关闭必须由注册流程处理，不能落到 handle_popup。"""
         from src.tasks.training.handlers import HANDLERS
