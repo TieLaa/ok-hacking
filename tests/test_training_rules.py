@@ -239,6 +239,24 @@ class EventRules(unittest.TestCase):
         self.assertTrue(task.handle_result(texts))                 # 交给结算页
         self.assertEqual(task.actions[-1][1], "下一步")
 
+    def test_race_ladder_not_choice(self):
+        """2026-10-27 事故：全国大赛关卡列表被当成竖向三选一。
+
+        右侧信息栏「对手实力／关卡加成／奖励预览」同列竖排，全中 choice_candidates
+        的形态判据；TriggerTask 没有看门狗，于是每 0.5 秒点一次「对手实力」点了 30 秒。
+        """
+        texts = [
+            box(1274, 397, "对手实力", 143, 50),
+            box(1274, 554, "关卡加成", 144, 47),
+            box(1274, 708, "奖励预览", 147, 48),
+            box(1468, 894, "前往挑战", 187, 68),
+            box(404, 464, "10-9", 181, 120),
+        ]
+        task = FakeTask(texts)
+        self.assertTrue(len(task.choice_candidates(texts)) >= 3)   # 形态上确实像三行
+        self.assertFalse(task.handle_event_choice(texts))          # 但这是关卡页
+        self.assertEqual(task.actions, [])
+
     def test_choice_candidates_ignore_big_titles(self):
         """训练入口页的「备战 / 东部大赛」是大标题，不能当成竖向选项。"""
         texts = [
@@ -475,6 +493,54 @@ class EmergencyStopSmoke(unittest.TestCase):
         stop.ensure_started(wait=2.0)
         self.assertTrue(stop.ready.is_set())
         self.assertIsNotNone(stop._poll_thread)
+
+
+class QuickMatchRepeatGuard(unittest.TestCase):
+    """常驻任务没有看门狗：同一画面连点 N 拍必须自己停手（2026-10-27 实机连点 30 秒）。"""
+
+    def _bare(self):
+        class Bare:
+            pass
+
+        t = Bare()
+        t._repeat_sig = None
+        t._repeat_count = 0
+        t._mute_sig = None
+        t._mute_ticks = 0
+        t.warnings, t.dumps = [], []
+        t.log_warning = lambda msg: t.warnings.append(msg)
+        t.dump_unknown = lambda texts, tag: t.dumps.append(tag)
+        return t
+
+    def test_mute_after_three_same_screen_hits(self):
+        from src.tasks.QuickMatchTask import (QuickMatchTask, REPEAT_LIMIT,
+                                              REPEAT_RETRY_TICKS)
+        t = self._bare()
+        texts = [box(1274, 397, "对手实力", 143, 50)]
+        sig = frozenset({"对手实力"})
+
+        for i in range(REPEAT_LIMIT):
+            self.assertFalse(QuickMatchTask._is_muted(t, sig), f"第 {i + 1} 拍不该静音")
+            QuickMatchTask._note_hit(t, texts, sig, "handle_event_choice")
+
+        self.assertEqual(len(t.dumps), 1, "第 3 拍应该存证一次")
+        self.assertEqual(len(t.warnings), 1)
+        self.assertTrue(QuickMatchTask._is_muted(t, sig), "第 4 拍起必须停手")
+
+        for _ in range(REPEAT_RETRY_TICKS):
+            QuickMatchTask._is_muted(t, sig)
+        self.assertFalse(QuickMatchTask._is_muted(t, sig), "停手期满要允许重试")
+
+    def test_match_hud_is_exempt(self):
+        """比赛内 HUD 本来就该连续点，不参与限流。"""
+        from src.tasks.QuickMatchTask import QuickMatchTask
+        t = self._bare()
+        texts = [box(900, 300, "加速", 150, 50)]
+        sig = frozenset({"加速"})
+        for _ in range(10):
+            QuickMatchTask._note_hit(t, texts, sig, "handle_in_match")
+        self.assertIsNone(t._mute_sig)
+        self.assertEqual(t.dumps, [])
 
 
 class QuickMatchTaskSmoke(unittest.TestCase):

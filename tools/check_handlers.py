@@ -32,6 +32,9 @@ from src.tasks.TrainingTask import TrainingTask  # noqa: E402
 
 CACHE_DIR = os.path.join(ROOT, "docs", "shots", ".ocr_cache")
 
+# expected.json 里的这个值表示「该图不该被任何 handler 认领」（防误判样例）
+MISS_MARK = "-"
+
 
 def run_ocr(frame):
     from onnxocr.onnx_paddleocr import ONNXPaddleOcr
@@ -277,13 +280,20 @@ def main():
         first = hits[0][0] if hits else None
         want = expected.get(base)
 
-        if update and first:
-            expected[base] = first
-            want = first
+        if update:
+            # 期望值 "-" 表示「这张图不该被任何 handler 认领」（防误判的回归样例）
+            expected[base] = first or MISS_MARK
+            want = expected[base]
 
         if first is None:
-            misses.append(base)
-            print(f"{base:<38} {'✗ 未命中':<24} {want or '-'}")
+            if want == MISS_MARK:
+                print(f"{base:<38} {'✓ 未命中（预期）':<24} -")
+            else:
+                misses.append(base)
+                print(f"{base:<38} {'✗ 未命中':<24} {want or '-'}")
+        elif want == MISS_MARK:
+            fails.append((base, MISS_MARK, first))
+            print(f"{base:<38} {first:<24} 期望 不命中  ✗ 抢错 {describe(hits[0][1])}")
         elif want is None:
             new_shots.append(base)
             print(f"{base:<38} {first:<24} 新图（未登记） {describe(hits[0][1])}")

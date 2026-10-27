@@ -302,6 +302,16 @@ class MatchHandlers:
         if self.match_text(texts, "下一步") is not None:
             return False
 
+        # 2026-10-27 事故（QuickMatch 挂在全国大赛关卡列表）：右侧信息栏
+        # 「对手实力 / 关卡加成 / 奖励预览」同列竖排、短文本，全中 choice_candidates
+        # 的形态判据，被当成竖向三选一，每 0.5 秒点一次「对手实力」（点了 30 秒没反应，
+        # TriggerTask 没有看门狗，只能等人发现）。赛事/关卡详情页同时有这几个标题。
+        if (self.match_text(texts, "关卡加成") is not None
+                and self.match_text(texts, "奖励预览") is not None):
+            return False
+        if (self.match_text(texts, "对手实力") is not None
+                and self.match_text(texts, "前往挑战") is not None):
+            return False
         # ---- 竖向 2/3 选 1（白底彩边，跳过是灰的）----
         # **不要求白底**：事件页背景有时偏暖/偏暗，_has_white_band 会漏判；
         # 漏判后 dialog_continue 会去点灰的「跳过」，表现是一直点跳过、

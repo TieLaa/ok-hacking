@@ -57,6 +57,12 @@ class EntryHandlers:
         """
         if self.match_text(texts, ("失败率", "决定", "休息", "赢得比赛", "VS")) is not None:
             return False
+        # 赛事关卡详情页（全国大赛关卡列表）右下角常有一片白色（卡片边缘/滚动条），
+        # has_story_arrow 会判成 ▼，于是每 0.5 秒点右下角（2026-10-27 实机）。
+        # 这一页的强特征：右侧信息栏「关卡加成」+「奖励预览」。
+        if (self.match_text(texts, "关卡加成") is not None
+                and self.match_text(texts, "奖励预览") is not None):
+            return False
         # 周末地图：地点名是导航，不是可推进的剧情。
         # 2026-10-26 卡死：地图上被当成剧情页连点 ▼，反复 50 秒才被看门狗救回来。
         if len([t for t in texts if t.name.strip() in Defs.WEEKEND_PLACES]) >= 2:

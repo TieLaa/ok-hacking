@@ -21,6 +21,16 @@ from src.tasks.training.handlers.match import MatchHandlers
 from src.tasks.training.parsers import TrainingParsersMixin
 from src.tasks.training.scoring import TrainingScoringMixin
 
+# 常驻任务没有看门狗：判据误命中时会每 0.5 秒点同一处、永远不停
+# （2026-10-27 实机：全中「对手实力」点了 30 秒）。所以这里自己数：
+# 同一个 handler 在**同一画面指纹**上连续命中 N 拍，就存证 + 停手，
+# 过一会儿再试一次（避免页面真卡住时永久放弃）。
+REPEAT_LIMIT = 3
+REPEAT_RETRY_TICKS = 20
+
+# 比赛内 HUD / 开场 ▶▶ 本来就该连续点（画面对它来说是"同一页"），不参与限流
+REPEAT_EXEMPT = ("handle_in_match", "handle_match_intro")
+
 
 class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
                      BaseGirlsTask, TriggerTask):
@@ -58,11 +68,48 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
             "技能标签优先": "同品质时优先的技能标签",
         })
         self.init_match_state()
+        self._steps = 0                 # dump_unknown 的命名要这个
+        self._repeat_sig = None
+        self._repeat_count = 0
+        self._mute_sig = None           # 正在停手的画面（OCR 文本集合）
+        self._mute_ticks = 0
+
+    def _is_muted(self, sig):
+        """停手期判断：同一画面已经连点 N 拍没变化就先不动，过期后自动重试一次。"""
+        if self._mute_sig is None or sig != self._mute_sig:
+            return False
+        self._mute_ticks += 1
+        if self._mute_ticks < REPEAT_RETRY_TICKS:
+            return True
+        self._mute_sig = None
+        self._repeat_sig, self._repeat_count = None, 0
+        return False
+
+    def _note_hit(self, texts, sig, handler_name):
+        """命中并点击后记账：同一 handler 在同一画面上连点 REPEAT_LIMIT 拍就存证停手。"""
+        if handler_name in REPEAT_EXEMPT:
+            return
+        if sig == self._repeat_sig:
+            self._repeat_count += 1
+        else:
+            self._repeat_sig, self._repeat_count = sig, 1
+        if self._repeat_count >= REPEAT_LIMIT:
+            self.log_warning(
+                f"{handler_name} 连续 {self._repeat_count} 拍同一画面仍在点，"
+                f"存证后停手 {REPEAT_RETRY_TICKS} 拍")
+            self.dump_unknown(texts, "repeat")
+            self._mute_sig, self._mute_ticks = sig, 0
 
     def run(self):
         texts = self._ocr_region()
         if not texts or self.is_loading(texts):
             return False
+        self._steps += 1
+
+        sig = frozenset(t.name.strip() for t in texts)
+        if self._is_muted(sig):
+            return False
+
         auto_pick = self.config.get("比赛内自动选技能和事件", True)
         for handler in self.HANDLERS:
             if (not auto_pick
@@ -71,6 +118,7 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
                 continue
             if handler(self, texts):
                 self._last_state = handler.__name__
+                self._note_hit(texts, sig, handler.__name__)
                 self.log_debug(f"命中 {handler.__name__}")
                 return True
         return False
