@@ -243,7 +243,17 @@ class MatchHandlers:
                                if t.name.strip().startswith("下一")
                                and len(t.name.strip()) <= 4), None)
             if target is not None:
-                self.click_box(target, after_sleep=0.6)
+                # 「下一步」后面的转场是**渐显**的，按钮刚出现时点了不算数：
+                # 实跑（2026-10-27 17:13 / 17:46）稳定连点 3~4 次才推进。
+                # 这里做两件事：点之前等 0.45s 让按钮真正可用；点完 2 秒内不再重复点
+                # （重复点的日志会污染时间轴，也浪费点击预算）。
+                now = time.monotonic()
+                if now - getattr(self, "_register_click_at", 0.0) < 2.0:
+                    return True
+                if stage is None:
+                    self.sleep(0.45)
+                self._register_click_at = now
+                self.click_box(target, after_sleep=1.0)
                 self._register_stage = "next"
                 self.log_info("注册球员 1/6：下一步")
                 return True
