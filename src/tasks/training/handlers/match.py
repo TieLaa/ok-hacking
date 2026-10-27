@@ -312,6 +312,17 @@ class MatchHandlers:
         if (self.match_text(texts, "对手实力") is not None
                 and self.match_text(texts, "前往挑战") is not None):
             return False
+        # 本周总结页（球队评分表格）：左列竖排「控卫／分卫／小前／大前／中锋」，
+        # 同一列、2 字短文本，被 choice_candidates 当成竖向三选一，
+        # 每拍点一次「控卫」连点 4~5 下（2026-10-27 00:02 实机）。
+        # 页面在播动画（分数 4771→5937、文字每拍都在变），看门狗的
+        # 「3 次无变化」判不出来，只能靠页面特征排除。
+        if self.match_text(texts, ("本周总结", "球队评分")) is not None:
+            return False
+        if (self.match_text(texts, "球员") is not None
+                and self.match_text(texts, "位置") is not None
+                and self.match_text(texts, "评分") is not None):
+            return False
         # ---- 竖向 2/3 选 1（白底彩边，跳过是灰的）----
         # **不要求白底**：事件页背景有时偏暖/偏暗，_has_white_band 会漏判；
         # 漏判后 dialog_continue 会去点灰的「跳过」，表现是一直点跳过、
@@ -321,6 +332,10 @@ class MatchHandlers:
                         self.texts_in_region(texts, "top_right"), "跳过") is not None)
 
         group = self.choice_candidates(texts)
+        # 事件只可能二/三选一：组里出现 4 项以上，说明把表格列或信息栏捞进来了
+        # （2026-10-27 00:02 周结算页 5 个位置名「控卫…中锋」就是这样被当成选项的）
+        if group and len(group) > 3:
+            return False
         if group and (has_skip or len(group) >= 3):
             pick = min(group, key=lambda t: t.y)
             if os.environ.get("OK_DUMP_CHOICES"):

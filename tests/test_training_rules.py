@@ -239,6 +239,29 @@ class EventRules(unittest.TestCase):
         self.assertTrue(task.handle_result(texts))                 # 交给结算页
         self.assertEqual(task.actions[-1][1], "下一步")
 
+    def test_week_summary_not_choice(self):
+        """2026-10-27 00:02 实机：本周总结页左列位置名被当成竖向三选一。
+
+        日志原文：`事件选项（竖向）：控卫、分卫、小前、大前、中锋 → 选第一个「控卫」`
+        连点 4~5 拍。页面在播动画（分数每拍都在变），「3 次无变化」的看门狗判不出来。
+        """
+        texts = [
+            box(300, 40, "本周总结", 220, 40),
+            box(120, 40, "球队评分：国", 180, 40),
+            box(700, 120, "球员", 90, 40),
+            box(810, 120, "位置", 90, 40),
+            box(930, 120, "评分", 90, 40),
+            box(495, 287, "控卫", 80, 40),
+            box(495, 370, "分卫", 80, 40),
+            box(495, 452, "小前", 80, 40),
+            box(495, 535, "大前", 80, 40),
+            box(495, 617, "中锋", 80, 40),
+        ]
+        task = FakeTask(texts)
+        self.assertTrue(len(task.choice_candidates(texts)) >= 3)   # 形态上确实像一列
+        self.assertFalse(task.handle_event_choice(texts))          # 但这是球队表格
+        self.assertEqual(task.actions, [])
+
     def test_race_ladder_not_choice(self):
         """2026-10-27 事故：全国大赛关卡列表被当成竖向三选一。
 
