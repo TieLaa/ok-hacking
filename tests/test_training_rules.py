@@ -325,6 +325,32 @@ class EventRules(unittest.TestCase):
         self.assertTrue(task.handle_event_choice(texts))
         self.assertEqual(task.actions[-1][1], "更衣室加设空衣柜")
 
+    def test_multi_choice_skips_flat_stamina(self):
+        """2026-10-27 10:09 实机：三个选项里「不理会(精力+10)」被选中，实际该选属性。
+
+        日志原文：`事件选项：不理会(10·回精力)、稍微靠近他(4)、迎面走向他(3)
+        → 选「不理会」（横向多选 → 期望最高）`——多选分支原来没排除纯回精力。
+        """
+        from src.tasks.training.handlers.match import MatchHandlers
+        infos = [
+            {"name": "不理会", "ev": 10, "flat": True, "x": 100, "y": 300},
+            {"name": "稍微靠近他", "ev": 4, "flat": False, "x": 500, "y": 300},
+            {"name": "迎面走向他", "ev": 3, "flat": False, "x": 900, "y": 300},
+        ]
+        pick, why = MatchHandlers._pick_choice(infos, "h")
+        self.assertEqual(pick["name"], "稍微靠近他")
+        self.assertIn("回精力", why)
+
+    def test_multi_choice_all_flat_falls_back(self):
+        """三个都是回精力时，退回按数值取最大（不能因此不选）。"""
+        from src.tasks.training.handlers.match import MatchHandlers
+        infos = [
+            {"name": "A", "ev": 10, "flat": True, "x": 100, "y": 300},
+            {"name": "B", "ev": 20, "flat": True, "x": 500, "y": 300},
+        ]
+        pick, _why = MatchHandlers._pick_choice(infos, "h")
+        self.assertEqual(pick["name"], "B")
+
     def test_week_summary_not_choice(self):
         """2026-10-27 00:02 实机：本周总结页左列位置名被当成竖向三选一。
 

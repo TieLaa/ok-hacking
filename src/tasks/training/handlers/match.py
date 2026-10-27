@@ -270,6 +270,24 @@ class MatchHandlers:
             self.log_info("技能：确定")
         return True
 
+    @staticmethod
+    def _pick_choice(infos, kind):
+        """按用户规则挑选项，返回 (选中项, 理由)。
+
+        用户口径（2026-10-26，2026-10-27 确认多选同样适用）：
+        1. **纯回精力**的选项不参与竞争（只补 10 点体力，不如一点属性）；
+           全部都是回精力时才退回按数值取最大；
+        2. 其余按「收益×概率」的期望值取最高；同分取靠右（二选一时）。
+        竖向排列是剧情三选一，仍然固定选第一个。
+        """
+        if kind == "v":
+            return min(infos, key=lambda i: i["y"]), "竖向排列 → 第一个"
+        pool = [i for i in infos if not i["flat"]] or infos
+        pick = max(pool, key=lambda i: (i["ev"] if i["ev"] is not None else -1, i["x"]))
+        why = ("二选一 → 排除纯回精力，取期望最高" if len(infos) == 2
+               else "横向多选 → 排除纯回精力，取期望最高")
+        return pick, why
+
     def handle_event_choice(self, texts):
         """突发事件二/三选一：必须点其中一个选项（右上「跳过」是灰的）。
 
@@ -410,8 +428,11 @@ class MatchHandlers:
             name_box = max(names, key=lambda t: t.height) if names else None
             name = name_box.name.strip() if name_box else "?"
             ev = self._effect_ev(effects)
-            flat_stamina = any(
-                "精力" in t.name and "%" not in t.name for t in effects)
+            attrs = any(any(a in t.name for a in Defs.TRAINING_SUBJECTS)
+                        for t in effects)
+            # 「纯回精力」= 只补体力、不加任何六维属性。带属性的（「精力+10，投射+5」）不算，
+            # 否则会把好选项也一起排除掉。
+            flat_stamina = (any("精力" in t.name for t in effects) and not attrs)
             infos.append({"x": bx, "y": by, "box": (bx, by, bw, bh),
                           "name": name, "name_box": name_box,
                           "ev": ev, "flat": flat_stamina})
@@ -422,19 +443,7 @@ class MatchHandlers:
         if len(infos) < 2:
             return False
 
-        if best_kind == "v":
-            pick = min(infos, key=lambda i: i["y"])
-            why = "竖向排列 → 第一个"
-        elif len(infos) == 2:
-            # 左右二选一：先把「纯回精力」排除
-            pool = [i for i in infos if not i["flat"]] or infos
-            pick = max(pool, key=lambda i: (i["ev"] if i["ev"] is not None else -1,
-                                            i["x"]))
-            why = "二选一 → 排除纯回精力，取期望最高"
-        else:
-            pick = max(infos, key=lambda i: (i["ev"] if i["ev"] is not None else -1))
-            why = "横向多选 → 期望最高"
-
+        pick, why = self._pick_choice(infos, best_kind)
         detail = "、".join(
             f"{i['name']}({('%.0f' % i['ev']) if i['ev'] is not None else '?'}"
             f"{'·回精力' if i['flat'] else ''})" for i in infos)
