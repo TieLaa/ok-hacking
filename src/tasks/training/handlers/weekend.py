@@ -460,7 +460,10 @@ class WeekendHandlers:
                     continue
                 if abs((d.x + d.width / 2) - cx) > band:
                     continue
-                if not (t.y < d.y < t.y + self.height * 0.12):
+                # 价格在奖励文本下方 ~0.15h 处（实拍：奖励 y≈370、价格 y≈485，
+                # 1307x735 画面里差 115px ≈ 0.16h）。旧上限 0.12h 读不到，全部
+                # 当成「价格未知→100」，零用钱 99 时被误判成买不起（2026-10-27 19:04）。
+                if not (t.y < d.y < t.y + self.height * 0.22):
                     continue
                 price = int(v) if price is None else min(price, int(v))
             # 品质：取卡片「名字那一行 → 奖励那一行」之间的底色（用户 2026-10-27：
@@ -492,7 +495,9 @@ class WeekendHandlers:
         auto_cards.sort(key=lambda c: -c["hi"])
         pick = None
         for c in auto_cards:
-            need = c["price"] if c["price"] is not None else 100
+            # 价格读不到就按最低档 60 试一次（点确定买不起时游戏不会扣钱、页面不动，
+            # 下一拍 mark_visited 已经记过，会直接离开，不会死循环）
+            need = c["price"] if c["price"] is not None else 60
             if money is None or money >= need:
                 pick = c
                 break
