@@ -145,10 +145,15 @@ class TrainingHandlers:
             self.log_warning("认不出任何训练科目")
             return False
 
-        # 橙色小人只表示「有队友」；数量/装备必须点开看。
+        # 橙色小人只表示「有队友」，而且**会漏判**：2026-10-27 16:48 实跑，
+        # 当前已选「投射」预读到 队友 2｜经理 1｜装备 3｜满经验 1｜得分 8.30，
+        # 但小人图标没扫到投射 → 它不在 with_team 里 → 直接没进候选池，
+        # 最后选了只有 1.00 的「防守」，白丢一次 8.30 的课。
+        # 现在**逐个科目都点开探测**（小人只用来打日志），代价是每个训练日多 3 秒。
         icons = self.find_teammate_icons()
         with_team = [n for n in boxes if self.has_teammate_icon(boxes[n], icons)]
-        self.log_info("有队友的科目：" + ("、".join(with_team) if with_team else "无"))
+        self.log_info("有队友的科目（图标扫描，仅供参考）："
+                      + ("、".join(with_team) if with_team else "无"))
 
         # 当前已经选中的科目（右边有「决定」的那一行）不要点：点它有直接开练的风险。
         # 它的预览信息直接读当前帧（彩虹边框在开页第一帧就有，器材卡随后出现）。
@@ -163,7 +168,7 @@ class TrainingHandlers:
                 f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}")
 
         last_probed = None
-        for name in with_team:
+        for name in boxes:
             if name == current:
                 continue
             box = self.find_subject_box(name)
@@ -187,8 +192,8 @@ class TrainingHandlers:
                                      attr_values.get(name),
                                      boxes[name].y)
 
-        # 只在「有队友」的科目里选；一个都认不出来才退回全部科目
-        pool = with_team or list(boxes)
+        # 候选池 = 屏幕上能看到的所有科目（不再按小人图标过滤，见上：会漏判）
+        pool = list(boxes)
         name = max(pool, key=rank)
         r = results.get(name) or self.empty_preview()
         # 2026-10-27：这一行必须同时打「金框」和「彩虹」。
