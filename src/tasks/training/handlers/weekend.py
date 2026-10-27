@@ -262,6 +262,57 @@ class WeekendHandlers:
             self.click(int(self.width * 0.94), int(self.height * 0.11), after_sleep=0.8)
         self.log_info("商店：关闭")
 
+    @staticmethod
+    def _gacha_signature(cards):
+        """一组扭蛋卡的指纹：名字 + 价格。空组返回 None。"""
+        if not cards:
+            return None
+        return tuple(sorted((c["name"], c["price"]) for c in cards))
+
+    def settle_gacha_cards(self, texts):
+        """读扭蛋三张卡，**等开场动画稳定**后再返回。
+
+        2026-10-27 实测（第 4 局 10:07:52）：卡片飞入/翻转期间 `read_gacha_cards`
+        也能返回 3 张卡（中间态），脚本 0.3 秒就点了「确定」，买下中间那张紫卡；
+        1.7 秒后重进才看清同价位的金卡（防守增加++/80 币），等于白扔一次机会。
+        所以连续两次识别一致才认账；空结果继续等（旧版只处理了"空"这一种）。
+        同一组卡确认过就不再重复等，避免每拍多花 1.6 秒。
+        """
+        cards = self.read_gacha_cards(texts)
+        sig = self._gacha_signature(cards)
+        prev_sig = getattr(self, "_gacha_sig", None)
+        if sig and sig == prev_sig and time.monotonic() - getattr(self, "_gacha_at", 0.0) < 3.0:
+            return cards
+        last_cards, empty_streak = cards, 0
+        for _ in range(3):
+            self.sleep(0.8)
+            try:
+                self.next_frame()
+            except Exception:                     # noqa: BLE001
+                pass
+            nxt = self.read_gacha_cards(self._ocr_region() or [])
+            nsig = self._gacha_signature(nxt)
+            if nsig and nsig == sig:
+                if sig != prev_sig:
+                    self.log_info("扭蛋：卡片已稳定（" + "、".join(
+                        c["name"] for c in nxt) + "）")
+                self._gacha_sig, self._gacha_at = nsig, time.monotonic()
+                return nxt
+            if nsig:
+                last_cards, empty_streak = nxt, 0
+            else:
+                empty_streak += 1
+                if empty_streak >= 2:
+                    # 卡片彻底消失（页面被关掉/还在飞入）：不要把上一帧的中间态当真
+                    self._gacha_sig, self._gacha_at = None, time.monotonic()
+                    return []
+            cards, sig = nxt, nsig
+        if last_cards:
+            self.log_warning("扭蛋：卡片一直在变（动画/刷新），按最后一次识别结果处理")
+        self._gacha_sig = self._gacha_signature(last_cards)
+        self._gacha_at = time.monotonic()
+        return last_cards
+
     def handle_street(self, texts):
         """步行街扭蛋：只买金/紫，队友优先，体力低才允许清空精力的卡。
 
@@ -283,23 +334,7 @@ class WeekendHandlers:
             self.leave_street()
             return True
 
-        cards = self.read_gacha_cards(texts)
-        if not cards:
-            # 2026-10-27 用户反馈：训练中第一次进步行街，扭蛋会先播一段开场动画
-            # （卡片从街道背景里飞出来），动画期间 OCR 只认到「浅井屋 / 美度电器」
-            # 这类招牌，read_gacha_cards 返回空 —— 旧代码立刻 leave_street()，
-            # 整次扭蛋机会被白白跳过。
-            # 现在原地等最多 ~2 秒，每 0.7 秒刷新一帧重新识别，仍然空才退出。
-            for _ in range(3):
-                self.sleep(0.7)
-                try:
-                    self.next_frame()
-                except Exception:
-                    pass
-                cards = self.read_gacha_cards(self._ocr_region() or [])
-                if cards:
-                    self.log_info("扭蛋：开场动画结束，重新识别到卡片")
-                    break
+        cards = self.settle_gacha_cards(texts)
         if not cards:
             self.log_warning("扭蛋：三张卡都没认出来，退出不买")
             self.leave_street()

@@ -45,12 +45,21 @@ class FakeTask(DryRunTask):
             return self.ocr_queue.pop(0)
         return super()._ocr_region(region_name, box)
 
+    @staticmethod
+    def _card_idx(cx):
+        """扭蛋三张卡的列索引（gacha_texts 的卡心 x ≈ 0.32 / 0.57 / 0.82）。"""
+        return 0 if cx < 0.42 else (1 if cx < 0.70 else 2)
+
     def card_band_quality(self, cx):
-        q = self._qualities.pop(0) if self._qualities else "其他"
+        # 按**列**取品质，而不是按读取次数 pop：任务现在会为了确认动画稳定多读一帧，
+        # 次数会变，但同一张卡的品质不应该跟着变。
+        idx = self._card_idx(cx)
+        q = self._qualities[idx] if idx < len(self._qualities) else "其他"
         return q, 0, 0
 
     def has_mate_badge(self, cx):
-        return self._mates.pop(0) if self._mates else False
+        idx = self._card_idx(cx)
+        return self._mates[idx] if idx < len(self._mates) else False
 
 
 def gacha_texts(cards, stamina=None, money=None, price="60"):
@@ -87,6 +96,41 @@ class GachaRules(unittest.TestCase):
         self.assertEqual(task.actions[-1][0], "click")      # 仍无卡才退出
         self.assertGreater(task.actions[-1][1], task.width * 0.9)   # 右上角 ↩
 
+    def test_settle_ignores_animation_frame(self):
+        """2026-10-27 10:07 实机：卡片飞入/翻转的中途也能读出 3 张卡。
+
+        脚本当时 0.3 秒就点「确定」，买下中间那张紫卡；1.7 秒后重进才看清
+        同价位的金卡。settle_gacha_cards 必须返回**稳定帧**，不能返回动画中间态。
+        """
+        mid = gacha_texts([
+            ("体能增加+", "主力体能+48"),
+            ("防守增加+", "主力防守+48"),
+            ("弹跳增加", "主力弹跳+20"),
+        ], stamina="106/130", money="150", price="80")
+        stable = gacha_texts([
+            ("防守增加++", "主力防守+72，队友属性大幅提升"),
+            ("防守增加++", "主力防守+72，队友属性大幅提升"),
+            ("弹跳增加", "主力弹跳+20"),
+        ], stamina="106/130", money="150", price=["100", "80", "48"])
+        task = FakeTask(mid, qualities=["紫", "紫", "蓝"],
+                        mates=[False, False, False])
+        task.ocr_queue = [stable, stable, stable]
+        names = [c["name"] for c in task.settle_gacha_cards(mid)]
+        self.assertEqual(names, ["防守增加++", "防守增加++", "弹跳增加"])
+
+    def test_settle_returns_when_two_frames_agree(self):
+        """同一帧连读两次一致 → 直接认账，不多等。"""
+        same = gacha_texts([
+            ("投射增加++", "主力投射+72"),
+            ("运控增加++", "主力运控+72"),
+            ("体能增加++", "主力体能+72"),
+        ], stamina="45/130", money="200", price="60")
+        task = FakeTask(same, qualities=["金", "金", "金"])
+        task.ocr_queue = [same, same, same]
+        cards = task.settle_gacha_cards(same)
+        self.assertEqual(len(cards), 3)
+        self.assertEqual(task.ocr_calls, 1)     # 第 2 帧一致就返回，不跑满 3 轮
+
     def test_gacha_animation_then_cards_appear(self):
         """动画播完后刷出三张卡：要正常选卡，不能退出。"""
         empty = [box(760, 80, "请选择1个扭蛋i", 400, 70),
@@ -98,7 +142,7 @@ class GachaRules(unittest.TestCase):
             ("体能增加++", "主力体能+72"),
         ], stamina="45/130", money="200", price="60")
         task = FakeTask(empty, qualities=["金", "金", "金"])
-        task.ocr_queue = [real]                      # 第一次重试就刷出卡
+        task.ocr_queue = [real, real]                # 动画结束后卡片持续存在
         self.assertTrue(task.handle_street(empty))
         self.assertEqual(task.actions[0][0], "click")        # 选了卡
         self.assertEqual(task.actions[-1][1], "确定")        # 并点确定
