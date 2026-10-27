@@ -374,12 +374,13 @@ class TrainingParsersMixin:
         - 队友 / 经理：场景里飘在角色头顶的名字（经理的名字牌就是「球队经理」，
           会被当成队友名，必须单独扣出来）；
         - 器材数 / 满经验：底部器材卡的经验条与 MAX 字样（已实测）；
-        - 金框：器材卡**边框**是金色品质（`count_gold_cards`）；
-        - 彩色（暴击）：满经验 MAX 卡片 —— 结算会出「暴击训练!」，已验证；
-        - 经理暴击：经理在场且这次训练确实出暴击（有满经验或彩虹边框）。
+        - 金框 / 彩框：**训练科目按钮外面那一圈**（用户 2026-10-27 口径）。
+          框本来就是装备/经理经验满了才点亮的，如果再去数器材卡上的金框，
+          等于和「装备」重复计分，所以器材卡只按张数算一次。
         """
         scene = self.read_scene(texts)
-        equip, full, gold = self.read_equipment(texts)
+        equip, full = self.read_equipment(texts)
+        gold = 1 if self.has_gold_border(texts) else 0
         crit = self.has_crit_border(texts)
         return {
             "names": scene["names"],
@@ -389,7 +390,7 @@ class TrainingParsersMixin:
             "full": full,
             "gold": gold,
             "crit": crit,
-            "color": full,
+            "color": 1 if crit else 0,
             "manager_crit": 1 if (scene["manager"] and (full > 0 or crit)) else 0,
         }
 
@@ -433,13 +434,14 @@ class TrainingParsersMixin:
         return values
 
     def read_equipment(self, texts):
-        """数预览界面底部的器材卡，并判断哪些已经满经验、哪些是金框。
+        """数预览界面底部的器材卡，并判断哪些已经满经验。
 
         两种形态：
         - 未满：卡片底部是黑色胶囊经验条，青色部分是进度；
         - 已满：经验条变成「MAX」字样（实测 2026-10-26），且卡片带彩虹边框。
         所以 装备数 = 经验条个数 + MAX 个数；满经验数 = MAX 个数 + 全满的经验条。
-        金框另算：数卡片外框的金色占比（紫色/蓝色品质不算）。
+        金框**不在这里算**：框是科目按钮外圈的事（见 has_gold_border），
+        按器材卡的金框再算一次会和「装备」重复计分（用户 2026-10-27）。
         """
         frame = self.frame
         equip = full = 0
@@ -472,61 +474,43 @@ class TrainingParsersMixin:
         if max_count:
             equip += max_count
             full += max_count
-        return equip, full, self.count_gold_cards()
+        return equip, full
 
-    def count_gold_cards(self):
-        """数预览区里「金框」器材卡的张数。
+    def has_gold_border(self, texts=None):
+        """选中的科目大按钮有没有**金色边框**（装备/经理经验满了会点亮）。
 
-        实机（docs/shots/2026-10-26-subject-crit.png）：金品质器材卡是亮黄橙外框，
-        色相落在 HSV H 12~45、S>120、V>180；紫牌/蓝牌不在此区间。
-        做法：直接在 equip_cards 区域取「金色像素」，闭运算补断口，
-        再按卡片尺寸（宽高 0.05~0.20 屏宽）和长宽比 0.6~1.6 过滤。
-
-        先试过「高饱和色块」整体找卡片，但卡片会和天空/球场连成一片
-        （312x168，长宽比 1.86），过滤不掉，所以改成按颜色直取。
-        日志会打印每个候选框，实机跑一次就能拿来校准。
+        用户 2026-10-27 口径：金框/彩框都指科目按钮外面那一圈，不是器材卡。
+        定位方式同 has_crit_border：用「决定」按钮的 y 找到当前选中的那一行，
+        只采样按钮**边缘环带**（按钮内部的科目图标有各种颜色，采样整块会误判）。
         """
         frame = self.frame
         if frame is None:
-            return 0
+            return False
+        texts = texts if texts is not None else self._ocr_region()
+        decide = self.match_text(texts, "决定")
+        if decide is None:
+            return False
         h, w = frame.shape[:2]
-        x1, y1, x2, y2 = Defs.region("equip_cards")
-        roi = frame[int(h * y1):int(h * y2), int(w * x1):int(w * x2)]
+        cy = decide.y + decide.height / 2
+        x1, x2 = int(w * 0.66), int(w * 0.99)
+        y1 = max(0, int(cy - h * 0.055))
+        y2 = min(h, int(cy + h * 0.055))
+        roi = frame[y1:y2, x1:x2]
         if roi.size == 0:
-            return 0
-
+            return False
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         hue, sat, val = cv2.split(hsv)
-        gold = ((hue >= 12) & (hue <= 45) & (sat > 120) & (val > 180)).astype(np.uint8)
-        gold = cv2.morphologyEx(gold, cv2.MORPH_CLOSE,
-                                cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)))
-        n, _lab, stats, _cent = cv2.connectedComponentsWithStats(gold, 8)
-
-        min_w, max_w = int(w * 0.05), int(w * 0.20)
-        count = 0
-        rejects = []
-        for i in range(1, n):
-            x, y, ww, hh, area = stats[i]
-            reason = None
-            if area < 800:
-                reason = "太小"
-            elif not (min_w <= ww <= max_w and min_w <= hh <= max_w):
-                reason = f"尺寸 {ww}x{hh} 不在 {min_w}~{max_w}"
-            elif not (0.6 <= ww / max(hh, 1) <= 1.6):
-                reason = f"长宽比 {ww / max(hh, 1):.2f}"
-            elif area < ww * hh * 0.30:
-                reason = f"实心 {area / (ww * hh):.2f}"
-            if reason:
-                rejects.append((area, f"{reason} @({x + ww // 2},{y + hh // 2})"))
-                continue
-            count += 1
-            self.log_debug(f"金框器材 @({x + ww // 2},{y + hh // 2}) {ww}x{hh} 实心 {area / (ww * hh):.2f}")
-        if not count and rejects:
-            # 没数到金框时把最像的几个候选和淘汰原因打出来，方便下次实跑校准阈值
-            # （2026-10-27 10:08 整局科目页都是「金框 0」，需要现场数据判断是没金卡还是阈值不中）
-            top = sorted(rejects)[-3:]
-            self.log_debug("金框：无合格块，候选 " + "｜".join(t for _a, t in top))
-        return count
+        # 金/橙黄：实测按钮金框 H≈15~35，饱和度和亮度都很高
+        gold = (sat > 110) & (val > 150) & (hue >= 8) & (hue <= 42)
+        ring = np.zeros(roi.shape[:2], dtype=bool)
+        t = max(4, int(h * 0.008))
+        ring[:t, :] = True
+        ring[-t:, :] = True
+        ring[:, :t] = True
+        ring[:, -t:] = True
+        ratio = float((gold & ring).sum()) / max(int(ring.sum()), 1)
+        self.log_debug(f"科目大按钮金框占比 {ratio:.3f}")
+        return ratio > 0.08
 
     def has_crit_border(self, texts=None):
         """选中的科目大按钮有没有彩虹边框（= 有满经验器材，训练会暴击）。

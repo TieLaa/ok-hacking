@@ -419,6 +419,30 @@ class EventRules(unittest.TestCase):
         self.assertFalse(task.handle_dialog_continue(texts))
 
 
+class SubjectScoreWeights(unittest.TestCase):
+    """科目打分权重（用户 2026-10-27 定稿）：队友1 装备1 经理1.1 金框1 彩框1.2。"""
+
+    def test_weights(self):
+        r = {"mates": 2, "equip": 1, "manager": 1, "gold": 1, "color": 1}
+        self.assertAlmostEqual(FakeTask.subject_score(r), 2 + 1 + 1.1 + 1 + 1.2, places=4)
+
+    def test_borders_come_from_button_not_from_cards(self):
+        """金框/彩框只看科目按钮外圈；器材卡再多也不额外加分（避免重复计分）。"""
+        task = FakeTask([])
+        task.has_gold_border = lambda texts=None: True
+        task.has_crit_border = lambda texts=None: False
+        task.read_equipment = lambda texts: (3, 2)          # 3 张卡、2 张满经验
+        task.read_scene = lambda texts: {"names": [], "mates": 0, "manager": 0}
+        r = task.analyze_preview([])
+        self.assertEqual(r["gold"], 1)
+        self.assertEqual(r["color"], 0)
+        self.assertEqual(r["equip"], 3)
+        # 装备只按张数算一次，不会因为「卡是金框」翻倍
+        self.assertAlmostEqual(task.subject_score(r), 3 + 1.0, places=4)
+        # 旧实现「数器材卡上的金框」已经删掉，防止有人再把它加回来重复计分
+        self.assertFalse(hasattr(task, "count_gold_cards"))
+
+
 class TopBarRules(unittest.TestCase):
 
     def test_zero_stamina_parsed(self):

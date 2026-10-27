@@ -21,16 +21,16 @@ from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 
 class TrainingScoringMixin:
 
-    # 科目预览打分（用户 2026-10-26 简化版权重）
-    # 队友 1 / 道具 1 / 经理 1 / 黄框 +2.1 / 彩框 +3.1
-    # （用户分不清「经理暴击」和「道具暴击」，所以不再单独给暴击项加权。
-    #   2026-10-27 用户实测：有框时暴击训练加的属性很多，
-    #   黄框/彩框不再是「同分微调」，各自 2.1 / 3.1，能压过队友数量。）
+    # 科目预览打分（用户 2026-10-27 定稿权重）
+    # 队友 1 / 装备 1 / 经理 1.1 / 金框 1 / 彩框 1.2
+    # 关键口径：**金框/彩框指训练科目按钮外面那一圈**，不是底部预览区的器材卡。
+    # 按卡上的金框算会和「装备」重复计分（框本来就是装备/经理经验满了才点亮），
+    # 所以装备只按张数算一次，框只看按钮外圈。
     W_MATE = 1.0
     W_EQUIP = 1.0
-    W_MANAGER = 1.0
-    W_GOLD_CRIT = 2.1
-    W_COLOR_CRIT = 3.1
+    W_MANAGER = 1.1
+    W_GOLD = 1.0
+    W_COLOR = 1.2
 
     @classmethod
     def empty_preview(cls):
@@ -45,8 +45,8 @@ class TrainingScoringMixin:
         return (r["mates"] * cls.W_MATE
                 + r["equip"] * cls.W_EQUIP
                 + r["manager"] * cls.W_MANAGER
-                + r["gold"] * cls.W_GOLD_CRIT
-                + r["color"] * cls.W_COLOR_CRIT)
+                + r["gold"] * cls.W_GOLD
+                + r["color"] * cls.W_COLOR)
 
     @staticmethod
     def subject_rank(score, is_recommended, attr_value, y):
