@@ -290,6 +290,11 @@ class TrainingHandlers:
 
         实测 36×0.8=28.8 > 12×1.0=12；30×0.95=28.5、30×0.65=19.5 也都高于 10×1.0。
         点选中卡片的成功率文字中心，再点「确定」——不要点两张卡中间的空白。
+
+        2026-10-27 用户录屏反馈：每张卡上其实有**两组数字**（卡顶气泡的「100%」+
+        卡内大号「+36」，卡内还有一个小号同名数字），旧写法「每个百分比各算一张卡」
+        会把同一张卡算成两张，还会出现「100%/+12、80%/+36」这种凭空的成功率。
+        现在先按 x 坐标把数字**聚类成列**（一张卡一列），每列只取一组。
         """
         if self.match_text(texts, "加强训练") is None:
             return False
@@ -301,13 +306,47 @@ class TrainingHandlers:
             self.click_text(("确定",), must=False)
             return True
 
+        def cluster(items, tol=0.08):
+            """按 x 聚类成一列（同一张卡的所有数字）。返回 [(中心 x, [框...]), ...]。"""
+            cols = []
+            for t in sorted(items, key=lambda b: b.x):
+                cx = (t.x + t.width / 2) / self.width
+                if cols and abs(cx - cols[-1][0]) < tol:
+                    cols[-1][1].append(t)
+                else:
+                    cols.append([cx, [t]])
+            return [(c[0], c[1]) for c in cols]
+
+        rate_cols = cluster(rates)
+        gain_cols = cluster(gains)
+        self.log_debug(
+            "加强训练：百分比列 " + "｜".join(
+                f"{c:.2f}:{','.join(b.name.strip() for b in bs)}" for c, bs in rate_cols)
+            + " 收益列 " + "｜".join(
+                f"{c:.2f}:{','.join(b.name.strip() for b in bs)}" for c, bs in gain_cols))
+
         picks = []
-        for r in rates:
-            rx = r.x + r.width / 2
-            gain = min(gains, key=lambda g: abs(g.x + g.width / 2 - rx)) if gains else None
-            p = int(Defs.PERCENT_RE.match(r.name.strip()).group(1))
+        for cx, group in rate_cols:
+            # 同一列里取字号最大的那个（大号才是卡片主数字）
+            rate_box = max(group, key=lambda b: b.height)
+            p = int(Defs.PERCENT_RE.match(rate_box.name.strip()).group(1))
+            gain = None
+            if gain_cols:
+                _gcx, ggroup = min(gain_cols, key=lambda c: abs(c[0] - cx))
+                if abs(_gcx - cx) < 0.20:
+                    gain_box = max(ggroup, key=lambda b: b.height)
+                    gain = gain_box
             v = int(Defs.GAIN_RE.match(gain.name.strip()).group(1)) if gain else p
-            picks.append((v * p / 100.0, v, p, r))
+            picks.append((v * p / 100.0, v, p, rate_box))
+        if not picks:
+            return False
+
+        if len(rate_cols) != 2 or any(len(bs) > 1 for _c, bs in rate_cols):
+            # 数字列数不对 = 大概率 OCR 把卡上别的数字算进来了，存证一张人工核对
+            self.log_warning(
+                f"加强训练：识别到 {len(rate_cols)} 个百分比列"
+                f"（{'；'.join(','.join(b.name.strip() for b in bs) for _c, bs in rate_cols)}），已存证")
+            self.dump_unknown(texts, "boost")
 
         ev, v, p, card = max(picks, key=lambda x: x[0])
         self.click(int(card.x + card.width / 2), int(card.y + card.height / 2), after_sleep=0.35)

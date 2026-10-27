@@ -16,6 +16,11 @@ import unittest
 
 import numpy as np
 
+try:
+    import cv2
+except ImportError:                        # noqa: N816
+    cv2 = None
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
@@ -352,6 +357,27 @@ class EventRules(unittest.TestCase):
         self.assertFalse(task.handle_popup(texts))
         self.assertTrue(task.handle_boost_training(texts))
 
+    def test_boost_two_numbers_per_card(self):
+        """2026-10-27 用户录屏：每张卡上有卡顶「100%」+ 卡内两个同名「+36」。
+
+        旧写法按「每个百分比算一张卡」处理，同一张卡会被算成两张，
+        还会冒出图上看不见的 80%（日志：`100%/+12=12  80%/+36=29`）。
+        """
+        texts = [box(700, 180, "请选择一种加强训练", 600, 60),
+                 box(590, 250, "100%", 90, 40),
+                 box(990, 250, "100%", 90, 40),
+                 box(560, 400, "+12", 80, 45),
+                 box(570, 700, "+12", 80, 45),
+                 box(960, 400, "+36", 80, 45),
+                 box(970, 700, "+36", 80, 45),
+                 box(590, 1000, "确定", 200, 60)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_boost_training(texts))
+        joined = " ".join(task.logs)
+        self.assertIn("100%/+12=12", joined)
+        self.assertIn("选 100%/+36", joined)
+        self.assertNotIn("80%", joined)
+
     def test_multi_choice_skips_flat_stamina(self):
         """2026-10-27 10:09 实机：三个选项里「不理会(精力+10)」被选中，实际该选属性。
 
@@ -519,6 +545,51 @@ class EffectExpectation(unittest.TestCase):
     def test_probability_multiplies(self):
         self.assertAlmostEqual(self.ev("50%概率 全属性+5"), 15.0)
         self.assertIsNone(self.ev("没有数值"))
+
+
+class GoldBorderRules(unittest.TestCase):
+    """金框 = 科目按钮外圈的**相对**亮度（海边度假那套界面所有按钮都黄）。"""
+
+    NAMES = ["投射", "弹跳", "防守", "体能", "运控", "意识"]
+    YS = [0.22, 0.35, 0.47, 0.59, 0.71, 0.84]
+
+    def _frame(self, ring_row, all_orange):
+        img = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        for i, y in enumerate(self.YS):
+            cy = int(1080 * y)
+            x1, x2 = int(1920 * 0.755), int(1920 * 0.965)
+            y1, y2 = cy - 40, cy + 40
+            # BGR：橙黄按钮（度假/全 MAX）或蓝色按钮（普通）
+            color = (80, 170, 245) if all_orange else (230, 160, 60)
+            cv2.rectangle(img, (x1, y1), (x2, y2), color, -1)
+            if ring_row == i:
+                cv2.rectangle(img, (x1 - 6, y1 - 6), (x2 + 6, y2 + 6), (60, 200, 250), 8)
+        return img
+
+    def _task(self, ring_row, all_orange):
+        texts = [box(int(1920 * 0.80), int(1080 * y) - 20, name, 120, 40)
+                 for name, y in zip(self.NAMES, self.YS)]
+        sel = ring_row or 0
+        texts.append(box(int(1920 * 0.93), int(1080 * self.YS[sel]) - 20, "决定", 100, 40))
+        task = FakeTask(texts)
+        task._executor.frame = self._frame(ring_row, all_orange)
+        return task
+
+    def test_gold_ring_on_selected_row(self):
+        task = self._task(ring_row=0, all_orange=False)
+        self.assertTrue(task.has_gold_border(task._texts))
+
+    def test_no_ring_means_false(self):
+        task = self._task(ring_row=None, all_orange=False)
+        self.assertFalse(task.has_gold_border(task._texts))
+
+    def test_resort_page_all_yellow_is_not_gold_ring(self):
+        """海边度假：6 个科目按钮全被强制 MAX → 按钮本身全是橙黄。
+
+        绝对阈值会把 6 行都判成有金框；相对判据要求选中行明显亮于其它行。
+        """
+        task = self._task(ring_row=None, all_orange=True)
+        self.assertFalse(task.has_gold_border(task._texts))
 
 
 class TopBarRules(unittest.TestCase):

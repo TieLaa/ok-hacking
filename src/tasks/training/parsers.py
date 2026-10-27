@@ -513,37 +513,57 @@ class TrainingParsersMixin:
         """选中的科目大按钮有没有**金色边框**（装备/经理经验满了会点亮）。
 
         用户 2026-10-27 口径：金框/彩框都指科目按钮外面那一圈，不是器材卡。
-        定位方式同 has_crit_border：用「决定」按钮的 y 找到当前选中的那一行，
-        只采样按钮**边缘环带**（按钮内部的科目图标有各种颜色，采样整块会误判）。
+
+        **必须用「相对亮度」判，不能只看绝对值**：海边度假那套界面里所有科目
+        按钮本身就是橙黄色（等级强制 MAX），固定阈值会把 6 行全判成有金框。
+        做法：把 6 个科目按钮的环带都量一遍，只有选中行明显亮于其余行（中位数）
+        才算有框——整屏偏黄时基线也跟着抬高，自然判 False。
         """
         frame = self.frame
         if frame is None:
             return False
         texts = texts if texts is not None else self._ocr_region()
-        decide = self.match_text(texts, "决定")
-        if decide is None:
+        subjects = [t for t in texts
+                    if t.name.strip() in Defs.TRAINING_SUBJECTS
+                    and (t.x + t.width / 2) / self.width > 0.7]
+        if len(subjects) < 2:
             return False
         h, w = frame.shape[:2]
-        cy = decide.y + decide.height / 2
-        x1, x2 = int(w * 0.66), int(w * 0.99)
-        y1 = max(0, int(cy - h * 0.055))
-        y2 = min(h, int(cy + h * 0.055))
-        roi = frame[y1:y2, x1:x2]
-        if roi.size == 0:
-            return False
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        hue, sat, val = cv2.split(hsv)
-        # 金/橙黄：实测按钮金框 H≈15~35，饱和度和亮度都很高
-        gold = (sat > 110) & (val > 150) & (hue >= 8) & (hue <= 42)
-        ring = np.zeros(roi.shape[:2], dtype=bool)
-        t = max(4, int(h * 0.008))
-        ring[:t, :] = True
-        ring[-t:, :] = True
-        ring[:, :t] = True
-        ring[:, -t:] = True
-        ratio = float((gold & ring).sum()) / max(int(ring.sum()), 1)
-        self.log_debug(f"科目大按钮金框占比 {ratio:.3f}")
-        return ratio > 0.08
+        decide = self.match_text(texts, "决定")
+        sel_cy = ((decide.y + decide.height / 2) if decide is not None
+                  else self.height / 2)
+
+        x1, x2 = int(w * 0.752), int(w * 0.968)
+        t_ring = max(6, int(h * 0.012))
+
+        def ring_gold_ratio(cy):
+            y1 = max(0, int(cy - h * 0.055))
+            y2 = min(h, int(cy + h * 0.055))
+            roi = frame[y1:y2, x1:x2]
+            if roi.size == 0:
+                return 0.0
+            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+            hue, sat, val = cv2.split(hsv)
+            gold = (sat > 110) & (val > 150) & (hue >= 8) & (hue <= 42)
+            ring = np.zeros(roi.shape[:2], dtype=bool)
+            ring[:t_ring, :] = True
+            ring[-t_ring:, :] = True
+            ring[:, :t_ring] = True
+            ring[:, -t_ring:] = True
+            return float((gold & ring).sum()) / max(int(ring.sum()), 1)
+
+        rows = []
+        for s in subjects:
+            cy = s.y + s.height / 2
+            rows.append((abs(cy - sel_cy), ring_gold_ratio(cy), s.name.strip()))
+        rows.sort()
+        sel_ratio = rows[0][1]
+        others = sorted(r for _d, r, _n in rows[1:])
+        baseline = others[len(others) // 2] if others else 0.0
+        self.log_debug(f"科目金框：选中 {rows[0][2]} 占比 {sel_ratio:.3f}，"
+                       f"其它行中位数 {baseline:.3f}")
+        # 比其它行明显更黄才算有框；整屏都黄（度假/全 MAX）时差值自然趋近 0
+        return sel_ratio > 0.10 and sel_ratio > baseline * 1.5
 
     def has_crit_border(self, texts=None):
         """选中的科目大按钮有没有彩虹边框（= 有满经验器材，训练会暴击）。
