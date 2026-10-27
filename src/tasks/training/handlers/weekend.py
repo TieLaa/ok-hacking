@@ -453,19 +453,25 @@ class WeekendHandlers:
             auto = any(o.name.strip() == "自动"
                        and abs((o.x + o.width / 2) - cx) < band
                        and o.y < t.y for o in texts)
-            price = None
+            # 价格：**打折时会出现两个数字并且位置会偏**（用户 2026-10-27），
+            # 所以不用固定坐标，扫「奖励下方 0.30h、同一列」的所有数字取最小值
+            # （= 折后价）。OCR 还会把原价和现价粘成一个长串（「10080」），
+            # 这种按 3 位切回来。
+            prices = []
             for d in texts:
                 v = d.name.strip()
-                if not v.isdigit() or len(v) > 4:
+                if not v.isdigit():
                     continue
                 if abs((d.x + d.width / 2) - cx) > band:
                     continue
-                # 价格在奖励文本下方 ~0.15h 处（实拍：奖励 y≈370、价格 y≈485，
-                # 1307x735 画面里差 115px ≈ 0.16h）。旧上限 0.12h 读不到，全部
-                # 当成「价格未知→100」，零用钱 99 时被误判成买不起（2026-10-27 19:04）。
-                if not (t.y < d.y < t.y + self.height * 0.22):
+                if not (t.y < d.y < t.y + self.height * 0.30):
                     continue
-                price = int(v) if price is None else min(price, int(v))
+                if len(v) <= 3:
+                    prices.append(int(v))
+                elif len(v) in (5, 6):
+                    for k in range(0, len(v) - 2, 3):
+                        prices.append(int(v[k:k + 3]))
+            price = min(prices) if prices else None
             # 品质：取卡片「名字那一行 → 奖励那一行」之间的底色（用户 2026-10-27：
             # 只买金/紫，蓝卡和白卡不买）。名字框在同一列、奖励上方。
             name_box = next((o for o in texts

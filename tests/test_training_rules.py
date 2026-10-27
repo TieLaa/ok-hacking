@@ -753,6 +753,26 @@ class ArcadeRules(unittest.TestCase):
         self.assertTrue(task.handle_arcade(texts))
         self.assertEqual(task.actions[-1][0], "click")      # 只退出，不买
 
+    def test_discount_price_takes_the_lower_number(self):
+        """打折时卡片上有两个价格、位置还会偏（用户 2026-10-27），取折后那个。
+
+        OCR 还会把原价和现价粘成 "10080"，按 3 位切回来当 100 / 80 取小值。
+        """
+        texts = [
+            box(600, 115, "请选择一个小游戏", 220, 36),
+            box(199, 236, "自动", 64, 30),
+            box(308, 238, "弹跳", 70, 42),
+            box(251, 370, "弹跳20~70", 155, 31),
+            box(184, 453, "打折", 68, 55),
+            box(355, 484, "80", 44, 32),
+            box(392, 486, "64", 46, 31),
+            box(615, 646, "确定", 71, 39),
+        ]
+        task = self._task(texts, money=300)
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertEqual(task.actions[-2][1], "弹跳20~70")
+        self.assertIn("价格 64", task.logs[-1])
+
     def test_no_auto_card_exits(self):
         texts = [
             box(600, 115, "请选择一个小游戏", 220, 36),
