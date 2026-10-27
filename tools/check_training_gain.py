@@ -37,6 +37,19 @@ WEEK = re.compile(r"第(\d+)周")
 POINTS_PER_SCORE = 1.15
 
 
+def parse_gain(line):
+    """从一行日志里取「属性 → 增量」，同名属性只取第一次出现。
+
+    坑（2026-10-27 实跑发现）：ok-script 的 OCR 日志一行里既有 `found result: [...]`
+    又有 `all_boxes: [...]`，同一批文字出现两遍。直接 findall 求和会把增量翻倍
+    （`弹跳+15，体能+51` 被算成 132）。所以按属性名去重，只认第一次。
+    """
+    gain = {}
+    for name, value in ATTR.findall(line):
+        gain.setdefault(name, int(value))
+    return gain
+
+
 def load(paths):
     rows, week = [], 0
     for path in paths:
@@ -55,9 +68,9 @@ def load(paths):
                 continue
             if pending is None or not any(k in line for k in RESULT):
                 continue
-            gains = [int(v) for _, v in ATTR.findall(line)]
-            if gains:
-                pending["gain"] = sum(gains)
+            gain = parse_gain(line)
+            if gain:
+                pending["gain"] = sum(gain.values())
                 rows.append(pending)
                 pending = None
     return rows
@@ -94,6 +107,23 @@ def main(argv):
         diff = mean(on) - mean(off)
         print(f"  {label}: {diff:+.1f} 点 → 约 {diff / POINTS_PER_SCORE:.1f} 分"
               f"（样本 {len(on)}，仅供参考）")
+
+    # 增益随周次和器材等级线性膨胀：第 1 周一次 +50，第 4 周能到 +200。
+    # 跨周混在一起比较，等于把「周次」当成「有框」，符号都能翻（2026-10-27 实跑：
+    # 金框组均值 115 vs 无框 152，原因是 8 个无框样本全在第 4 周的高增益期）。
+    # 所以再按周内比一次，这是唯一能看的方向。
+    weeks = sorted({r["week"] for r in rows})
+    print("\n按周内配对（同周内才有可比性）：")
+    print(f"{'周':>3}{'信号':>6}{'有':>4}{'均值':>8}{'无':>4}{'均值':>8}{'差':>8}")
+    for week in weeks:
+        subset = [r for r in rows if r["week"] == week]
+        for label, key in (("经理", "mgr"), ("金框", "gold")):
+            on = [r["gain"] for r in subset if r[key]]
+            off = [r["gain"] for r in subset if not r[key]]
+            if not on or not off:
+                continue
+            print(f"{week:>3}{label:>6}{len(on):>4}{mean(on):>8.1f}"
+                  f"{len(off):>4}{mean(off):>8.1f}{mean(on) - mean(off):>+8.1f}")
 
     print("\n提示：金框/彩框样本通常很少，滤波区间很宽；满经验若为负值说明被器材等级污染。")
     return 0
