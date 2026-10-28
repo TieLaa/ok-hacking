@@ -283,19 +283,28 @@ class MatchHandlers:
                                if t.name.strip().startswith("下一")
                                and len(t.name.strip()) <= 4), None)
             if target is not None:
-                # 「下一步」后面的转场是**渐显**的，按钮刚出现时点了不算数：
-                # 实跑（2026-10-27 17:13 / 17:46）稳定连点 3~4 次才推进。
-                # 这里做两件事：点之前等 0.45s 让按钮真正可用；点完 2 秒内不再重复点
-                # （重复点的日志会污染时间轴，也浪费点击预算）。
+                tries = getattr(self, "_reg_step1_tries", 0) + 1
                 now = time.monotonic()
                 if now - getattr(self, "_register_click_at", 0.0) < 2.0:
                     return True
+                # 点不动就换位置再试：某些分辨率下「下一步」的点击热区比 OCR 文字框高/低
+                # （2026-10-28 1549x871 实跑连点 60 秒都没推进）
+                offs = (0.0, -0.015, 0.015, -0.03, 0.03)
+                dy = offs[min(tries - 1, len(offs) - 1)] * self.height
+                self._register_click_at = now
+                self._reg_step1_tries = tries
+                if tries > 6:
+                    self.log_error("注册球员第 1 步点了 6 次都没推进，放弃（避免刷屏）")
+                    self._reg_step1_tries = 0
+                    return False
                 if stage is None:
                     self.sleep(0.45)
-                self._register_click_at = now
-                self.click_box(target, after_sleep=1.0)
+                x = int(target.x + target.width / 2)
+                y = int(target.y + target.height / 2 + dy)
+                self.click(x, y, after_sleep=1.0)
                 self._register_stage = "next"
-                self.log_info("注册球员 1/6：下一步")
+                self.log_info(f"注册球员 1/6：下一步 @({x},{y})"
+                              f"{'' if tries == 1 else f' 第{tries}次'}")
                 return True
 
         # 2) 训练结束弹窗：编队（不是「前往主界面」）
@@ -307,6 +316,7 @@ class MatchHandlers:
             if target is not None:
                 self.click_box(target, after_sleep=0.8)
                 self._register_stage = "team"
+                self._reg_step1_tries = 0
                 self.log_info("注册球员 2/6：编队")
                 return True
             # OCR 经常读不出黄色按钮里的「编队」（样张 2026-10-27-register-2-team.png

@@ -595,7 +595,9 @@ class RegisterPlayerFlow(unittest.TestCase):
               box(1900, 950, "下一步", 300, 60),
               box(400, 950, "记录笔记", 300, 60)]
         self.assertTrue(task.handle_register_player(p1))
-        self.assertEqual(task.actions[-1][1], "下一步")
+        # 点的是「下一步」文字框中心（第一次 tries=1 不加偏移）
+        self.assertEqual(task.actions[-1][0], "click")
+        self.assertEqual(task.actions[-1][1:], (2050, 980))
         self.assertEqual(task._register_stage, "next")
 
         p2 = [box(600, 200, "训练结束", 240, 40),
