@@ -43,7 +43,7 @@ from tools.abs_mouse import (click_client, ensure_foreground,  # noqa: E402
 from tools.wgc_capture import MockWindow, imwrite_auto  # noqa: E402
 
 POSITIONS = ("分卫", "控卫", "小前", "大前", "中锋")
-OUT_JSON = os.path.join(ROOT, "docs", "data", "ssr_roster.json")
+OUT_JSON = os.path.join(ROOT, "docs", "roster", "ssr_roster.json")
 
 
 class Screen:
