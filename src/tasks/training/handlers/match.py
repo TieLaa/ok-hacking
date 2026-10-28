@@ -294,9 +294,13 @@ class MatchHandlers:
                 self._register_click_at = now
                 self._reg_step1_tries = tries
                 if tries > 6:
-                    self.log_error("注册球员第 1 步点了 6 次都没推进，放弃（避免刷屏）")
+                    self.dump_unknown(texts, "register_step1_stuck")
+                    self.log_error("注册球员第 1 步点了 6 次都没推进 → 存证 logs/debug/ 后放弃")
                     self._reg_step1_tries = 0
                     return False
+                if tries == 2:
+                    # 第一次没推进就存一帧，方便事后核对按钮真实位置
+                    self.dump_unknown(texts, "register_step1_fail")
                 if stage is None:
                     self.sleep(0.45)
                 x = int(target.x + target.width / 2)
