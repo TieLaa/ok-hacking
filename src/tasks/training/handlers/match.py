@@ -273,9 +273,58 @@ class MatchHandlers:
         同理「关闭」不能交给 handle_popup —— 它会在任何页面上点第一个「关闭」。
         """
         stage = getattr(self, "_register_stage", None)
+        # 拍数上限：连续 20 拍停在同一 stage 上（页面没推进）就存证 + 放弃，
+        # 绝不允许无限重试（2026-10-28 18:17 空烧 890 拍）
+        ticks = getattr(self, "_reg_ticks", 0) + 1
+        if getattr(self, "_reg_tick_stage", None) == stage:
+            self._reg_ticks = ticks
+        else:
+            self._reg_tick_stage, self._reg_ticks, ticks = stage, 1, 1
+        if ticks > 20:
+            self.dump_unknown(texts, "register_stuck")
+            self.log_error(f"注册球员流程连续 {ticks} 拍没推进（stage={stage}）"
+                           "→ 存证 logs/debug/ 后放弃")
+            self._reg_ticks = 0
+            return False
+
+        # 2) 训练结束弹窗：**必须排在第 1 步前面**。
+        # 这个弹窗正文是「成为注册球员后，可以编队加入队伍。」，里面有「注册球员」，
+        # 而它背后还露着上一页的「下一步」按钮 —— 旧顺序会让第 1 步抢到，
+        # 去点被弹窗盖住的「下一步」（2026-10-28 18:17 空烧 890 拍）。
+        if self.exact_text(texts, ("训练结束",)) is not None:
+            target = self.exact_text(texts, ("编队",))
+            if target is not None:
+                self.click_box(target, after_sleep=0.8)
+                self._register_stage = "team"
+                self._reg_step1_tries = 0
+                self.log_info("注册球员 2/6：编队")
+                return True
+            # OCR 读不出「编队」时：这页固定左「前往主界面」右「编队」，
+            # 拿左边按钮关于弹窗中线镜像过去
+            left = self.exact_text(texts, ("前往主界面",))
+            body = next((t for t in texts if "成为注册球员" in t.name), None)
+            if left is not None and body is not None:
+                mid = body.x + body.width / 2
+                x = int(2 * mid - (left.x + left.width / 2))
+                y = int(left.y + left.height / 2)
+                self.click(x, y, after_sleep=0.8)
+                self._register_stage = "team"
+                self._reg_step1_tries = 0
+                self.log_info(f"注册球员 2/6：编队（镜像左侧按钮 @{x},{y}）")
+                return True
+            btns = self._yellow_buttons()
+            if len(btns) >= 2:
+                bx, by, bw, bh = max(btns, key=lambda b: b[0])
+                self.click(int(bx + bw / 2), int(by + bh / 2), after_sleep=0.8)
+                self._register_stage = "team"
+                self._reg_step1_tries = 0
+                self.log_info("注册球员 2/6：编队（黄色按钮兜底）")
+                return True
 
         # 1) 注册球员页（标题「注册球员」+ 黄色「下一步」）
-        if self.in_registration_page(texts):
+        # **必须整词**：弹窗正文「成为注册球员后…」里的「注册球员」不算，
+        # 否则会点在弹窗背后的「下一步」（2026-10-28 18:17 空烧 890 拍）。
+        if self.exact_text(texts, ("注册球员", "球员登录", "签约", "入部申请")) is not None:
             target = self.exact_text(texts, ("下一步",))
             if target is None:
                 # OCR 偶尔把「下一步」读成「下一」（丢字），按前缀兜底
@@ -309,39 +358,6 @@ class MatchHandlers:
                 self._register_stage = "next"
                 self.log_info(f"注册球员 1/6：下一步 @({x},{y})"
                               f"{'' if tries == 1 else f' 第{tries}次'}")
-                return True
-
-        # 2) 训练结束弹窗：编队（不是「前往主界面」）
-        # **必须整词匹配**：事件页正文里也有「训练结束后，米歇尔理事长拿来了一本…」
-        # （2026-10-27 18:12 实跑），包含匹配会把事件页当成收尾弹窗，
-        # 结果随手点了最右边的黄按钮，等于把三选一事件乱选了。
-        if self.exact_text(texts, ("训练结束",)) is not None:
-            target = self.exact_text(texts, ("编队",))
-            if target is not None:
-                self.click_box(target, after_sleep=0.8)
-                self._register_stage = "team"
-                self._reg_step1_tries = 0
-                self.log_info("注册球员 2/6：编队")
-                return True
-            # OCR 经常读不出黄色按钮里的「编队」（样张 2026-10-27-register-2-team.png
-            # 只认出左边的「前往主界面」）。这页固定「左前往主界面 / 右编队」且
-            # 两个按钮关于弹窗中线对称：拿正文框的中心当中线，把左边按钮镜像过去。
-            left = self.exact_text(texts, ("前往主界面",))
-            body = next((t for t in texts if "成为注册球员" in t.name), None)
-            if left is not None and body is not None:
-                mid = body.x + body.width / 2
-                x = int(2 * mid - (left.x + left.width / 2))
-                y = int(left.y + left.height / 2)
-                self.click(x, y, after_sleep=0.8)
-                self._register_stage = "team"
-                self.log_info(f"注册球员 2/6：编队（镜像左侧按钮 @{x},{y}）")
-                return True
-            btns = self._yellow_buttons()
-            if len(btns) >= 2:
-                bx, by, bw, bh = max(btns, key=lambda b: b[0])
-                self.click(int(bx + bw / 2), int(by + bh / 2), after_sleep=0.8)
-                self._register_stage = "team"
-                self.log_info("注册球员 2/6：编队（黄色按钮兜底）")
                 return True
 
         if stage is None:

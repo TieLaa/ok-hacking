@@ -667,6 +667,39 @@ class RegisterPlayerFlow(unittest.TestCase):
         self.assertIsNone(task.exact_text(texts, ("训练结束",)))      # 但没有独立标题框
         self.assertFalse(task.handle_register_player(texts))
 
+    def test_training_end_popup_wins_over_next_step(self):
+        """弹窗正文含「注册球员」、背后还露着「下一步」时，必须点「编队」。
+
+        2026-10-28 18:17 实跑：训练结束弹窗上「注册球员」出现在正文
+        「成为注册球员后，可以编队加入队伍。」，而背景页的「下一步」仍在右侧下方，
+        结果第 1 步抢到了，一直点被弹窗盖住的「下一步」，空烧 890 拍。
+        """
+        texts = [
+            box(323, 138, "训练结束", 138, 43),
+            box(702, 333, "辛苦了！", 123, 40),
+            box(487, 383, "成为注册球员后，可以编队加入队伍。", 552, 36),
+            box(499, 621, "前往主界面", 182, 48),
+            box(913, 620, "编队", 79, 49),
+            box(921, 757, "下一步", 87, 29),        # 被弹窗盖住的背景按钮
+        ]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_register_player(texts))
+        self.assertEqual(task.actions[-1][1], "编队")
+
+    def test_tick_cap_gives_up(self):
+        """同一个 stage 连续 20 拍没推进 → 放弃（不许无限重试）。"""
+        texts = [box(913, 620, "编队", 79, 49),
+                 box(323, 138, "训练结束", 138, 43)]
+        task = FakeTask(texts)
+        task.click_box = lambda box, **kw: None            # 点了也不动
+        gave_up = None
+        for i in range(1, 31):
+            if not task.handle_register_player(texts):
+                gave_up = i
+                break
+        self.assertIsNotNone(gave_up, "连续 30 拍都没放弃，说明拍数上限没生效")
+        self.assertLessEqual(gave_up, 25)
+
     def test_close_is_not_taken_by_popup_handler(self):
         """「更新最高队伍等级」弹窗的关闭必须由注册流程处理，不能落到 handle_popup。"""
         from src.tasks.training.handlers import HANDLERS
