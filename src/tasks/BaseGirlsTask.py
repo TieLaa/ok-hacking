@@ -41,6 +41,11 @@ class BaseGirlsTask(BaseTask):
         # 否则任务连训练都开不了（2026-10-28 实跑踩到：任务在大厅空转 366 拍）。
         if "赛事" in names and "训练" in names:
             return False
+        # 有弹窗/对话框时一律放行（弹窗盖在大厅上，背景那些入口文字还在，
+        # 但这时候该由 handle_resume_training / handle_popup 处理）
+        if any(k in names for k in ("训练确认", "继续训练", "删档",
+                                    "确定", "确认", "关闭", "下一步")):
+            return False
         hits = [k for k in self.LOBBY_SUBPAGES if k in names]
         if not hits:
             return False
