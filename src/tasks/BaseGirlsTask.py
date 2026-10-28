@@ -36,6 +36,11 @@ class BaseGirlsTask(BaseTask):
     def is_lobby_subpage(self, texts):
         """当前画面是不是大厅里玩家自己开的子菜单（任务不管这种页面）。"""
         names = "".join(t.name for t in texts)
+        # 大厅主界面本身也有「招募 / 飞跃计划 / 社团GO」这些入口文字，
+        # 但它的标志是同时有「赛事」和「训练」两个大按钮 —— 那种页面必须放行，
+        # 否则任务连训练都开不了（2026-10-28 实跑踩到：任务在大厅空转 366 拍）。
+        if "赛事" in names and "训练" in names:
+            return False
         hits = [k for k in self.LOBBY_SUBPAGES if k in names]
         if not hits:
             return False
