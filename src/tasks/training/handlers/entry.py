@@ -38,7 +38,9 @@ class EntryHandlers:
 
     def handle_club_members(self, texts):
         """社团成员 / 角色列表页：误入时退出（左上角 <<）。"""
-        if self.match_text(texts, "社团成员") is None:
+        # 必须整词：「她说要给社团成员们疏通经脉」这种正文也会命中包含匹配，
+        # 结果按摩事件页被当成社团成员页，一直点左上角返回（2026-10-28 18:13 卡死）
+        if self.exact_text(texts, ("社团成员",)) is None:
             return False
         self.click(int(self.width * 0.035), int(self.height * 0.06), after_sleep=0.8)
         self.log_info("社团成员页：点左上角返回")

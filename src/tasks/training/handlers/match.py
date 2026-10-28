@@ -584,6 +584,29 @@ class MatchHandlers:
                     and self.match_text(
                         self.texts_in_region(texts, "top_right"), "跳过") is not None)
 
+        # ---- 底排横向 3 选 1 大卡片（按摩/温泉/强化训练这类）----
+        # 2026-10-28 实跑卡死：按摩事件「放弃按摩 属性+10 / 安心按摩 70%概率属性+30 /
+        # 神秘按摩 30%概率属性+60」，三个选项是白底大卡（不是黄色按钮），
+        # 既不成居中一列、也不被 _yellow_buttons 认出 → 没人认领 → 卡死停任务。
+        cards = self._card_choices(texts)
+        if len(cards) >= 2:
+            infos = []
+            for box, effs in cards:
+                ev = self._effect_ev(effs)
+                attrs = any(any(a in e.name for a in Defs.TRAINING_SUBJECTS)
+                            for e in effs)
+                flat = (any("精力" in e.name for e in effs) and not attrs)
+                infos.append({"x": box.x, "y": box.y, "box": (box.x, box.y, box.width, box.height),
+                              "name": box.name.strip(), "name_box": box,
+                              "ev": ev, "flat": flat})
+            pick, why = self._pick_choice(infos, "h")
+            detail = "、".join(
+                f"{i['name']}({('%.0f' % i['ev']) if i['ev'] is not None else '?'}"
+                f"{'·回精力' if i['flat'] else ''})" for i in infos)
+            self.log_info(f"事件选项（横向卡片）：{detail} → 选「{pick['name']}」（{why}）")
+            self.click_box(pick["name_box"], after_sleep=0.45)
+            return True
+
         group = self.choice_candidates(texts)
         # 事件只可能二/三选一：组里出现 4 项以上，说明把表格列或信息栏捞进来了
         # （2026-10-27 00:02 周结算页 5 个位置名「控卫…中锋」就是这样被当成选项的）
@@ -608,29 +631,6 @@ class MatchHandlers:
             self.log_info("事件选项（竖向）：" + "、".join(t.name.strip() for t in group)
                           + f" → 选第一个「{pick.name.strip()}」")
             self.click_box(pick, after_sleep=0.45)
-            return True
-
-        # ---- 底排横向 3 选 1 大卡片（按摩/温泉/强化训练这类）----
-        # 2026-10-28 实跑卡死：按摩事件「放弃按摩 属性+10 / 安心按摩 70%概率属性+30 /
-        # 神秘按摩 30%概率属性+60」，三个选项是白底大卡（不是黄色按钮），
-        # 既不成居中一列、也不被 _yellow_buttons 认出 → 没人认领 → 卡死停任务。
-        cards = self._card_choices(texts)
-        if len(cards) >= 2:
-            infos = []
-            for box, effs in cards:
-                ev = self._effect_ev(effs)
-                attrs = any(any(a in e.name for a in Defs.TRAINING_SUBJECTS)
-                            for e in effs)
-                flat = (any("精力" in e.name for e in effs) and not attrs)
-                infos.append({"x": box.x, "y": box.y, "box": (box.x, box.y, box.width, box.height),
-                              "name": box.name.strip(), "name_box": box,
-                              "ev": ev, "flat": flat})
-            pick, why = self._pick_choice(infos, "h")
-            detail = "、".join(
-                f"{i['name']}({('%.0f' % i['ev']) if i['ev'] is not None else '?'}"
-                f"{'·回精力' if i['flat'] else ''})" for i in infos)
-            self.log_info(f"事件选项（横向卡片）：{detail} → 选「{pick['name']}」（{why}）")
-            self.click_box(pick["name_box"], after_sleep=0.45)
             return True
 
         buttons = self._yellow_buttons()
