@@ -752,6 +752,29 @@ class LobbySubpage(unittest.TestCase):
         self.assertFalse(task.is_lobby_subpage(texts))
 
 
+class EventCardChoices(unittest.TestCase):
+    """底排横向 3 选 1 大卡（按摩事件那种）：按期望值选，不能卡死。
+
+    2026-10-28 实跑：放弃按摩(属性+10) / 安心按摩(70%属性+30) / 神秘按摩(30%属性+60)，
+    三个白底大卡既不是居中一列也不是黄色按钮 → 没有 handler 认领 → 卡死停任务。
+    """
+
+    def test_massage_event_picks_best_ev(self):
+        texts = [
+            box(60, 40, "第2周", 90, 34), box(200, 40, "星期四", 90, 34),
+            box(420, 330, "训练结束后，米歇尔理事长拿来了一本穴位按摩秘籍", 700, 37),
+            box(240, 700, "放弃按摩", 170, 45),
+            box(700, 700, "安心按摩", 170, 45),
+            box(1170, 700, "神秘按摩", 170, 45),
+            box(240, 760, "属性+10", 130, 33),
+            box(640, 760, "70%概率 属性+30", 260, 37),
+            box(1110, 760, "30%概率 属性+60", 260, 37),
+        ]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_event_choice(texts))
+        self.assertEqual(task.actions[-1][1], "安心按摩")     # EV 21 > 18 > 10
+
+
 class TapToContinue(unittest.TestCase):
     """MVP / 胜负过场：只有一行「点击屏幕继续」，必须点一下推进（2026-10-28 用户实测）。"""
 

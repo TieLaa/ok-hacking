@@ -177,6 +177,46 @@ class MatchHandlers:
         blue = (b > 150) & (b > r + 20)
         return float(blue.mean()) > Defs.SPEED_BLUE_RATIO_2X
 
+    def _card_choices(self, texts):
+        """底排横向大卡：同一行 2~3 块短标题 + 每块自己下方一行效果文字。
+
+        返回 [(标题框, [效果框...]), ...]；不只是「按摩」，温泉/强化训练等
+        三选一大卡都是这个形态。
+        """
+        h = self.height
+        w = self.width
+        rows = {}
+        for t in texts:
+            s = t.name.strip()
+            cy = (t.y + t.height / 2) / h
+            if not (0.62 <= cy <= 0.88):
+                continue
+            if not (2 <= len(s) <= 8) or any(ch.isdigit() for ch in s):
+                continue
+            if self.is_label(s) or self.is_decor(s):
+                continue
+            key = round(cy, 1)
+            rows.setdefault(key, []).append(t)
+        best = []
+        for key, group in rows.items():
+            if not (2 <= len(group) <= 3):
+                continue
+            items = []
+            for t in group:
+                cx = (t.x + t.width / 2) / w
+                effs = [o for o in texts
+                        if o is not t
+                        and abs((o.x + o.width / 2) / w - cx) < 0.12
+                        and (o.y + o.height / 2) / h > key
+                        and (o.y + o.height / 2) / h < key + 0.16
+                        and any(k in o.name for k in ("属性", "精力", "概率", "%"))
+                        and o.name.strip() != t.name.strip()]
+                if effs:
+                    items.append((t, effs))
+            if len(items) >= 2 and len(items) > len(best):
+                best = items
+        return best
+
     def handle_prepare(self, texts):
         """赛前准备页：跳过比赛 / 前往比赛。
 
@@ -554,6 +594,29 @@ class MatchHandlers:
             self.log_info("事件选项（竖向）：" + "、".join(t.name.strip() for t in group)
                           + f" → 选第一个「{pick.name.strip()}」")
             self.click_box(pick, after_sleep=0.45)
+            return True
+
+        # ---- 底排横向 3 选 1 大卡片（按摩/温泉/强化训练这类）----
+        # 2026-10-28 实跑卡死：按摩事件「放弃按摩 属性+10 / 安心按摩 70%概率属性+30 /
+        # 神秘按摩 30%概率属性+60」，三个选项是白底大卡（不是黄色按钮），
+        # 既不成居中一列、也不被 _yellow_buttons 认出 → 没人认领 → 卡死停任务。
+        cards = self._card_choices(texts)
+        if len(cards) >= 2:
+            infos = []
+            for box, effs in cards:
+                ev = self._effect_ev(effs)
+                attrs = any(any(a in e.name for a in Defs.TRAINING_SUBJECTS)
+                            for e in effs)
+                flat = (any("精力" in e.name for e in effs) and not attrs)
+                infos.append({"x": box.x, "y": box.y, "box": (box.x, box.y, box.width, box.height),
+                              "name": box.name.strip(), "name_box": box,
+                              "ev": ev, "flat": flat})
+            pick, why = self._pick_choice(infos, "h")
+            detail = "、".join(
+                f"{i['name']}({('%.0f' % i['ev']) if i['ev'] is not None else '?'}"
+                f"{'·回精力' if i['flat'] else ''})" for i in infos)
+            self.log_info(f"事件选项（横向卡片）：{detail} → 选「{pick['name']}」（{why}）")
+            self.click_box(pick["name_box"], after_sleep=0.45)
             return True
 
         buttons = self._yellow_buttons()
