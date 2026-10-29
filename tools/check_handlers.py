@@ -115,6 +115,11 @@ class DryRunTask(TrainingTask):
         # run() 的 5 秒看门狗依赖这个时间戳（TrainingTask.__init__ 里初始化）
         self._last_click_at = 0.0
         self._match_intro_at = 0.0
+        # 流派识别（2026-10-29）：None = 还不知道，等着开日历认队长
+        self._style = None
+        self._style_name = None
+        self._style_probe_tries = 0
+        self._style_probe_at = 0.0
 
     # ---------- 坐标换算 ----------
     def width_of_screen(self, ratio):

@@ -18,7 +18,7 @@ import numpy as np
 from ok.feature.Box import Box
 
 from src.tasks.ui import Defs  # noqa: F401
-from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
+from src.tasks.training.constants import JPEG_PARAMS, STYLE_BY_NAME  # noqa: F401
 
 # 科目按钮外圈「框」的判定门限（比例 = 环带上命中像素 / 环带总像素）。
 # 2026-10-27 第六局实跑 + 用户当场复核：
@@ -435,19 +435,22 @@ class TrainingParsersMixin:
                 cands.append(t)
         return max(cands, key=lambda t: t.height).name.strip() if cands else None
 
-    def find_teammate_icons(self):
-        """在右侧科目区找「有队友」的橙色小人头像，返回中心点列表。
+    def find_teammate_icons(self, x_from=0.78, x_to=1.0):
+        """在指定横向范围内找「有队友」的橙色小人头像，返回中心点列表。
 
         实测（2026-10-25）：小人是 42x42 的纯橙圆，主色 (255,145,0)；
         右上角「决定」按钮是亮黄 (255,237,75)，**G 通道高 90**，所以卡 g<190 就能排除。
         再用连通域尺寸过滤（42px 上下），后期按钮图标换色也不影响。
+
+        默认只扫右侧科目区（0.78~1.0）；餐厅两个打工选项在屏幕中间，
+        所以要能传整屏范围（2026-10-29）。
         """
         frame = self.frame
         if frame is None:
             return []
         h, w = frame.shape[:2]
-        x0 = int(w * 0.78)                       # 只在右侧科目区找
-        roi = frame[:, x0:]
+        x0, x1 = int(w * x_from), int(w * x_to)
+        roi = frame[:, x0:x1]
         b = roi[:, :, 0].astype(int)
         g = roi[:, :, 1].astype(int)
         r = roi[:, :, 2].astype(int)
@@ -465,6 +468,93 @@ class TrainingParsersMixin:
                 continue
             icons.append((cent[i][0] + x0, cent[i][1]))
         return icons
+
+    def mates_near(self, box, icons):
+        """这个选项周围挂了几个队友头像（餐厅打工的「队友多」判据）。
+
+        只在**选项自己那一列**里数：横向 ±1.2 个选项宽，纵向从选项上方 2 个高度
+        到下方 0.8 个高度。范围给得比较宽，是因为这两个选项的美术和科目页
+        （头像挂在文字右侧/右上角）不一定完全一样，宁可多算一点也不要漏。
+        数不到就返回 0 —— 调用方拿 0 当平局处理，正好落到「选右边」的规则上。
+        """
+        if not icons or box is None:
+            return 0
+        cx = box.x + box.width / 2
+        half = max(box.width * 1.2, self.width * 0.10)
+        top = box.y - box.height * 2.0
+        bottom = box.y + box.height * 0.8
+        return sum(1 for ix, iy in icons
+                   if abs(ix - cx) <= half and top <= iy <= bottom)
+
+    def is_training_plan(self, texts):
+        """是不是训练计划（日历）页。
+
+        判据要能挡掉训练日台词「今天的训练计划，我看看」——那句话同样含
+        「的训练计划」。真正的那一页有**整周课表**：至少两个「星期X」列 + 三节课，
+        台词页只有当天那一个「星期四」，课表数也不够。
+        """
+        if self.match_text(texts, "的训练计划") is None:
+            return False
+        if self.read_plan_captain(texts):
+            return True
+        day_cols = sum(1 for t in texts
+                       if t.name.strip() in ("星期二", "星期三", "星期四",
+                                             "星期五", "星期六", "星期日"))
+        lessons = sum(1 for t in texts if "训练" in t.name)
+        return day_cols >= 2 and lessons >= 3
+
+    def read_plan_captain(self, texts):
+        """训练计划（日历）页左上角「XX的训练计划」里的 XX。
+
+        实测（logs/unknown/1029-093636_register_stuck_s636.txt，1349x759）OCR 会把
+        名字和标题拆成两个框：
+            望月     (184,74,158,91)
+            的训练计划 (339,96,294,62)
+        所以两种写法都要认：整段「真崎的训练计划」，或者「的训练计划」左边那个框。
+        不在 plan_title 区域里的同类文字（训练日台词「今天的训练计划，我看看」）
+        一律不算 —— 用户口径里 XX 只出现在左上角。
+        """
+        area = self.texts_in_region(texts, "plan_title")
+        for t in area:
+            s = t.name.replace(" ", "").strip()
+            m = Defs.PLAN_TITLE_RE.match(s)
+            if m and m.group(1) not in ("今天", "今日"):
+                return m.group(1)
+        title = next((t for t in area
+                      if t.name.replace(" ", "").strip() == "的训练计划"), None)
+        if title is None:
+            return None
+        cy = title.y + title.height / 2
+        left = [t for t in area
+                if t is not title
+                and t.x + t.width <= title.x + 8
+                and abs((t.y + t.height / 2) - cy) < title.height]
+        if not left:
+            return None
+        return max(left, key=lambda t: t.x + t.width).name.replace(" ", "").strip()
+
+    @staticmethod
+    def style_for_name(name):
+        """角色名（可能只有姓氏）→ 流派；查不到返回 None。
+
+        查表用 STYLE_BY_NAME（抄自 docs/roster/ssr_roster.json）。
+        日历标题只显示姓氏，所以按前缀匹配；多个前缀都命中（「羽」→ 羽田 / 羽漱川）
+        时取**更长的那个**，长度一样才算歧义（返回 None，宁可不动）。
+        """
+        if not name:
+            return None
+        s = name.replace(" ", "").replace("・", "·").strip()
+        best, best_len, tie = None, 0, False
+        for full, style in STYLE_BY_NAME.items():
+            if s == full:
+                return style
+            if not (full.startswith(s) or s.startswith(full)):
+                continue
+            if len(full) > best_len:
+                best, best_len, tie = style, len(full), False
+            elif len(full) == best_len and style != best:
+                tie = True
+        return None if tie else best
 
     def has_teammate_icon(self, box, icons):
         """这个科目的右边有没有小人头像。

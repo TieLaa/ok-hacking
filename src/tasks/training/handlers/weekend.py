@@ -119,13 +119,46 @@ class WeekendHandlers:
         self.click(int(self.width * 0.957), int(self.height * 0.047), after_sleep=after_sleep)
 
     def handle_restaurant(self, texts):
-        """餐厅内页：桌游GM（零用钱+）/ 当服务员（零用钱++）。"""
+        """餐厅内页：桌游GM（零用钱+）/ 当服务员（零用钱++）。
+
+        用户 2026-10-29 口径：**周六其他流派来打工时，选队友多的那个选项**，
+        队友一样多就选右边那个（消耗体力的）。
+        训练流不进餐厅，保留配置里的「餐厅选项」原行为。
+        """
         if self.match_text(texts, Defs.RESTAURANT_TITLE) is None:
             return False
         self.mark_visited("餐厅")
-        pref = self.config.get("餐厅选项", "当服务员")
-        order = (pref,) + tuple(x for x in Defs.RESTAURANT_OPTIONS if x != pref)
+        if self.style == "训练流":
+            pref = self.config.get("餐厅选项", "当服务员")
+            order = (pref,) + tuple(x for x in Defs.RESTAURANT_OPTIONS if x != pref)
+        else:
+            order = self.restaurant_order(texts)
         return self.choose_option(texts, order)
+
+    def restaurant_order(self, texts):
+        """餐厅两个选项的点击顺序：队友多的优先，一样多取右边（消耗体力的）。
+
+        界面没有实测帧（餐厅一次都没进去过：历史日志里只有配置项，没有
+        「选择「当服务员」」的命中记录），所以这里只做两件事：
+        1. 用和科目页同一套橙色小人连通域，数每个选项周围挂了几个队友头像；
+        2. 按（队友数降序，x 坐标降序）排序 —— 数不到时全算 0，
+           顺序自然退化成「右边优先」，正好等于用户给的平局规则。
+        日志会把每个选项的队友数打出来，第一次实跑就能人工核对这个判据对不对。
+        """
+        opts = self.texts_in_region(texts, "weekend_options")
+        found = []
+        for name in Defs.RESTAURANT_OPTIONS:
+            box = self.exact_text(opts, (name,)) or self.match_text(opts, (name,))
+            if box is not None:
+                found.append(box)
+        if not found:
+            return Defs.RESTAURANT_OPTIONS
+        icons = self.find_teammate_icons(0.0, 1.0)
+        scored = [(self.mates_near(b, icons), b) for b in found]
+        scored.sort(key=lambda pair: (-pair[0], -pair[1].x))
+        self.log_info("餐厅：队友数 " + "、".join(
+            f"{b.name}={n}" for n, b in scored) + " → 按此顺序选")
+        return tuple(b.name for _n, b in scored)
 
     def handle_park(self, texts):
         """公园内页：散步（零用钱+）/ 划船（属性+）/ 野餐（精力++）。
@@ -579,10 +612,13 @@ class WeekendHandlers:
         return True
 
     def handle_go_out(self, texts):
-        """周末首页：周六先点「商店」看一眼，再点「出行」进地图。
+        """周末首页：周日训练流/商店流先点「商店」看一眼，再点「出行」进地图。
 
         实机（2026-10-25 周六）：出行页只有「出行」两个字，没有任何地点名，
         所以 handle_weekend 认不出来，必须先点这一下。
+
+        用户 2026-10-29 口径（覆盖旧版「商店流周六周日各进一次店」）：
+        **只有周日**、而且只有训练流 / 商店流会先进店，其他流派（含周六所有人）直接出行。
         """
         # 地图上没有「出行」按钮（2026-10-27 修正）：旧判据是「有地点名就是地图」，
         # 但周末首页的台词也含地点名（「告诉她公园的草坪是假的」），
@@ -600,17 +636,14 @@ class WeekendHandlers:
             self.log_info("训练日的额外出行已经用过 → 返回主界面")
             return True
 
-        # 商店只有「商店流」才进（用户 2026-10-26：训练流的钱优先换步行街/游戏厅的黄色道具）
-        if self.style == "商店流":
-            st = self.weekend_state()
+        # 周末首页的商店入口：2026-10-29 起只有周日 + 训练流/商店流才进。
+        # 周六其他流派都要去餐厅打工，没有时间去商店（用户口径）。
+        if day == "日" and self.style in ("训练流", "商店流"):
             shop = self.match_text(texts, "商店")
-            # 周六、周日首页都有商店入口（用户 2026-10-27 确认），两天各进一次。
-            # weekend_state 按「第N周+星期X」重置，shop_checked 天然就是"每天一次"；
-            # 旧版用 `day != "日"` 把周日挡掉了，等于每周少逛一次店。
             if shop is not None and not st["shop_checked"]:
                 st["shop_checked"] = True
                 self.click_box(shop, after_sleep=0.9)
-                self.log_info("周末：商店流，先去商店")
+                self.log_info(f"周末：{self.style}周日，先去商店")
                 return True
 
         self.click_text("出行", after_sleep=0.6)
@@ -618,11 +651,12 @@ class WeekendHandlers:
         return True
 
     def handle_weekend(self, texts):
-        """周末地图：按流派顺序去地点。
+        """周末地图：按「星期 + 流派」去地点。
 
-        训练流（用户 2026-10-26）：周六先去步行街，其次游戏厅，
-        找「有队友加成的黄色道具」；周日再回公园补精力。
-        `允许进步行街 / 允许进游戏厅` 没开时这两个地点会被过滤掉，退化成公园。
+        用户 2026-10-29 口径（见 flow.weekend_priority / constants.WEEKEND_PLAN）：
+        - 周六：训练流原设定（步行街 → 游戏厅 → 公园）；其他流派去餐厅打工；
+        - 周日：训练流→公园、商店流→餐厅、扭蛋流→步行街、小游戏流→游戏厅。
+        `允许进步行街 / 允许进游戏厅` 没开时对应地点会被过滤掉，退化成公园。
         """
         # 周末首页有「出行」大按钮，地图上没有（2026-10-27 核对 run2 地图页三帧 OCR：
         # 地图只有「公园/公园+」「游戏厅/属性+」「步行街/零用钱+」，无「出行」）。
@@ -636,11 +670,9 @@ class WeekendHandlers:
         visited = st.setdefault("visited", set())
         day = st["date"][1] if st["date"] else None
 
-        places = self.weekend_priority()
-        if (self.style == "训练流"
-                and self.config.get("周末第一天优先资源点", True)
-                and day == "日"):
-            places = ["公园"]
+        # 周六的训练流 + 周日公园：老开关「周末第一天优先资源点」已经由
+        # WEEKEND_PLAN 表覆盖，这里不再单独判（行为不变）。
+        places = self.weekend_priority(day)
 
         # 今天已经去过的地方不再进：游戏厅没有可跳过的小游戏时会退回地图，
         # 不记录「已去过」就会来回进出游戏厅（2026-10-26 实训）。

@@ -60,6 +60,63 @@ class TrainingHandlers:
         self.log_info("度假：点主按钮")
         return True
 
+    def handle_training_plan(self, texts):
+        """训练计划（日历）页：读左上角「XX 的训练计划」，定流派，然后关掉日历。
+
+        用户 2026-10-29 口径：流派信息为空时打开日历，左上角显示的 XX 就是队长，
+        去角色表里查 XX 属于哪个流派，默认按队长的流派跑。
+
+        坑（2026-10-27 00:54 实跑）：这一页同时有「野餐/划船/转动扭蛋/训练」等词，
+        旧版被 handle_street 抢走 —— 当成扭蛋页「退出」，还误记了一次「步行街已去」；
+        在 15:17 那局里还被 handle_park 点了一下「野餐」。
+        所以这个 handler 必须排在所有地点 handler 前面（见 handlers/__init__.py）。
+        """
+        if not self.is_training_plan(texts):
+            return False
+        name = self.read_plan_captain(texts)
+        style = self.style_for_name(name) if name else None
+        if style:
+            self._style = style
+            self._style_name = name
+            self.log_info(f"训练计划：队长「{name}」→ 流派「{style}」", notify=True)
+        elif name:
+            # 角色表里没有（SR/R 卡没收录）→ 保持配置/兜底流派，别再反复开了
+            self._style_name = name
+            self._style_probe_tries = 3
+            self.log_warning(f"训练计划：队长「{name}」不在角色表里 → 沿用「{self.style}」")
+        else:
+            self.log_warning("训练计划：没读出队长名字 → 关掉日历，下一拍再试")
+        self.exit_page(after_sleep=0.8)
+        return True
+
+    def handle_style_probe(self, texts):
+        """流派还不知道（新的一局 / 换了队长）→ 打开左上角的训练计划日历。
+
+        用户 2026-10-29：点「开始训练」以后流派变量是空的，先打开日历认队长。
+        训练日主界面左上角那个按钮就是日历（不是返回，见 flow.exit_page 的注释），
+        只点一次、最多 3 次，避免别的页面乱点或无限重试。
+        """
+        if self.style_known:
+            return False
+        if (self.match_text(texts, "星期") is None
+                or self.match_text(texts, "休息") is None):
+            return False
+        tries = getattr(self, "_style_probe_tries", 0)
+        if tries >= 3:
+            return False
+        if time.monotonic() - getattr(self, "_style_probe_at", 0.0) < 3.0:
+            return False
+        self._style_probe_tries = tries + 1
+        self._style_probe_at = time.monotonic()
+        self.click(int(self.width * 0.035), int(self.height * 0.06), after_sleep=0.8)
+        if self._style_probe_tries >= 3:
+            self.log_warning(
+                f"流派识别 3 次都没成功 → 先按「{self.style}」跑"
+                "（配置里直接选流派可跳过这一步）")
+        else:
+            self.log_info("流派未知：点左上角打开训练计划日历")
+        return True
+
     def handle_training_day(self, texts):
         """训练日主界面：右下「训练 / 休息」。"""
         if self.match_text(texts, "星期") is None:
@@ -79,7 +136,8 @@ class TrainingHandlers:
                 return True
         state = self.top_bar()
         cur = state.get("stamina")
-        limit = int(self.config.get("休息体力阈值", 40))
+        # 周五按流派分档（用户 2026-10-29）：训练流不变，其他流派 55，商店流 80
+        limit = self.rest_threshold(state.get("day"))
         action = self.texts_in_region(texts, "main_action")
         force_rest = self._force_rest
         if force_rest:
@@ -92,7 +150,7 @@ class TrainingHandlers:
             else:
                 self.flow_click("day_rest", after_sleep=0.6)
             if not force_rest:
-                self.log_info(f"体力 {cur} 偏低，休息")
+                self.log_info(f"体力 {cur} < {limit}（{self.style}·星期{state.get('day')}）→ 休息")
         else:
             target = self.match_text(action, "训练")
             if target is not None:

@@ -22,6 +22,10 @@ HANDLERS = (
     PopupHandlers.handle_rest_confirm,
     PopupHandlers.handle_popup,
     PopupHandlers.handle_draw,
+    # 训练计划（日历）整页：必须排在所有地点 handler 之前 ——
+    # 这一页带「野餐/划船/转动扭蛋/训练」，旧版被 handle_street / handle_park 抢走
+    # （2026-10-27 00:54 当成扭蛋页退出并误记「步行街已去」；15:17 那局被点了「野餐」）。
+    TrainingHandlers.handle_training_plan,
     MatchHandlers.handle_match_intro,
     MatchHandlers.handle_in_match,
     TrainingHandlers.handle_training_result,
@@ -38,6 +42,9 @@ HANDLERS = (
     EntryHandlers.handle_team,
     EntryHandlers.handle_equipment,
     EntryHandlers.handle_confirm_team,
+    # 流派未知时先开日历认队长（用户 2026-10-29）：必须排在训练日主界面之前，
+    # 否则第一拍就点「训练/休息」，流派还没定下来。
+    TrainingHandlers.handle_style_probe,
     TrainingHandlers.handle_daily_shop,
     TrainingHandlers.handle_training_day,
     TrainingHandlers.handle_training_hub,

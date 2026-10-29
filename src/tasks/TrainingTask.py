@@ -13,7 +13,8 @@
 from collections import deque
 
 from src.tasks.BaseGirlsTask import BaseGirlsTask
-from src.tasks.training.constants import JPEG_PARAMS, STYLE_PLACES  # noqa: F401
+from src.tasks.training.constants import (JPEG_PARAMS, STYLE_AUTO,  # noqa: F401
+                                          STYLE_PLACES)
 from src.tasks.training.flow import TrainingFlowMixin
 from src.tasks.training.parsers import TrainingParsersMixin
 from src.tasks.training.scoring import TrainingScoringMixin
@@ -34,7 +35,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self.name = "养成-训练循环"
         self.description = "自动跑完一局养成：训练 / 周末活动 / 比赛日跳过，循环到赛季结束"
         self.default_config.update({
-            "流派": "训练流",
+            "流派": STYLE_AUTO,
             "失败率上限(%)": 50,
             "失败率超限改休息": True,
             "餐厅选项": "当服务员",
@@ -64,7 +65,8 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
             "键鼠暂停(秒)": 5,
         })
         self.config_type.update({
-            "流派": {"type": "drop_down", "options": list(STYLE_PLACES.keys())},
+            "流派": {"type": "drop_down",
+                    "options": [STYLE_AUTO] + list(STYLE_PLACES.keys())},
             "餐厅选项": {"type": "drop_down", "options": ["当服务员", "桌游GM"]},
             "公园选项": {"type": "drop_down", "options": ["野餐", "划船", "散步"]},
             "购买策略": {"type": "drop_down", "options": ["只买金和紫", "只买器材手册+", "买最贵", "不买"]},
@@ -74,6 +76,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
             },
         })
         self.config_description.update({
+            "流派": "自动（按队长）= 点开始训练后打开日历，按「XX的训练计划」里队长的流派跑；选具体流派 = 手动锁定，不去读日历",
             "指定队长": "填角色名（如「真崎辉世」）就逐张点开找她当队长；留空 = 点第一张（等级最高）",
             "新一局删档": "遇到「训练确认」弹窗时点「删档」开新的一局；只在旧局已经跑完时打开",
             "失败率上限(%)": "训练科目页失败率高于这个值就直接回主界面休息（失败率高说明体力撑不住了）",
@@ -85,7 +88,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
             "赛前清空余额": "比赛前一天进店把零用钱花光（金紫优先，买完再买剩下的）；默认关闭，先把正常流程跑顺",
             "只在决战前清空": "打开后只有决赛前一天才清空（需同时打开「赛前清空余额」；决赛判据还没实测）",
             "周末先看商店": "商店流在周末首页额外先看一眼商店（日常商店已由「每天逛商店」覆盖）",
-            "周末第一天优先资源点": "训练流周六优先去步行街（其次游戏厅），周日再回公园补精力",
+            "周末第一天优先资源点": "训练流周六优先去步行街（其次游戏厅），周日再回公园补精力（2026-10-29 起周日地点由「星期+流派」表固定，本开关不再生效）",
             "游戏厅付费": "游戏厅没有「跳过」时，花钱（≥64 零用钱）买一个「自动」小游戏换属性；关掉就沿用旧逻辑直接退出",
             "周末野餐阈值": "周日体力低于这个值才野餐；否则选划船（属性+）",
             "扭蛋优先属性": "步行街扭蛋三选一，按顺序找第一个存在的（会消耗所有精力）",
@@ -120,6 +123,12 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self._force_rest = False
         # 最近一次点击的墙钟时间：run() 的「N 秒没点击」看门狗用
         self._last_click_at = 0.0
+        # 当前流派的运行期变量（用户 2026-10-29）：点开始训练后清空，
+        # 打开日历读到队长名再写进来；配置里选具体流派时不走这条路。
+        self._style = None
+        self._style_name = None         # 日历上读到的队长名（日志/复盘用）
+        self._style_probe_tries = 0     # 开日历试了几次（最多 3 次）
+        self._style_probe_at = 0.0      # 上次开日历的时间（3 秒冷却）
 
     # 顺序见 training/handlers/__init__.py
     HANDLERS = HANDLERS

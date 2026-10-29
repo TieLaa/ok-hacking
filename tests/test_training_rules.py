@@ -1082,6 +1082,11 @@ class WeekendMapRules(unittest.TestCase):
     MAP = [box(814, 461, "游戏厅", 148, 57), box(1538, 606, "公园", 102, 51),
            box(258, 748, "餐厅", 104, 60), box(1010, 897, "步行街", 148, 58)]
 
+    def _map(self, day):
+        """地图页 + 顶栏日期（weekend_priority 现在按「星期+流派」排行程）。"""
+        return list(self.MAP) + [box(30, 20, "第1周", 120, 40),
+                                 box(200, 20, day, 130, 40)]
+
     def _home_texts(self, day):
         return [box(30, 20, "第1周", 120, 40),
                 box(200, 20, day, 130, 40),
@@ -1090,7 +1095,7 @@ class WeekendMapRules(unittest.TestCase):
                 box(1150, 700, "出行", 160, 70)]
 
     def test_sunday_enters_shop_too(self):
-        """周六、周日首页都有商店入口（用户 2026-10-27 现场确认）。
+        """商店流周日在首页先逛一次商店（用户 2026-10-29 保留）。
 
         旧版判据里写了 `day != "日"`，把周日挡掉，等于每周少逛一次店。
         """
@@ -1099,10 +1104,56 @@ class WeekendMapRules(unittest.TestCase):
         self.assertEqual(task.actions[-1][0], "click_box")
         self.assertEqual(task.actions[-1][1], "商店")
 
-    def test_saturday_enters_shop(self):
-        task = FakeTask(self._home_texts("星期六"), config={"流派": "商店流"})
+    def test_training_style_enters_shop_on_sunday(self):
+        """训练流周日也先逛商店，再出行（用户 2026-10-29 新口径）。"""
+        task = FakeTask(self._home_texts("星期日"), config={"流派": "训练流"})
         self.assertTrue(task.handle_go_out(task._texts))
         self.assertEqual(task.actions[-1][1], "商店")
+        task.actions.clear()
+        self.assertTrue(task.handle_go_out(task._texts))
+        self.assertEqual(task.actions[-1][1], "出行")
+
+    def test_saturday_does_not_enter_shop(self):
+        """2026-10-29：周六所有人都不进商店 —— 其他流派去餐厅打工。
+
+        覆盖旧行为「商店流周六也逛店」（旧测试 test_saturday_enters_shop）。
+        """
+        for style in ("商店流", "训练流", "扭蛋流", "小游戏流"):
+            task = FakeTask(self._home_texts("星期六"), config={"流派": style})
+            self.assertTrue(task.handle_go_out(task._texts))
+            self.assertEqual(task.actions[-1][1], "出行", style)
+
+    def test_sunday_non_shop_styles_go_out_directly(self):
+        """周日只有训练流/商店流先逛店；扭蛋流、小游戏流直接出行。"""
+        for style in ("扭蛋流", "小游戏流"):
+            task = FakeTask(self._home_texts("星期日"), config={"流派": style})
+            self.assertTrue(task.handle_go_out(task._texts))
+            self.assertEqual(task.actions[-1][1], "出行", style)
+
+    def test_sunday_place_by_style(self):
+        """周日地点：训练流→公园、商店流→餐厅、扭蛋流→步行街、小游戏流→游戏厅。"""
+        want = {"训练流": "公园", "商店流": "餐厅", "扭蛋流": "步行街",
+                "小游戏流": "游戏厅"}
+        for style, place in want.items():
+            task = FakeTask(self._map("星期日"), config={"流派": style})
+            task.weekend_state()
+            self.assertTrue(task.handle_weekend(task._texts), style)
+            self.assertEqual(task.actions[-1][1], place, style)
+
+    def test_saturday_non_training_styles_go_to_restaurant(self):
+        """周六除训练流外都去餐厅打工（不进步行街/游戏厅）。"""
+        for style in ("商店流", "扭蛋流", "小游戏流"):
+            task = FakeTask(self._map("星期六"), config={"流派": style})
+            task.weekend_state()
+            self.assertTrue(task.handle_weekend(task._texts), style)
+            self.assertEqual(task.actions[-1][1], "餐厅", style)
+
+    def test_saturday_training_style_keeps_old_route(self):
+        """训练流周六原设定不变：步行街 → 游戏厅 → 公园。"""
+        task = FakeTask(self._map("星期六"), config={"流派": "训练流"})
+        task.weekend_state()
+        self.assertTrue(task.handle_weekend(task._texts))
+        self.assertEqual(task.actions[-1][1], "步行街")
 
     def test_shop_only_once_per_day(self):
         """同一天不重复进店：第二拍直接点「出行」。"""
@@ -1213,6 +1264,189 @@ class WeekendMapRules(unittest.TestCase):
         task = FakeTask(list(self.MAP))
         self.assertFalse(task.handle_story_arrow(task._texts))
         self.assertEqual(task.actions, [])
+
+
+class StylePlanRules(unittest.TestCase):
+    """流派识别 + 按「星期+流派」排行程（用户 2026-10-29 口径）。"""
+
+    CALENDAR = [box(184, 74, "望月", 158, 91),
+                box(339, 96, "的训练计划", 294, 62)]
+
+    def _home(self, day):
+        return [box(30, 20, "第1周", 120, 40),
+                box(200, 20, day, 130, 40),
+                box(380, 16, "120/130", 210, 53),
+                box(950, 560, "商店", 130, 50),
+                box(1150, 700, "出行", 160, 70)]
+
+    # ---------- 日历认队长 ----------
+
+    def test_calendar_name_split_boxes(self):
+        """实测帧里名字和标题是两个框（望月 / 的训练计划），要能拼出「望月」。"""
+        task = FakeTask(list(self.CALENDAR))
+        self.assertEqual(task.read_plan_captain(task._texts), "望月")
+
+    def test_calendar_name_in_one_box(self):
+        task = FakeTask([box(184, 74, "真崎的训练计划", 450, 90)])
+        self.assertEqual(task.read_plan_captain(task._texts), "真崎")
+
+    def test_training_day_dialogue_is_not_calendar_title(self):
+        """训练日台词「今天的训练计划，我看看」不在左上角，不能当队长名。"""
+        texts = [box(600, 400, "今天的训练计划，我看看", 500, 50),
+                 box(30, 20, "第1周", 120, 40),
+                 box(200, 20, "星期五", 130, 40)]
+        task = FakeTask(texts)
+        self.assertIsNone(task.read_plan_captain(texts))
+
+    def test_style_for_name_uses_roster_prefix(self):
+        """日历只显示姓氏，按前缀查角色表的流派。"""
+        self.assertEqual(FakeTask.style_for_name("真崎"), "训练流")
+        self.assertEqual(FakeTask.style_for_name("佐久间"), "训练流")
+        self.assertEqual(FakeTask.style_for_name("雨森"), "商店流")
+        self.assertEqual(FakeTask.style_for_name("远野"), "小游戏流")
+        self.assertEqual(FakeTask.style_for_name("羽漱川"), "扭蛋流")
+        self.assertEqual(FakeTask.style_for_name("羽田"), "商店流")
+        self.assertEqual(FakeTask.style_for_name("希雅"), "训练流")
+        self.assertIsNone(FakeTask.style_for_name("查无此人"))
+
+    def test_calendar_page_sets_style_and_closes(self):
+        """日历页：读到队长 → 写流派 → 点右上角关掉（不能留给地点 handler）。"""
+        task = FakeTask(list(self.CALENDAR))
+        self.assertTrue(task.handle_training_plan(task._texts))
+        self.assertEqual(task.style, "训练流")
+        self.assertEqual(task.actions[-1][0], "click")
+        self.assertGreaterEqual(task.actions[-1][1], int(task.width * 0.94))
+
+    def test_calendar_page_closed_even_when_name_unknown(self):
+        """名字认成乱码也要关日历（否则整页挡住训练日，天天卡这里）。"""
+        texts = [box(184, 74, "NITAVNIN", 158, 91),
+                 box(339, 96, "的训练计划", 294, 62),
+                 box(365, 170, "星期二", 87, 35),
+                 box(547, 171, "星期三", 90, 34),
+                 box(357, 280, "运控训练", 108, 37),
+                 box(539, 283, "投射训练", 108, 34),
+                 box(721, 283, "意识训练", 108, 32)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_training_plan(texts))
+        self.assertGreaterEqual(task.actions[-1][1], int(task.width * 0.94))
+        self.assertEqual(task.style, "训练流")       # 查不到 → 兜底
+
+    def test_training_day_dialogue_not_claimed_as_calendar(self):
+        """训练日台词「今天的训练计划，我看看」不能被当成日历页（否则会点右上角跳过）。"""
+        texts = [box(300, 500, "今天的训练计划，我看看", 600, 50),
+                 box(200, 20, "星期四", 130, 40),
+                 box(1200, 900, "训练", 120, 60),
+                 box(1500, 300, "投射", 100, 40),
+                 box(1500, 400, "体能", 100, 40)]
+        task = FakeTask(texts)
+        self.assertFalse(task.handle_training_plan(texts))
+        self.assertEqual(task.actions, [])
+
+    # ---------- 开日历的时机 ----------
+
+    def test_probe_opens_calendar_when_style_unknown(self):
+        """流派为空 + 训练日主界面 → 点左上角开日历。"""
+        texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
+                 box(380, 16, "120/130", 210, 53),
+                 box(1200, 900, "训练", 120, 60), box(1200, 700, "休息", 120, 60)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_style_probe(texts))
+        self.assertEqual(task.actions[-1][0], "click")
+        self.assertLess(task.actions[-1][1], int(task.width * 0.10))
+
+    def test_probe_skipped_when_config_locks_style(self):
+        """配置里选了具体流派 = 手动锁定，不去开日历。"""
+        texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
+                 box(1200, 900, "训练", 120, 60), box(1200, 700, "休息", 120, 60)]
+        task = FakeTask(texts, config={"流派": "训练流"})
+        self.assertFalse(task.handle_style_probe(texts))
+
+    def test_probe_stops_after_three_tries(self):
+        """连开 3 次都认不出队长就停手，别一直点左上角。"""
+        texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
+                 box(1200, 900, "训练", 120, 60), box(1200, 700, "休息", 120, 60)]
+        task = FakeTask(texts)
+        task._style_probe_at = 0.0
+        for _ in range(3):
+            task._style_probe_at = 0.0
+            task.handle_style_probe(texts)
+        task._style_probe_at = 0.0
+        self.assertFalse(task.handle_style_probe(texts))
+
+    def test_start_training_resets_style(self):
+        """点「开始训练」= 新的一局：流派变量清空，等日历重新认队长。"""
+        texts = [box(700, 100, "确认编队", 300, 50),
+                 box(900, 800, "开始训练", 240, 60)]
+        task = FakeTask(texts)
+        task._style = "商店流"
+        self.assertTrue(task.handle_confirm_team(texts))
+        self.assertIsNone(task._style)
+        self.assertEqual(task.style, "训练流")      # 还没认出来时的兜底
+
+    # ---------- 周五休息阈值 ----------
+
+    def test_friday_rest_threshold_by_style(self):
+        """周五：训练流不变(40)、其他流派 55、商店流 80；别的日子不变。"""
+        base = {"休息体力阈值": 40}
+        self.assertEqual(FakeTask([], config=dict(base, **{"流派": "训练流"}))
+                         .rest_threshold("五"), 40)
+        self.assertEqual(FakeTask([], config=dict(base, **{"流派": "扭蛋流"}))
+                         .rest_threshold("五"), 55)
+        self.assertEqual(FakeTask([], config=dict(base, **{"流派": "小游戏流"}))
+                         .rest_threshold("五"), 55)
+        self.assertEqual(FakeTask([], config=dict(base, **{"流派": "商店流"}))
+                         .rest_threshold("五"), 80)
+        self.assertEqual(FakeTask([], config=dict(base, **{"流派": "商店流"}))
+                         .rest_threshold("四"), 40)
+
+    def test_friday_rest_uses_style_threshold(self):
+        """周五 50 体力：扭蛋流休息（门槛 55），不是训练流的 40。"""
+        texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期五", 130, 40),
+                 box(380, 16, "50/130", 210, 53),
+                 box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
+        task = FakeTask(texts, config={"流派": "扭蛋流"})
+        task.try_speed_2x = lambda *a, **k: False   # 零帧永远判不出 2x，跳过那一拍
+        self.assertTrue(task.handle_training_day(texts))
+        self.assertEqual(task.actions[-1][1], "休息")
+
+    def test_friday_training_style_still_trains(self):
+        """训练流周五 50 体力仍然训练（阈值还是配置里的 40）—— 效果不变。"""
+        texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期五", 130, 40),
+                 box(380, 16, "50/130", 210, 53),
+                 box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
+        task = FakeTask(texts, config={"流派": "训练流"})
+        task.try_speed_2x = lambda *a, **k: False
+        self.assertTrue(task.handle_training_day(texts))
+        self.assertEqual(task.actions[-1][1], "训练")
+
+    # ---------- 餐厅：队友多 / 平局选右边 ----------
+
+    def _restaurant(self):
+        return [box(700, 100, "在餐厅", 300, 50),
+                box(600, 500, "当服务员", 200, 60),
+                box(1000, 500, "桌游GM", 200, 60)]
+
+    def test_restaurant_tie_picks_right_option(self):
+        """队友一样多（都数不到）→ 选右边那个消耗体力的选项。"""
+        task = FakeTask(self._restaurant(), config={"流派": "商店流"})
+        task.find_teammate_icons = lambda *a, **k: []
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][1], "桌游GM")
+
+    def test_restaurant_picks_option_with_more_teammates(self):
+        """左边挂着 3 个队友头像 → 选左边（队友多的优先）。"""
+        task = FakeTask(self._restaurant(), config={"流派": "扭蛋流"})
+        task.find_teammate_icons = lambda *a, **k: [(650, 450), (700, 450), (750, 450)]
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][1], "当服务员")
+
+    def test_restaurant_training_style_keeps_config(self):
+        """训练流不进餐厅，但保留了配置优先的老行为。"""
+        task = FakeTask(self._restaurant(), config={"流派": "训练流",
+                                                    "餐厅选项": "桌游GM"})
+        task.find_teammate_icons = lambda *a, **k: [(650, 450), (700, 450), (750, 450)]
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][1], "桌游GM")
 
 
 class EmergencyStopSmoke(unittest.TestCase):
