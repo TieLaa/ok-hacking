@@ -45,7 +45,6 @@ HANDLERS = (
     # 流派未知时先开日历认队长（用户 2026-10-29）：必须排在训练日主界面之前，
     # 否则第一拍就点「训练/休息」，流派还没定下来。
     TrainingHandlers.handle_style_probe,
-    TrainingHandlers.handle_daily_shop,
     TrainingHandlers.handle_training_day,
     TrainingHandlers.handle_training_hub,
     WeekendHandlers.handle_activity_go,

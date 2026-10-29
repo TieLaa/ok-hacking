@@ -1414,6 +1414,16 @@ class StylePlanRules(unittest.TestCase):
         self.assertFalse(task.handle_style_probe(texts))
         self.assertEqual(task.actions, [])
 
+    def test_probe_skipped_on_vacation_page(self):
+        """度假/海边合宿页也有「星期+休息」，但左上角不是日历，不能点。"""
+        texts = [box(30, 20, "第4周", 120, 40), box(200, 20, "星期三", 130, 40),
+                 box(600, 120, "海边合宿", 300, 50),
+                 box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
+        task = FakeTask(texts)
+        self.assertFalse(task.handle_style_probe(texts))
+        self.assertEqual(task.actions, [])
+        self.assertEqual(task._style_probe_tries, 0)
+
     def test_probe_stops_after_three_tries(self):
         """连开 3 次都认不出队长就停手，别一直点左上角。"""
         texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
@@ -1827,15 +1837,22 @@ class PurchaseRules(unittest.TestCase):
         return task, texts
 
     def test_shop_buys_free_item_when_poor(self):
-        """白神时久：0 元商品不花零用钱，余额 80 < 门槛 300 也要买。"""
+        """白神时久：0 元商品不花零用钱，余额 80 也要买。"""
         task, texts = self._shop([("器材手册+", 150), ("精力饮料", 0)])
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「精力饮料」", "".join(task.logs))
 
-    def test_shop_closes_when_poor_and_nothing_free(self):
-        task, texts = self._shop([("器材手册+", 150)])
+    def test_shop_buys_affordable_purple_without_gate(self):
+        """2026-10-29 实跑回归：零用钱 120、紫卡 100 —— 钱够就买，不再看 300 门槛。"""
+        task, texts = self._shop([("弹跳教科书", 100)], money=120, quality="紫")
         self.assertTrue(task.handle_shop(texts))
-        self.assertIn("不买，关店", "".join(task.logs))
+        self.assertIn("买「弹跳教科书」", "".join(task.logs))
+
+    def test_shop_closes_when_nothing_affordable(self):
+        """买不起任何东西才关店（不是「余额低于门槛」）。"""
+        task, texts = self._shop([("器材手册+", 150)], money=80)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("没有买得起的商品了", "".join(task.logs))
 
     def test_shop_unknown_money_buys_nothing_paid(self):
         """零用钱读不到时不盲买（旧游戏厅死循环就是这么来的）。"""
@@ -1897,77 +1914,6 @@ class OutingOnTrainingDay(unittest.TestCase):
         self.assertNotEqual(task.actions[-1][1], "出行")
 
 
-class DailyShopEntry(unittest.TestCase):
-    """每天进店看一次免费商品（2026-10-29）：点击不能被过场/弹窗吃掉。"""
-
-    def _home(self, modal=None):
-        texts = [
-            box(37, 18, "第5周", 120, 33),
-            box(163, 18, "星期二", 130, 35),
-            box(310, 16, "70/130", 185, 38),
-            box(1400, 180, "商店", 70, 38),
-            box(1320, 548, "休息", 105, 59),
-            box(1299, 708, "训练", 156, 83),
-        ]
-        if modal:
-            texts.append(box(695, 714, modal, 160, 32))
-        return texts
-
-    def test_modal_blocks_entry(self):
-        texts = self._home("点击屏幕继续")
-        task = FakeTask(texts)
-        task.read_money = lambda texts=None: 70
-        self.assertFalse(task.handle_daily_shop(texts))
-        self.assertEqual(task.actions, [])
-
-    def test_shop_button_not_matched_from_tooltip(self):
-        """屏幕中间的教学提示里出现「商店」不能被当成按钮。
-
-        2026-10-29 13:08 实跑：match_text 的拼接兜底返回了「体能不足时会【力竭】…」
-        那一行，点它等于点空，然后每拍重试，连点 60 秒。
-        """
-        texts = self._home() + [box(600, 640, "在商店里可以买器材和道具", 380, 32)]
-        task = FakeTask(texts)
-        btn = task.find_shop_button(texts)
-        self.assertIsNotNone(btn)
-        self.assertGreater(btn.x, 1150)          # 只能是右上角那个按钮
-
-    def test_split_shop_button_is_merged(self):
-        """OCR 把「商店」拆成「商」「店」两个字时也要能点。"""
-        texts = [box(37, 18, "第5周", 120, 33),
-                 box(163, 18, "星期二", 130, 35),
-                 box(310, 16, "70/130", 185, 38),
-                 box(1400, 180, "商", 34, 38),
-                 box(1436, 180, "店", 34, 38),
-                 box(1320, 548, "休息", 105, 59),
-                 box(1299, 708, "训练", 156, 83)]
-        task = FakeTask(texts)
-        task.read_money = lambda texts=None: 70
-        self.assertTrue(task.handle_daily_shop(texts))
-        self.assertEqual(task.actions[-1][1], "商店")
-
-    def test_retry_immediately_when_click_was_eaten(self):
-        """点完「商店」没进店（被过场吃掉）：下一拍要立刻补点，不能等 15 秒。"""
-        texts = self._home()
-        task = FakeTask(texts)
-        task.read_money = lambda texts=None: 70
-        self.assertTrue(task.handle_daily_shop(texts))
-        self.assertTrue(task._shop_pending)
-        self.assertTrue(task.handle_daily_shop(texts))
-        clicks = [a for a in task.actions if a[1] == "商店"]
-        self.assertEqual(len(clicks), 2)
-
-    def test_no_second_entry_same_day(self):
-        """关店后当天不再进（即使余额不足也一样）。"""
-        texts = self._home()
-        task = FakeTask(texts)
-        task.read_money = lambda texts=None: 70
-        self.assertTrue(task.handle_daily_shop(texts))
-        task._shop_day = (5, "二")
-        task._shop_at = 0.0
-        self.assertFalse(task.handle_daily_shop(texts))
-
-
 class ArcadeAnimationWait(unittest.TestCase):
     """游戏厅小游戏会自己打完，期间只能等（用户 2026-10-29 口径）。"""
 
@@ -1991,6 +1937,51 @@ class ArcadeAnimationWait(unittest.TestCase):
     def test_no_flag_is_not_waiting(self):
         texts = [box(37, 18, "第3周", 89, 35)]
         self.assertFalse(FakeTask([]).arcade_still_playing(texts))
+
+
+class ArcadeTeammatePriority(unittest.TestCase):
+    """游戏厅选卡：有队友的优先（用户 2026-10-29）。
+
+    旧逻辑只按「奖励上限」排序，中间那张带队友的金卡会被上限更高的无队友卡压掉。
+    """
+
+    def _texts(self, cards):
+        """cards = [(属性, 下限, 上限, 价格)]，三列并排（列中心 0.19/0.50/0.81）。"""
+        texts = [box(600, 60, "请选择一个小游戏", 400, 40)]
+        for i, (attr, lo, hi, price) in enumerate(cards):
+            cx = int(1920 * (0.19 + 0.31 * i))
+            texts.append(box(cx - 40, 120, "自动", 64, 30))
+            texts.append(box(cx - 35, 180, attr, 70, 42))
+            texts.append(box(cx - 80, 300, f"{attr}{lo}~{hi}", 160, 40))
+            texts.append(box(cx - 20, 420, str(price), 60, 40))
+        texts.append(box(860, 950, "确定", 200, 60))
+        return texts
+
+    def _task(self, teammate_col):
+        task = FakeTask([])
+        task.card_quality_at = lambda cx, y1, y2: ("金", 40, 200)
+        task.read_money = lambda texts=None: 300
+        def icons(x_from=0.78, x_to=1.0):
+            if teammate_col is None:
+                return []
+            cx = int(1920 * (0.19 + 0.31 * teammate_col))
+            return [(cx, 200), (cx + 20, 200)]
+        task.find_teammate_icons = icons
+        return task
+
+    def test_prefers_card_with_teammate(self):
+        texts = self._texts([("弹跳", 20, 70, 64), ("运控", 20, 60, 64),
+                             ("投射", 30, 100, 80)])
+        task = self._task(teammate_col=1)          # 中间那张有队友
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertIn("买了「运控」", "".join(task.logs))
+
+    def test_without_teammate_falls_back_to_reward(self):
+        texts = self._texts([("弹跳", 20, 70, 64), ("运控", 20, 60, 64),
+                             ("投射", 30, 100, 80)])
+        task = self._task(teammate_col=None)
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertIn("买了「投射」", "".join(task.logs))
 
 
 class RegisterWatchdog(unittest.TestCase):

@@ -31,5 +31,3 @@ def show_items(task, boxes):
 
 
 run(os.path.join(ROOT, "docs", "shots", "2026-10-26-shop.png"), show_items)
-run(os.path.join(ROOT, "docs", "shots", "2026-10-26-training-day.png"),
-    lambda task, boxes: task.handle_daily_shop(boxes))

@@ -103,10 +103,6 @@ class DryRunTask(TrainingTask):
         self._match_flags = {"manual_fixed": False, "fast_clicked": False, "last_fast_at": 0.0}
         self._weekend = {"date": None, "shop_checked": False, "bought": False,
                          "park_choice": None}
-        self._shop_week = None
-        self._shop_day = None
-        self._shop_at = 0.0
-        self._shop_key = None
         self._shop_spend_all = False
         self._shop_seen = False
         self._speed_week = None

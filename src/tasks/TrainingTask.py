@@ -48,8 +48,6 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
             "新一局删档": False,
             "比赛日处理": "自动（先跳过，跳不了就进比赛加速）",
             "购买策略": "只买金和紫",
-            "每天逛商店": True,
-            "商店进店余额": 300,
             "赛前清空余额": False,
             "只在决战前清空": False,
             "周末野餐阈值": 60,
@@ -75,8 +73,6 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
             "公园选项": "野餐 = 精力++；划船 = 属性+；散步 = 零用钱+",
             "公园选项": "野餐 = 精力++；划船 = 属性+；散步 = 零用钱+",
             "购买策略": "只买金和紫 = 只买金卡/紫卡（看到品质色判定，金优先）；只买器材手册+ = 只买涨熟练度的；买最贵 = 旧逻辑；不买 = 只逛不买",
-            "每天逛商店": "每天在训练日主界面看一次：零用钱达到「进店余额」才进去（不分流派）",
-            "商店进店余额": "零用钱 ≥ 这个数才进店；比赛前一天不受限制（要花光）",
             "赛前清空余额": "比赛前一天进店把零用钱花光（金紫优先，买完再买剩下的）；默认关闭，先把正常流程跑顺",
             "只在决战前清空": "打开后只有决赛前一天才清空（需同时打开「赛前清空余额」；决赛判据还没实测）",
             "游戏厅付费": "游戏厅没有「跳过」时，花钱（≥64 零用钱）买一个「自动」小游戏换属性；关掉就沿用旧逻辑直接退出",
@@ -102,10 +98,9 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         # 周末状态：按「第N周+星期X」区分，跨天自动重置
         self._weekend = {"date": None, "shop_checked": False, "bought": False,
                          "park_choice": None}
-        self._shop_day = None           # 每天逛一次商店：按（第N周, 星期X）去重
-        self._shop_at = 0.0             # 读不到星期时的兜底冷却（秒）
-        self._shop_key = None           # 本次进店用的日期键（关店时写回 _shop_day）
-        self._shop_spend_all = False    # 赛前一天：把零用钱花光
+        # 进店只在「周日 训练流/商店流」（见 WEEKEND_PLAN）；这个标志由
+        # handle_go_out 决定：比赛前一天进店要把零用钱花光。
+        self._shop_spend_all = False
         # 科目页：记录上次探测结果，防止同一天重复探测
         self._subject_cache = {"date": None, "best": None}
         # 商店：第一次遇到只存证，不买东西（等复盘确认界面）

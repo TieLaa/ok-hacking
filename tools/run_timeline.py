@@ -44,7 +44,6 @@ EVENT_NAMES = {
     "handle_go_out": "出行",
     "handle_activity_go": "活动前往",
     "handle_vacation": "休假",
-    "handle_daily_shop": "进店判断",
     "handle_rest_confirm": "休息确认",
     "handle_popup": "弹窗",
     "handle_draw": "抽奖",

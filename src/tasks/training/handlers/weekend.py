@@ -295,23 +295,18 @@ class WeekendHandlers:
         policy = self.config.get("购买策略", "只买金和紫")
         money = self.read_money(texts)
         items = self.read_shop_items(texts)
-        threshold = int(self.config.get("商店进店余额", 300))
         # 免费商品（白神时久：每天多一件 0 元商品）：不花零用钱，
-        # 余额不够、甚至钱读不到时都应该拿 —— 旧逻辑先按余额判死，永远买不到。
+        # 余额不够、甚至钱读不到时都应该拿。
         free = [i for i in items if i["price"] == 0]
         self.log_info("商店：" + "、".join(
             f"{i['name']}({i['price']}/{i['quality']})" for i in items)
             + f"｜零用钱 {money}｜策略 {policy}"
             + ("｜赛前清空" if self._shop_spend_all else ""))
 
-        # 平时余额低于门槛就不该待在店里（周末商店流等入口可能绕过进店检查）；
-        # 但有免费商品时例外：先把 0 元的拿走，再按老规则关店。
-        if (not self._shop_spend_all and not free and money is not None
-                and money < threshold and policy != "不买"):
-            self.log_info(f"商店：零用钱 {money} < {threshold}，不买，关店")
-            self.finish_shop(texts)
-            return True
-
+        # 2026-10-29 用户口径：**钱够就买金/紫**。旧版这里还有一道
+        # 「零用钱 < 商店进店余额(300) 就不买」的门槛，跟这条直接冲突
+        # （实跑：120 零用钱、店里有 100 的紫卡，被门槛拦掉），已删除。
+        # 买不起任何东西的分支在下面（没有可买的金/紫 → 关店）。
         if policy == "不买":
             self.log_info("商店：策略是只逛不买，退出")
             self.finish_shop(texts)
@@ -371,10 +366,8 @@ class WeekendHandlers:
         return True
 
     def finish_shop(self, texts=None):
-        """关店 + 记下「这一天已经逛过」，避免关掉后又被点进去。"""
+        """关店。进店去重由周末首页的 `shop_checked` 负责（一天一次）。"""
         self.close_shop(texts)
-        if self._shop_key is not None:
-            self._shop_day = self._shop_key
         self._shop_spend_all = False
 
     def close_shop(self, texts=None):
@@ -382,7 +375,12 @@ class WeekendHandlers:
         texts = texts or self._ocr_region()
         target = self.match_text(self.texts_in_region(texts, "top_right"), "X")
         if target is not None:
-            self.click_box(target, after_sleep=0.8)
+            # 2026-10-29 用户反馈「X 点得有点歪」：实测帧（docs/shots/2026-10-26-shop.png）
+            # 里 OCR 的 X 框是 (1748,133,80,81)、中心 (1788,173)，但 X 字形的视觉中心
+            # 在 y≈180（框中心偏下约 8% 框高）。所以往下压 10% 框高再点。
+            cx = target.x + target.width / 2
+            cy = target.y + target.height / 2 + target.height * 0.10
+            self.click(int(cx), int(cy), after_sleep=0.8)
         else:
             self.click(int(self.width * 0.94), int(self.height * 0.11), after_sleep=0.8)
         self.log_info("商店：关闭")
@@ -542,7 +540,8 @@ class WeekendHandlers:
         带它才能自动挑战/跳过；没有它的要真人打（打篮球、拼图），
         OCR 跟不上，进去就是白费一个周末日。所以只买带「自动」的卡片。
 
-        选卡规则：奖励上限高的优先，价格从页面读（「打折」下面那个数字）；
+        选卡规则（2026-10-29 用户口径）：**有队友的优先**（卡片上挂着队友头像），
+        同类里再按奖励上限高的优先；价格从页面读（「打折」下面那个数字）；
         读不到价格就按 100 处理，买得起才点「确定」。
         付完钱小游戏会**自己打完**（探针实测：零用钱 219→155，之后走普通剧情/结算），
         后续交给通用 handler 推进。
@@ -567,6 +566,7 @@ class WeekendHandlers:
             return True
 
         money = self.read_money(texts)
+        icons = self.find_teammate_icons(0.0, 1.0)
         cards = []
         for t in texts:
             m = re.search(r"(投射|弹跳|防守|体能|运控|意识)\s*(\d+)\s*[~～]\s*(\d+)",
@@ -607,11 +607,15 @@ class WeekendHandlers:
                    else t.y / self.height - 0.10)
             q, qh, qs = self.card_quality_at(cx / self.width, y1f,
                                              t.y / self.height)
+            # 队友：卡片上方/左上挂的橙色小头像（和餐厅打工同一套判据）。
+            # 2026-10-29 实跑：中间那张带队友的卡没被选中 —— 旧逻辑只看奖励上限。
+            mate = self.mates_on_card(t, icons) > 0
             cards.append({"attr": m.group(1), "hi": int(m.group(3)),
                           "box": t, "auto": auto, "price": price,
-                          "quality": q, "hue": qh, "sat": qs})
+                          "quality": q, "hue": qh, "sat": qs, "mate": mate})
             self.log_debug(f"游戏厅卡片：{m.group(1)} 奖励{m.group(2)}~{m.group(3)}"
-                           f" 自动={auto} 品质={q}(H={qh:.0f} S={qs:.0f}) 价格={price}")
+                           f" 自动={auto} 队友={mate} 品质={q}(H={qh:.0f} S={qs:.0f})"
+                           f" 价格={price}")
 
         ok_cards = [c for c in cards if c["auto"] and c["quality"] in ("金", "紫")]
         if not ok_cards:
@@ -623,7 +627,8 @@ class WeekendHandlers:
             return True
         auto_cards = ok_cards
 
-        auto_cards.sort(key=lambda c: -c["hi"])
+        # 有队友的优先，其余按奖励上限从高到低（2026-10-29 口径）
+        auto_cards.sort(key=lambda c: (0 if c["mate"] else 1, -c["hi"]))
         pick = None
         for c in auto_cards:
             price = c["price"]
@@ -654,7 +659,8 @@ class WeekendHandlers:
             self._arcade_wait_since = time.time()
             self.log_info(f"游戏厅：买了「{pick['attr']}」小游戏"
                           f"（奖励上限 {pick['hi']}，价格 {pick['price']}，"
-                          f"零用钱 {money}），等它自己打完")
+                          f"零用钱 {money}，队友={'有' if pick['mate'] else '无'}），"
+                          "等它自己打完")
             return True
 
         if money is None:
@@ -697,8 +703,13 @@ class WeekendHandlers:
             shop = self.match_text(texts, "商店")
             if shop is not None and not st["shop_checked"]:
                 st["shop_checked"] = True
+                # 比赛前一天：进店把零用钱花光（钱不带进下一场）
+                self._shop_spend_all = bool(
+                    self.config.get("赛前清空余额", False)
+                    and self.is_pre_match_day(texts))
                 self.click_box(shop, after_sleep=0.9)
-                self.log_info(f"周末：{self.style}周日，先去商店")
+                self.log_info(f"周末：{self.style}周日，先去商店"
+                              + ("（赛前清空）" if self._shop_spend_all else ""))
                 return True
 
         self.click_text("出行", after_sleep=0.6)
