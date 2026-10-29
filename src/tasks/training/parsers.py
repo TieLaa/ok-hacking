@@ -18,7 +18,8 @@ import numpy as np
 from ok.feature.Box import Box
 
 from src.tasks.ui import Defs  # noqa: F401
-from src.tasks.training.constants import JPEG_PARAMS, STYLE_BY_NAME  # noqa: F401
+from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,  # noqa: F401
+                                          STYLE_BY_NAME)
 
 # 科目按钮外圈「框」的判定门限（比例 = 环带上命中像素 / 环带总像素）。
 # 2026-10-27 第六局实跑 + 用户当场复核：
@@ -605,7 +606,32 @@ class TrainingParsersMixin:
         self.click_box(box, after_sleep=0.55)
         texts = self._ocr_region()
         self.log_debug(f"场上角色名：{self.scene_names(texts)}")
+        self.dump_subject_frame(name, texts)
         return self.analyze_preview(texts, subject=name)
+
+    def dump_subject_frame(self, subject, texts):
+        """把科目预览帧存一份（限流），用于事后校准金框/彩框。
+
+        为什么要它：2026-10-29 用户两次说「黄框/彩框没识别到」，但事后没有帧，
+        只能靠猜。这里每局最多存 12 张，文件名带科目名，复盘时直接量环带占比。
+        """
+        if getattr(self, "_subject_dumps", 0) >= 12:
+            return
+        frame = self.frame
+        if frame is None or not frame.any():
+            return
+        try:
+            folder = os.path.join(PROJECT_ROOT, "logs", "debug")
+            os.makedirs(folder, exist_ok=True)
+            path = os.path.join(
+                folder, f"{time.strftime('%m%d-%H%M%S')}_subject_{subject}.jpg")
+            cv2.imwrite(path, frame, JPEG_PARAMS)
+            with open(path[:-4] + ".txt", "w", encoding="utf-8") as f:
+                f.write("\n".join(
+                    f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
+            self._subject_dumps = getattr(self, "_subject_dumps", 0) + 1
+        except Exception as e:                   # noqa: BLE001
+            self.log_debug(f"科目帧存证失败: {type(e).__name__}: {e}")
 
     def analyze_preview(self, texts, subject=None):
         """读一帧科目预览，返回打分要用的全部字段。
@@ -790,9 +816,9 @@ class TrainingParsersMixin:
         others = sorted(ring_gold_ratio(s.y + s.height / 2)
                         for s in subjects if s is not target)
         baseline = others[len(others) // 2] if others else 0.0
-        if not quiet:
-            self.log_debug(f"科目金框：{target.name.strip()} 占比 {ratio:.3f}，"
-                           f"其它行中位数 {baseline:.3f}")
+        # 2026-10-29：金框在度假页也漏识别，占比与基线一直打出来（校准用）
+        self.log_debug(f"科目金框：{target.name.strip()} 占比 {ratio:.3f}，"
+                       f"其它行中位数 {baseline:.3f}")
         return ring_is_border(ratio, baseline)
 
     def has_crit_border(self, texts=None, subject=None, quiet=False):
@@ -845,8 +871,10 @@ class TrainingParsersMixin:
         ring[:, -t:] = True
         hit = (magenta | green) & ring
         ratio = float(hit.sum()) / max(int(ring.sum()), 1)
-        if not quiet:
-            self.log_debug(f"科目彩框：{subject or '当前行'} 占比 {ratio:.3f}")
+        # 2026-10-29：彩框在度假页漏识别，把占比一直打出来（quiet 只管提示级别），
+        # 方便拿真实数字校准门限（CRIT_RING_MIN）。
+        self.log_debug(f"科目彩框：{subject or '当前行'} 占比 {ratio:.3f}"
+                       f"（门限 {CRIT_RING_MIN}）")
         return ring_is_border(ratio, floor=CRIT_RING_MIN)
 
     def scene_names(self, texts):
