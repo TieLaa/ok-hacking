@@ -202,6 +202,9 @@ class EntryHandlers:
             self.log_info("队友：自动选择")
         # 自动选择后队伍从 1 人变 5 人，底部面板会整体下移 40~50px，
         # 必须重新 OCR「下一步」，不能复用点击前的坐标（实训 2026-10-26）。
+        # 2026-10-29：再等 0.8 秒让面板动画走完，否则新帧读到的还是旧位置，
+        # 于是每次都要等 8 秒超时、白打一条 stall5s。
+        self.sleep(0.8)
         ok = self.click_text_and_expect(
             self._ocr_region(), "下一步", ("选择器材",), timeout=8)
         if not ok:
@@ -236,6 +239,7 @@ class EntryHandlers:
         if auto is not None:
             self.click_box(auto, after_sleep=0.7)
             self.log_info("器材：自动选择")
+        self.sleep(0.8)          # 同上：等卡片刷新完再找「下一步」
         ok = self.click_text_and_expect(
             self._ocr_region(), "下一步", ("确认编队",), timeout=8)
         if not ok:
