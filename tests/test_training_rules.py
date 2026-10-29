@@ -2115,6 +2115,16 @@ class TalentStockEvent(unittest.TestCase):
         self.assertTrue(task.handle_stock_result(texts))
         self.assertEqual(task.actions[-1][1], "卖出")
 
+    def test_stock_ranking_clicks_next(self):
+        """炒股日全部结束后的「炒股队收益排名」→ 点下一步。"""
+        texts = [box(550, 180, "炒股队收益排名", 500, 60),
+                 box(600, 300, "清水 万里", 300, 50),
+                 box(600, 400, "亚理纱 贾斯敏", 300, 50),
+                 box(650, 810, "下一步", 290, 60)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_stock_result(texts))
+        self.assertEqual(task.actions[-1][1], "下一步")
+
     def test_skill_prefers_item_card(self):
         """技能三选一：左上角有道具宝石（紫/粉）的卡优先。
 

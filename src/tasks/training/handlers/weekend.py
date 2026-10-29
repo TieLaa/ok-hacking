@@ -340,16 +340,20 @@ class WeekendHandlers:
         return best[1] if best else None
 
     def handle_stock_result(self, texts):
-        """股票走势页：点黄色「卖出」继续（2026-10-29 用户截图）。
+        """炒股的两个结算页（2026-10-29 用户截图）。
 
-        用户口径：这一页**只能点卖出**，卖出后回到「请选择你要投资的股票」
-        再买下一只。
+        1. **股票走势**（有涨跌幅）：这一页只能点「卖出」，卖出后回到选股页再买；
+        2. **炒股队收益排名**（全部炒股日结束后的总结）：点「下一步」继续。
         """
-        if self.match_text(texts, ("股票走势", "涨跌幅")) is None:
+        if self.match_text(texts, ("股票走势", "涨跌幅")) is not None:
+            if self.click_text(("卖出",), after_sleep=0.7, must=False):
+                self.log_info("炒股：走势页卖出 → 回去买下一只")
+                return True
             return False
-        if self.click_text(("卖出",), after_sleep=0.7, must=False):
-            self.log_info("炒股：走势页卖出 → 回去买下一只")
-            return True
+        if self.match_text(texts, "收益排名") is not None:
+            if self.click_text(("下一步",), after_sleep=0.7, must=False):
+                self.log_info("炒股：收益排名 → 下一步")
+                return True
         return False
 
     def handle_park(self, texts):
