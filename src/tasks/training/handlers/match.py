@@ -776,13 +776,19 @@ class MatchHandlers:
                 return False
         # 只有 1 项也不是选项：剧情页右上角同样有「跳过」，has_skip 会把它放进来
         # （2026-10-27 10:07 周末前对话「我要去和小式一起去看电影」被点 5 次空点）
-        # 2026-10-29 器材事件：`精力恢复 / 资金援助` 两行短选项、**没有「跳过」**。
+        # 2026-10-29 器材事件：`精力恢复 / 资金援助` 两行选项、**没有「跳过」**。
         # 旧条件要求 has_skip，导致这里放弃 → 兜底点中央正好压中下面那个选项。
-        # 新增：两行都短（≤8 字）且页面上没有长台词时，没有跳过也认。
+        # 判据不能按「字数」：用户另一次上下选项里上面那行有 10 个字以上。
+        # 真正的区别是**选项压在白色圆角底板上**，剧情台词直接浮在画面上：
+        #   - 短标签（≤8 字，器材事件这种）也算；
+        #   - 或者整组都检测到白色底板（不限字数）。
         short_pair = (len(group) >= 2
                       and all(len(t.name.strip()) <= 8 for t in group)
                       and not self.has_long_dialog(texts))
-        if group and len(group) >= 2 and (has_skip or len(group) >= 3 or short_pair):
+        plate_pair = (len(group) >= 2
+                      and all(self._has_white_band(t) for t in group))
+        if group and len(group) >= 2 and (has_skip or len(group) >= 3
+                                          or short_pair or plate_pair):
             pick = min(group, key=lambda t: t.y)
             if os.environ.get("OK_DUMP_CHOICES"):
                 self.dump_unknown(texts, "choice_vertical")
