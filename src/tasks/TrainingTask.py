@@ -101,6 +101,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         # 进店只在「比赛日、进比赛之前」（训练流/商店流各一次）；
         # _shop_day 记当天已经逛过的日期键，_shop_spend_all = 赛前把钱花光。
         self._shop_day = None
+        self._shop_at = 0.0
         self._shop_spend_all = False
         # 科目页：记录上次探测结果，防止同一天重复探测
         self._subject_cache = {"date": None, "best": None}

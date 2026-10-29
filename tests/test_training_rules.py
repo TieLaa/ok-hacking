@@ -1174,13 +1174,14 @@ class WeekendMapRules(unittest.TestCase):
 
     def test_pre_match_shop_for_training_and_shop_style(self):
         """比赛日主界面：训练流/商店流先点一次商店，再进比赛；其他流派不点。"""
-        def hub(style, action="比赛"):
+        def hub(style, action="比赛", rest=True):
             texts = [box(30, 20, "第3周", 120, 40),
                      box(200, 20, "星期一", 130, 40),
                      box(380, 16, "120/130", 210, 53),
                      box(1420, 190, "商店", 70, 38),
-                     box(1450, 900, action, 120, 60),
-                     box(1600, 900, "休息", 120, 60)]
+                     box(1450, 900, action, 120, 60)]
+            if rest:
+                texts.append(box(1600, 900, "休息", 120, 60))
             task = self.styled(style, texts)
             task._shop_day = None
             return task
@@ -1190,6 +1191,11 @@ class WeekendMapRules(unittest.TestCase):
         self.assertEqual(task.actions[-1][1], "商店")
         task.actions.clear()
         self.assertFalse(task.handle_pre_match_shop(task._texts))   # 当天只进一次
+
+        # 比赛日主界面没有「休息」也要进（2026-10-29 实机第 5/6 周漏进）
+        task = hub("训练流", rest=False)
+        self.assertTrue(task.handle_pre_match_shop(task._texts))
+        self.assertEqual(task.actions[-1][1], "商店")
 
         task = hub("商店流")
         self.assertTrue(task.handle_pre_match_shop(task._texts))

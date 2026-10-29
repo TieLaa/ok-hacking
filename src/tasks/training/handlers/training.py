@@ -371,7 +371,9 @@ class TrainingHandlers:
         """
         if self.style not in ("训练流", "商店流"):
             return False
-        if self.match_text(texts, "星期") is None or self.match_text(texts, "休息") is None:
+        # 2026-10-29：比赛日主界面不一定有「休息」（当天只剩比赛），
+        # 所以不再要求它；只要「星期」+ 右下主按钮是比赛/VS + 右上商店。
+        if self.match_text(texts, "星期") is None:
             return False
         if self.match_text(self.texts_in_region(texts, "main_action"),
                            ("比赛", "VS")) is None:
@@ -383,8 +385,14 @@ class TrainingHandlers:
             return False
         state = self.top_bar()
         key = (state.get("week"), state.get("day"))
-        if key[1] is None or key == getattr(self, "_shop_day", None):
-            return False
+        if key[1] is not None:
+            if key == getattr(self, "_shop_day", None):
+                return False
+        else:
+            # 星期读不到：退化成「至少隔 60 秒再进一次」，不要整天都不进
+            if time.monotonic() - getattr(self, "_shop_at", 0.0) < 60:
+                return False
+            self._shop_at = time.monotonic()
         self._shop_day = key
         # 赛前清空：比赛当天把零用钱花光（配置开关）
         self._shop_spend_all = bool(self.config.get("赛前清空余额", False))

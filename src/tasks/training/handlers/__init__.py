@@ -34,6 +34,9 @@ HANDLERS = (
     TrainingHandlers.handle_boost_training,
     TrainingHandlers.handle_subject_select,
     MatchHandlers.handle_event_choice,
+    # 比赛日进店必须排在「赛前准备」之前：比赛日主界面可能直接就是
+    # 「跳过比赛/前往比赛」，否则没机会点商店（2026-10-29 第 5/6 周漏进）
+    TrainingHandlers.handle_pre_match_shop,
     MatchHandlers.handle_prepare,
     EntryHandlers.handle_dialog_continue,
     EntryHandlers.handle_lobby,
@@ -46,7 +49,6 @@ HANDLERS = (
     # 流派未知时先开日历认队长（用户 2026-10-29）：必须排在训练日主界面之前，
     # 否则第一拍就点「训练/休息」，流派还没定下来。
     TrainingHandlers.handle_style_probe,
-    TrainingHandlers.handle_pre_match_shop,
     TrainingHandlers.handle_training_day,
     TrainingHandlers.handle_training_hub,
     # 天赋「股神!」的模拟炒股页（2026-10-29）：必须排在事件选择之前，
