@@ -530,10 +530,24 @@ class TrainingParsersMixin:
                       if t.name.replace(" ", "").strip() == "的训练计划"), None)
         if title is not None:
             cy = title.y + title.height / 2
+            tcx = title.x + title.width / 2
             for t in area:
-                if t is title or t.x + t.width > title.x + 8:
+                if t is title:
                     continue
-                if abs((t.y + t.height / 2) - cy) >= title.height * 1.5:
+                # 名字就在标题左边、同一行，而且是**大字号**。
+                # 2026-10-29 真帧（logs/live_run/plan_*.txt）：
+                #     闪堂      (187,74,163,89)
+                #     的训练计划 (339,91,295,71)   ← 名字右边缘 350 压过标题左边 339
+                #     星期      (182,170,68,35)    ← 列头在正下方 96px
+                # 所以：纵向 0.8 个标题高内、横向允许 5% 屏宽重叠、名字高度 ≥ 0.6 标题高。
+                if abs((t.y + t.height / 2) - cy) >= title.height * 0.8:
+                    continue
+                if (t.x + t.width / 2) >= tcx:
+                    continue
+                gap = title.x - (t.x + t.width)
+                if gap < -self.width * 0.05 or gap > self.width * 0.10:
+                    continue
+                if t.height < title.height * 0.6:
                     continue
                 cands.append(t.name.replace(" ", "").strip())
         cands = [c for c in cands if self._looks_like_captain(c)]
@@ -550,7 +564,9 @@ class TrainingParsersMixin:
         按钮「训练」「比赛」… 否则名字一旦漏识别，就会拿这些当队长。
         """
         s = (name or "").replace(" ", "").strip()
-        if not (1 <= len(s) <= 6):
+        # 队长名至少两个字：日历上的单字全是噪声（「第」5周、「星」期…），
+        # 2026-10-29 实跑就此把「第」当成了队长。
+        if not (2 <= len(s) <= 6):
             return False
         if s.startswith("星期") or s in ("今天", "今日", "训练", "计划", "比赛",
                                         "周", "月", "日", "胜", "负"):

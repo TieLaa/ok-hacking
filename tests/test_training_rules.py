@@ -1316,6 +1316,37 @@ class StylePlanRules(unittest.TestCase):
         task = FakeTask([box(184, 74, "真崎的训练计划", 450, 90)])
         self.assertEqual(task.read_plan_captain(task._texts), "真崎")
 
+    def test_calendar_name_overlaps_title(self):
+        """真帧（logs/live_run/plan_*）：名字右边缘压过标题左边 11px，不能被排除。
+
+        闪堂 (187,74,163,89) ／ 的训练计划 (339,91,295,71) ／ 星期 (182,170,68,35)
+        """
+        texts = [box(187, 74, "闪堂", 163, 89),
+                 box(339, 91, "的训练计划", 295, 71),
+                 box(182, 170, "星期", 68, 35),
+                 box(365, 170, "星期二", 87, 35),
+                 box(357, 280, "投射训练", 108, 37),
+                 box(539, 283, "弹跳训练", 106, 34),
+                 box(721, 283, "意识训练", 108, 32)]
+        task = FakeTask(texts)
+        self.assertEqual(task.read_plan_captain(texts), "闪堂")
+        self.assertEqual(FakeTask.style_for_name("闪堂"), "训练流")
+        self.assertTrue(task.handle_training_plan(texts))
+        self.assertEqual(task.style, "训练流")
+
+    def test_week_prefix_is_not_captain(self):
+        """顶栏「第」/「第5周」不能当队长（真帧里它们在 (37,22) 和 (192,21)）。"""
+        texts = [box(37, 22, "第", 34, 28),
+                 box(192, 21, "第", 31, 27),
+                 box(339, 91, "的训练计划", 295, 71),
+                 box(182, 170, "星期", 68, 35),
+                 box(365, 170, "星期二", 87, 35),
+                 box(357, 280, "投射训练", 108, 37),
+                 box(539, 283, "弹跳训练", 106, 34),
+                 box(721, 283, "意识训练", 108, 32)]
+        task = FakeTask(texts)
+        self.assertIsNone(task.read_plan_captain(texts))
+
     def test_calendar_week_header_is_not_captain(self):
         """2026-10-29 实跑：名字漏识别时只剩「星期」列头，不能被当成队长。
 
