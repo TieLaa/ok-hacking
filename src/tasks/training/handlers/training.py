@@ -423,7 +423,10 @@ class TrainingHandlers:
         if not picks:
             return False
 
-        if len(rate_cols) != 2 or any(len(bs) > 1 for _c, bs in rate_cols):
+        # 2026-10-29 用户：训练等级上调后加强训练从 2 张变 3 张。
+        # 这里本来就是按列聚类、逐列算期望，2/3 张通用；只有「列数 < 2」或
+        # 「同一列出现多组数字」才说明 OCR 把别的数字算进来了。
+        if len(rate_cols) < 2 or any(len(bs) > 1 for _c, bs in rate_cols):
             # 数字列数不对 = 大概率 OCR 把卡上别的数字算进来了，存证一张人工核对
             self.log_warning(
                 f"加强训练：识别到 {len(rate_cols)} 个百分比列"

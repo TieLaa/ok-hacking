@@ -2226,6 +2226,25 @@ class TalentStockEvent(unittest.TestCase):
         self.assertFalse(task.handle_note_select(texts))
         self.assertEqual(task.actions, [])
 
+    def test_pick_choice_generic_for_three_options(self):
+        """二选一/三选一共用一套：按期望取最高，纯回精力仍被排除。"""
+        infos = [{"name": "甲", "ev": 12, "flat": False, "x": 200, "y": 400},
+                 {"name": "乙", "ev": 30, "flat": False, "x": 600, "y": 400},
+                 {"name": "丙", "ev": 40, "flat": True, "x": 1000, "y": 400}]
+        pick, why = FakeTask._pick_choice(infos, "h")
+        self.assertEqual(pick["name"], "乙")
+
+    def test_boost_three_cards_takes_best_ev(self):
+        """加强训练从 2 张变 3 张：按列聚类算期望，取最高那列。"""
+        texts = [box(600, 200, "加强训练", 400, 50),
+                 box(200, 380, "100%", 120, 60), box(200, 520, "+12", 120, 60),
+                 box(900, 380, "80%", 120, 60), box(900, 520, "+36", 120, 60),
+                 box(1500, 380, "55%", 120, 60), box(1500, 520, "+66", 120, 60),
+                 box(1200, 900, "确定", 200, 60)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_boost_training(texts))
+        self.assertIn("选 55%/+66", "".join(task.logs))
+
     def test_no_separate_stock_button_on_training_day(self):
         """炒股**不是**训练日主按钮：入口只有「二选一」选第一个。
 
