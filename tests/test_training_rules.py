@@ -1551,6 +1551,51 @@ class OutingOnTrainingDay(unittest.TestCase):
         self.assertNotEqual(task.actions[-1][1], "出行")
 
 
+class DailyShopEntry(unittest.TestCase):
+    """每天进店看一次免费商品（2026-10-29）：点击不能被过场/弹窗吃掉。"""
+
+    def _home(self, modal=None):
+        texts = [
+            box(37, 18, "第5周", 120, 33),
+            box(163, 18, "星期二", 130, 35),
+            box(310, 16, "70/130", 185, 38),
+            box(1400, 180, "商店", 70, 38),
+            box(1320, 548, "休息", 105, 59),
+            box(1299, 708, "训练", 156, 83),
+        ]
+        if modal:
+            texts.append(box(695, 714, modal, 160, 32))
+        return texts
+
+    def test_modal_blocks_entry(self):
+        texts = self._home("点击屏幕继续")
+        task = FakeTask(texts)
+        task.read_money = lambda texts=None: 70
+        self.assertFalse(task.handle_daily_shop(texts))
+        self.assertEqual(task.actions, [])
+
+    def test_retry_immediately_when_click_was_eaten(self):
+        """点完「商店」没进店（被过场吃掉）：下一拍要立刻补点，不能等 15 秒。"""
+        texts = self._home()
+        task = FakeTask(texts)
+        task.read_money = lambda texts=None: 70
+        self.assertTrue(task.handle_daily_shop(texts))
+        self.assertTrue(task._shop_pending)
+        self.assertTrue(task.handle_daily_shop(texts))
+        clicks = [a for a in task.actions if a[1] == "商店"]
+        self.assertEqual(len(clicks), 2)
+
+    def test_no_second_entry_same_day(self):
+        """关店后当天不再进（即使余额不足也一样）。"""
+        texts = self._home()
+        task = FakeTask(texts)
+        task.read_money = lambda texts=None: 70
+        self.assertTrue(task.handle_daily_shop(texts))
+        task._shop_day = (5, "二")
+        task._shop_at = 0.0
+        self.assertFalse(task.handle_daily_shop(texts))
+
+
 class RegisterWatchdog(unittest.TestCase):
     """注册球员看门狗的拍数上限只在**进入流程后**才计（2026-10-29 实跑误报 25 次）。"""
 

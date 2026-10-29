@@ -252,12 +252,13 @@ class TrainingHandlers:
         return self.subjects_from_texts(self._ocr_region()).get(name)
 
     def handle_daily_shop(self, texts):
-        """训练日主界面：按零用钱余额决定要不要进商店。
+        """训练日主界面：决定要不要进商店。
 
-        用户口径（2026-10-26，覆盖之前的写法）：
-        - 不分流派，**零用钱 ≥ 300** 就进店，只买金/紫；
-        - **比赛前一天**（倒计时 1 天）进店，把零用钱花光；
-        - 钱不到 300 且不是赛前一天，就不进店，攒着。
+        用户口径（2026-10-29 覆盖旧版「钱不到 300 就不进店」）：
+        - **每天进店看一次**：白神时久每天多一件 0 元商品，不进店永远看不到；
+          进店只看不买不花钱，没有免费商品就立刻关店；
+        - 零用钱 ≥ 300 时按策略买金/紫；**比赛前一天**（倒计时 1 天）进店把钱花光；
+        - 关店时写下当天日期，一天只进一次。
         判据：有「星期 + 休息 + 商店」、没有「出行」（有出行是周末首页）。
         """
         if not self.config.get("每天逛商店", True):
@@ -273,6 +274,16 @@ class TrainingHandlers:
         shop = self.match_text(texts, "商店")
         if shop is None:
             return False
+        # 界面还在过场/弹窗上时不要点：点击会被弹窗吃掉，白跑一次，
+        # 关店标记也写不上（2026-10-29 12:51 实跑：点完商店直接进了训练科目）。
+        if self.match_text(texts, ("点击屏幕继续", "目标达成", "获得奖励")) is not None:
+            return False
+        # 上一拍点了「商店」但没进店：当前帧已经是干净的训练日主界面（有商店、
+        # 没有商店页的「上新时间/剩余/能力详情」）就立刻补点，不适用 15 秒冷却。
+        if getattr(self, "_shop_pending", False):
+            self._shop_pending = False
+            if self.match_text(texts, ("上新时间", "剩余", "能力详情")) is None:
+                self._shop_at = 0.0
         # 点进去没成功时不要每拍狂点（正常流程一次进店会在店里买完才关）
         if time.monotonic() - self._shop_at < 15:
             return False
@@ -312,6 +323,7 @@ class TrainingHandlers:
         self._shop_at = time.monotonic()
         self._shop_key = key
         self._shop_spend_all = spend_all
+        self._shop_pending = True
         self.click_box(shop, after_sleep=0.9)
         purpose = ("赛前清空" if spend_all
                    else ("余额不足，进店看免费商品" if poor

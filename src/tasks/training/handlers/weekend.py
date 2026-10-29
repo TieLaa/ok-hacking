@@ -568,6 +568,8 @@ class WeekendHandlers:
 
         if money is None:
             self.log_warning("游戏厅：零用钱读不到，先不买（避免盲买）→ 退出")
+        elif all(c["price"] is None for c in auto_cards):
+            self.log_warning("游戏厅：卡片价格都没读出来，先不买（不猜）→ 退出")
         else:
             self.log_warning(f"游戏厅：带「自动」的都买不起（零用钱 {money}），退出")
         self.exit_page()
