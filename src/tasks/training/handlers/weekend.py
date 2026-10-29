@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 
 from src.tasks.ui import Defs  # noqa: F401
-from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
+from src.tasks.training.constants import JPEG_PARAMS, WORK_STAMINA_COST  # noqa: F401
 
 
 class WeekendHandlers:
@@ -119,31 +119,29 @@ class WeekendHandlers:
         self.click(int(self.width * 0.957), int(self.height * 0.047), after_sleep=after_sleep)
 
     def handle_restaurant(self, texts):
-        """餐厅内页：桌游GM（零用钱+）/ 当服务员（零用钱++）。
+        """餐厅内页：打工二选一（当服务员 / 桌游GM）。
 
-        用户 2026-10-29 口径：**周六其他流派来打工时，选队友多的那个选项**，
-        队友一样多就选右边那个（消耗体力的）。
-        训练流不进餐厅，保留配置里的「餐厅选项」原行为。
+        用户 2026-10-29 口径（**通用**，不分流派）：
+        1. 队友多的优先 —— 卡片**左上角**挂着一排队友小头像，数头像个数；
+        2. 队友一样多 → 选**右边**那张（消耗精力的）；
+        3. 精力不够右边那张 → 改选**左边**（不消耗精力）。
         """
         if self.match_text(texts, Defs.RESTAURANT_TITLE) is None:
             return False
         self.mark_visited("餐厅")
-        if self.style == "训练流":
-            pref = self.config.get("餐厅选项", "当服务员")
-            order = (pref,) + tuple(x for x in Defs.RESTAURANT_OPTIONS if x != pref)
-        else:
-            order = self.restaurant_order(texts)
-        return self.choose_option(texts, order)
+        return self.choose_option(texts, self.restaurant_order(texts))
 
     def restaurant_order(self, texts):
-        """餐厅两个选项的点击顺序：队友多的优先，一样多取右边（消耗体力的）。
+        """打工两张卡的点击顺序：**能选的优先** → 队友多 → 右边（耗精力）。
 
-        界面没有实测帧（餐厅一次都没进去过：历史日志里只有配置项，没有
-        「选择「当服务员」」的命中记录），所以这里只做两件事：
-        1. 用和科目页同一套橙色小人连通域，数每个选项周围挂了几个队友头像；
-        2. 按（队友数降序，x 坐标降序）排序 —— 数不到时全算 0，
-           顺序自然退化成「右边优先」，正好等于用户给的平局规则。
-        日志会把每个选项的队友数打出来，第一次实跑就能人工核对这个判据对不对。
+        判据（用户 2026-10-29）：
+        - 先看这张卡现在**能不能选**（`option_selectable`）：界面提示不可用、
+          或精力不够它标的消耗 → 不可选；
+        - 可选的两张里：队友多（卡片左上角的小头像数）优先，一样多选右边；
+        - 都不可选就按「右边优先」原样返回，让游戏自己拦（下一拍会重判）。
+        右边那张默认按 `WORK_STAMINA_COST`（25）算消耗、左边按 0（不消耗），
+        卡片上写明消耗时以卡片为准。
+        ⚠ 餐厅内页没有实测帧，第一次实跑要看日志里两张卡的队友数/可选性。
         """
         opts = self.texts_in_region(texts, "weekend_options")
         found = []
@@ -153,12 +151,69 @@ class WeekendHandlers:
                 found.append(box)
         if not found:
             return Defs.RESTAURANT_OPTIONS
+
+        stamina = self.top_bar().get("stamina")
         icons = self.find_teammate_icons(0.0, 1.0)
-        scored = [(self.mates_near(b, icons), b) for b in found]
-        scored.sort(key=lambda pair: (-pair[0], -pair[1].x))
-        self.log_info("餐厅：队友数 " + "、".join(
-            f"{b.name}={n}" for n, b in scored) + " → 按此顺序选")
-        return tuple(b.name for _n, b in scored)
+        scored = [(self.mates_on_card(b, icons), b) for b in found]
+        scored.sort(key=lambda pair: (-pair[0], -pair[1].x))   # 队友多 → 右边
+        ranked = [b for _n, b in scored]
+        right = max(found, key=lambda b: b.x)
+        usable = [b for b in ranked
+                  if self.option_selectable(
+                      b, texts, stamina,
+                      WORK_STAMINA_COST if b is right else 0)]
+        detail = "、".join(
+            f"{b.name}={n}人{'' if b in usable else '（不可选）'}" for n, b in scored)
+        self.log_info(f"餐厅：{detail}｜精力 {stamina} → "
+                      + ("按可选/队友多/右边选" if usable else "都不可选，按右边优先试"))
+        return tuple(b.name for b in (usable or ranked))
+
+    def option_selectable(self, box, texts, stamina=None, default_cost=0):
+        """这张打工卡现在能不能选。
+
+        两个判据都来自界面，而不是硬写一个精力门槛：
+        1. 卡片附近写明「精力不足 / 无法选择 / 不可」→ 不可选；
+        2. 卡片自己标了消耗（`精力-30`）时，当前精力不够它 → 不可选；
+           卡片没写消耗时按 `default_cost` 估（右边 = `WORK_STAMINA_COST` 25，
+           左边 = 0，因为不耗精力的是左边那张）。
+        """
+        if box is None:
+            return False
+        for t in texts:
+            s = t.name.replace(" ", "")
+            if not any(k in s for k in ("不足", "不可", "无法")):
+                continue
+            if abs((t.y + t.height / 2) - (box.y + box.height / 2)) < box.height * 2.5:
+                return False
+        cost = self.card_stamina_cost(box, texts)
+        if cost is None:
+            cost = default_cost
+        return stamina is None or stamina >= cost
+
+    def card_stamina_cost(self, box, texts):
+        """卡片上写的精力消耗（「精力-20」/「消耗20精力」），读不到返回 None。
+
+        「精力+30」「精力恢复20」这类是**收益**不是消耗，必须排除 ——
+        否则会给一张回精力的卡判出「要花 30 精力」，把好选项挡掉。
+        """
+        if box is None:
+            return None
+        best = None
+        for t in texts:
+            s = t.name.replace(" ", "")
+            if "精力" not in s:
+                continue
+            if any(k in s for k in Defs.GACHA_CLEAR_EXCLUDE) or "+" in s:
+                continue
+            if abs((t.y + t.height / 2) - (box.y + box.height / 2)) > box.height * 2.5:
+                continue
+            if abs((t.x + t.width / 2) - (box.x + box.width / 2)) > box.width * 1.2:
+                continue
+            m = (re.search(r"精力\D{0,3}(\d{1,3})", s)
+                 or re.search(r"(\d{1,3})\D{0,3}精力", s))
+            if m:
+                best = int(m.group(1))
+        return best
 
     def handle_park(self, texts):
         """公园内页：散步（零用钱+）/ 划船（属性+）/ 野餐（精力++）。
@@ -655,7 +710,7 @@ class WeekendHandlers:
 
         用户 2026-10-29 口径（见 flow.weekend_priority / constants.WEEKEND_PLAN）：
         - 周六：训练流原设定（步行街 → 游戏厅 → 公园）；其他流派去餐厅打工；
-        - 周日：训练流→公园、商店流→餐厅、扭蛋流→步行街、小游戏流→游戏厅。
+        - 周日：训练流→公园、商店流→餐厅、扭蛋流→步行街→餐厅、小游戏流→游戏厅→餐厅。
         `允许进步行街 / 允许进游戏厅` 没开时对应地点会被过滤掉，退化成公园。
         """
         # 周末首页有「出行」大按钮，地图上没有（2026-10-27 核对 run2 地图页三帧 OCR：
@@ -670,9 +725,8 @@ class WeekendHandlers:
         visited = st.setdefault("visited", set())
         day = st["date"][1] if st["date"] else None
 
-        # 周六的训练流 + 周日公园：老开关「周末第一天优先资源点」已经由
-        # WEEKEND_PLAN 表覆盖，这里不再单独判（行为不变）。
-        places = self.weekend_priority(day)
+        # 周六的训练流 + 周日公园：地点完全由 WEEKEND_PLAN 表决定
+        places = self.weekend_priority(day, st)
 
         # 今天已经去过的地方不再进：游戏厅没有可跳过的小游戏时会退回地图，
         # 不记录「已去过」就会来回进出游戏厅（2026-10-26 实训）。

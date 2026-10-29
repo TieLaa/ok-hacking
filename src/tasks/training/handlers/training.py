@@ -63,8 +63,9 @@ class TrainingHandlers:
     def handle_training_plan(self, texts):
         """训练计划（日历）页：读左上角「XX 的训练计划」，定流派，然后关掉日历。
 
-        用户 2026-10-29 口径：流派信息为空时打开日历，左上角显示的 XX 就是队长，
-        去角色表里查 XX 属于哪个流派，默认按队长的流派跑。
+        用户 2026-10-29 口径（快速接手流程）：进训练时流派是空的，
+        打开日历，左上角显示的 XX 就是队长，去角色表里查 XX 属于哪个流派，
+        然后按队长的流派继续跑。
 
         坑（2026-10-27 00:54 实跑）：这一页同时有「野餐/划船/转动扭蛋/训练」等词，
         旧版被 handle_street 抢走 —— 当成扭蛋页「退出」，还误记了一次「步行街已去」；
@@ -80,7 +81,7 @@ class TrainingHandlers:
             self._style_name = name
             self.log_info(f"训练计划：队长「{name}」→ 流派「{style}」", notify=True)
         elif name:
-            # 角色表里没有（SR/R 卡没收录）→ 保持配置/兜底流派，别再反复开了
+            # 角色表里没有（SR/R 卡没收录）→ 按训练流跑，别再反复开了
             self._style_name = name
             self._style_probe_tries = 3
             self.log_warning(f"训练计划：队长「{name}」不在角色表里 → 沿用「{self.style}」")
@@ -90,11 +91,12 @@ class TrainingHandlers:
         return True
 
     def handle_style_probe(self, texts):
-        """流派还不知道（新的一局 / 换了队长）→ 打开左上角的训练计划日历。
+        """流派还不知道（快速接手流程）→ 打开左上角的训练计划日历。
 
-        用户 2026-10-29：点「开始训练」以后流派变量是空的，先打开日历认队长。
+        用户 2026-10-29：全自动流程在配置里填了队长，开局就有流派，不会走到这里；
+        队长留空才是快速接手：进训练后点一次日历，解析队长流派再继续。
         训练日主界面左上角那个按钮就是日历（不是返回，见 flow.exit_page 的注释），
-        只点一次、最多 3 次，避免别的页面乱点或无限重试。
+        最多 3 次，避免别的页面乱点或无限重试。
         """
         if self.style_known:
             return False
@@ -112,7 +114,7 @@ class TrainingHandlers:
         if self._style_probe_tries >= 3:
             self.log_warning(
                 f"流派识别 3 次都没成功 → 先按「{self.style}」跑"
-                "（配置里直接选流派可跳过这一步）")
+                "（配置里填「指定队长」可跳过这一步）")
         else:
             self.log_info("流派未知：点左上角打开训练计划日历")
         return True

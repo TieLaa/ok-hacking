@@ -17,8 +17,8 @@ import numpy as np
 
 from src.tasks.ui import Defs  # noqa: F401
 from src.tasks.training.constants import (FRIDAY_REST_OTHER, FRIDAY_REST_SHOP,
-                                          JPEG_PARAMS, PROJECT_ROOT, STYLE_AUTO,
-                                          STYLE_PLACES, WEEKEND_PLAN)  # noqa: F401
+                                          JPEG_PARAMS, PROJECT_ROOT,
+                                          WEEKEND_PLAN)  # noqa: F401
 from src.util.emergency_stop import STOP
 
 # 点击流水：一行一个 JSON 事件（时间戳 / 步数 / 当时界面 / 坐标）。
@@ -42,6 +42,11 @@ class TrainingFlowMixin:
         # 等待用户空闲可能很久：把紧急停止挂进去，否则按了停止键要等用户停手才生效
         if interaction is not None and hasattr(interaction, "abort_check"):
             interaction.abort_check = STOP.event.is_set
+        # 流派只由队长决定（用户 2026-10-29）：配置里填了队长就直接写入，
+        # 留空则等第一个训练日点日历解析一次（handle_style_probe）。
+        self.reset_style()
+        self.log_info(f"流派：{self.style}"
+                      + ("" if self.style_known else "（待日历识别队长）"))
         max_steps = int(self.config.get("单局最大操作数", 400))
         interval = float(self.config.get("操作间隔(秒)", 0.8))
         stuck_seconds = float(self.config.get("卡死判定(秒)", 5))
@@ -340,58 +345,50 @@ class TrainingFlowMixin:
 
     @property
     def style(self):
-        """当前流派：识别到的队长流派 > 配置里手动锁定的流派 > 训练流兜底。
+        """当前流派 —— 由队长决定（见 docs/RULES.md 第 0 节）。
 
-        用户 2026-10-29：点开始训练后这个值是空的，打开日历读到队长后写进来，
-        默认按队长的流派跑；配置里选具体流派 = 手动锁定，不再去读日历。
+        快速接手流程：进训练时这个变量是空的 → 点一次日历解析队长流派。
+        全自动流程（另一条流程，尚未实装）：开局自己把流派写进 `_style`。
+        还没定下来时按「训练流」跑（最保守）。
         """
-        return (getattr(self, "_style", None)
-                or self.declared_style()
-                or "训练流")
-
-    def declared_style(self):
-        """配置里写死的流派；「自动（按队长）」或空 → None。"""
-        v = (self.config.get("流派") or "").strip()
-        return None if (not v or v == STYLE_AUTO) else v
+        return getattr(self, "_style", None) or "训练流"
 
     @property
     def style_known(self):
         """流派定了没有？没定就要去开日历认队长。"""
-        return bool(getattr(self, "_style", None) or self.declared_style())
+        return bool(getattr(self, "_style", None))
 
-    def reset_style_probe(self):
-        """新的一局（点了开始训练）：流派重新识别 —— 队长可能换了。"""
+    def reset_style(self):
+        """清空流派（新的一局 / 接管一局）：等日历解析队长。"""
         self._style = None
         self._style_name = None
         self._style_probe_tries = 0
         self._style_probe_at = 0.0
 
-    def weekend_priority(self, day=None):
-        """今天该去的地点（顺序 = 优先级）。
+    def weekend_priority(self, day=None, st=None):
+        """今天该去的地点（顺序 = 优先级，前一个走完才轮到下一个）。
 
         用户 2026-10-29 口径（见 docs/RULES.md 第 1 节）：
-        - 周六：训练流原设定（步行街 → 游戏厅 → 公园）；其他流派只去餐厅打工；
-        - 周日：训练流→公园、商店流→餐厅、扭蛋流→步行街、小游戏流→游戏厅。
+        - 周六：训练流原设定（步行街 → 游戏厅 → 公园）；其他流派都去餐厅打工；
+        - 周日：训练流→公园、商店流→餐厅、扭蛋流→步行街→餐厅、小游戏流→游戏厅→餐厅。
 
         「商店」是周末首页的按钮、不是地图上的地点，这里要过滤掉；
         步行街 / 游戏厅仍是显式开关（没验证过内页，先别默认乱进）。
         """
-        style = self.style
+        if st is None:
+            st = self.weekend_state()
         if day is None:
-            day = (self.weekend_state().get("date") or (None, None))[1]
-        if day == "六" and style != "训练流":
-            places = ["餐厅"]
-        else:
-            places = list(WEEKEND_PLAN.get(
-                (day, style), STYLE_PLACES.get(style, STYLE_PLACES["训练流"])))
+            day = (st.get("date") or (None, None))[1]
+        # 读不到星期时按周六那一行兜底（每个流派都有定义）
+        places = list(WEEKEND_PLAN.get((day, self.style))
+                      or WEEKEND_PLAN.get(("六", self.style))
+                      or ["公园"])
         places = [p for p in places if p != "商店"]
         if not self.config.get("允许进游戏厅", True):
             places = [p for p in places if p != "游戏厅"]
         if not self.config.get("允许进步行街", True):
             places = [p for p in places if p != "步行街"]
         # 兜底：开关全关/表里没这个组合时总得花掉一天，退化去公园。
-        # 注意不是「每个计划都追加公园」—— 周日扭蛋流只去步行街，逛完这一天就结束，
-        # 再跑一趟公园属于计划外消耗（用户 2026-10-29 只给了一个地点）。
         if not places:
             places = ["公园"]
         return places
@@ -407,8 +404,3 @@ class TrainingFlowMixin:
         if day != "五" or self.style == "训练流":
             return base
         return FRIDAY_REST_SHOP if self.style == "商店流" else FRIDAY_REST_OTHER
-
-    def low_stamina(self, stamina_state):
-        current = stamina_state.get("stamina")
-        limit = self.rest_threshold(stamina_state.get("day"))
-        return current is not None and current < limit

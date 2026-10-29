@@ -238,10 +238,10 @@ class EntryHandlers:
             self.click_box(target, after_sleep=0.8)
         else:
             self.flow_click("confirm_start", after_sleep=0.8)
-        # 新的一局：队长可能换了，流派重新认（用户 2026-10-29 口径）
-        self.reset_style_probe()
-        self.log_info("开始训练（已扣体力，不可退）｜流派待识别" if not self.declared_style()
-                      else "开始训练（已扣体力，不可退）")
+        # 新的一局：队长可能换了 —— 配置里填了队长就按它写流派，否则等日历解析
+        self.reset_style()
+        self.log_info("开始训练（已扣体力，不可退）｜流派：" + self.style
+                      + ("" if self.style_known else "（待日历识别队长）"))
         return True
 
     def is_pre_match_day(self, texts):

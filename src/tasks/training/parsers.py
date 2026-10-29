@@ -469,22 +469,20 @@ class TrainingParsersMixin:
             icons.append((cent[i][0] + x0, cent[i][1]))
         return icons
 
-    def mates_near(self, box, icons):
-        """这个选项周围挂了几个队友头像（餐厅打工的「队友多」判据）。
+    def mates_on_card(self, box, icons):
+        """这张卡片**左上角**挂了几个队友小头像（用户 2026-10-29 口径）。
 
-        只在**选项自己那一列**里数：横向 ±1.2 个选项宽，纵向从选项上方 2 个高度
-        到下方 0.8 个高度。范围给得比较宽，是因为这两个选项的美术和科目页
-        （头像挂在文字右侧/右上角）不一定完全一样，宁可多算一点也不要漏。
-        数不到就返回 0 —— 调用方拿 0 当平局处理，正好落到「选右边」的规则上。
+        餐厅打工的两个选项是「卡片」，队友头像排在卡片左上角，名字/效果写在
+        卡片下方，所以只数文字框**上方偏左**那一片：
+        纵向从文字框上沿往上 2.5 个文字高，横向从文字中心往左 1.4 个文字宽。
+        数不到就返回 0 —— 调用方拿 0 当平局处理（退化成「选右边」）。
         """
         if not icons or box is None:
             return 0
         cx = box.x + box.width / 2
-        half = max(box.width * 1.2, self.width * 0.10)
-        top = box.y - box.height * 2.0
-        bottom = box.y + box.height * 0.8
-        return sum(1 for ix, iy in icons
-                   if abs(ix - cx) <= half and top <= iy <= bottom)
+        x1, x2 = cx - box.width * 1.4, cx + box.width * 0.1
+        y1, y2 = box.y - box.height * 2.5, box.y + box.height * 0.3
+        return sum(1 for ix, iy in icons if x1 <= ix <= x2 and y1 <= iy <= y2)
 
     def is_training_plan(self, texts):
         """是不是训练计划（日历）页。
