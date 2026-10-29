@@ -48,9 +48,11 @@ class TrainingFlowMixin:
         # 等待用户空闲可能很久：把紧急停止挂进去，否则按了停止键要等用户停手才生效
         if interaction is not None and hasattr(interaction, "abort_check"):
             interaction.abort_check = STOP.event.is_set
-        # 流派只由队长决定（用户 2026-10-29）：配置里填了队长就直接写入，
-        # 留空则等第一个训练日点日历解析一次（handle_style_probe）。
+        # 流派只由队长决定（用户 2026-10-29）：留空则等第一个训练日点日历解析一次
         self.reset_style()
+        # 运行期状态每次开局都要清（2026-10-29 实机：连开第二把时任务秒退，
+        # 因为 _register_stage 还停在上次的 "back"，run() 的终点判据立刻命中）
+        self.reset_run_state()
         self.log_info(f"流派：{self.style}"
                       + ("" if self.style_known else "（待日历识别队长）"))
         max_steps = int(self.config.get("单局最大操作数", 400))
@@ -185,6 +187,32 @@ class TrainingFlowMixin:
 
         self.log_warning(f"达到最大操作数 {max_steps}，停止")
         return False
+
+    def reset_run_state(self):
+        """每次 run() 开始时清掉「上一局遗留」的运行期状态。
+
+        ok-script 会复用同一个 Task 实例，不清就会：
+        - `_register_stage == "back"` → 第二把秒退「任务完成」（2026-10-29 实机）；
+        - 商品/商店标记、卡死计数、快进标记带到新的一局。
+        """
+        self._register_stage = None
+        self._reg_ticks = 0
+        self._force_rest = False
+        self._shop_day = None
+        self._shop_spend_all = False
+        self._shop_seen = False
+        self._arcade_wait_since = 0.0
+        self._no_change = 0
+        self._sig_after_click = None
+        self._stuck_rounds = 0
+        self._picked_subject = False
+        self._picked_index = 0
+        self._subject_confirmed_at = 0.0
+        self._match_flags = {"manual_fixed": False, "fast_clicked": False,
+                             "last_fast_at": 0.0}
+        self._subject_dumps = 0
+        self._skill_dumps = 0
+        self._stock_dumps = 0
 
     @staticmethod
     def _signature(texts):

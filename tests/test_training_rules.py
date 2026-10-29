@@ -2169,6 +2169,17 @@ class TalentStockEvent(unittest.TestCase):
         self.assertTrue(QuickMatchTask.is_label("一定能赚!"))
         self.assertFalse(QuickMatchTask.is_label("防守"))
 
+    def test_reset_run_state_clears_register_stage(self):
+        """连开第二把秒退：_register_stage 停在上次 "back" 必须先清掉。"""
+        task = FakeTask([])
+        task._register_stage = "back"
+        task._shop_day = (3, "一")
+        task._no_change = 5
+        task.reset_run_state()
+        self.assertIsNone(task._register_stage)
+        self.assertIsNone(task._shop_day)
+        self.assertEqual(task._no_change, 0)
+
     def test_no_separate_stock_button_on_training_day(self):
         """炒股**不是**训练日主按钮：入口只有「二选一」选第一个。
 
