@@ -24,6 +24,18 @@ from src.util.emergency_stop import STOP
 # 点击流水：一行一个 JSON 事件（时间戳 / 步数 / 当时界面 / 坐标）。
 # 放在 logs/ 下，已被 .gitignore 忽略；任务结束后用它复盘「第几秒点了哪里」。
 CLICK_LOG = os.path.join(PROJECT_ROOT, "logs", "clicks.jsonl")
+EVENT_DIR = os.path.join(PROJECT_ROOT, "logs", "events")
+
+# 这些 handler 命中时存一帧（报告页要「事件 ↔ 截图」一一对应）。
+# 训练科目/比赛内这种每几秒一次的就不存，避免每轮几十张图。
+SNAP_HANDLERS = {
+    "handle_event_choice", "handle_boost_training", "handle_restaurant",
+    "handle_park", "handle_street", "handle_arcade", "handle_shop",
+    "handle_stock_pick", "handle_stock_result", "handle_skill_select",
+    "handle_weekend", "handle_go_out", "handle_training_plan",
+    "handle_result", "handle_match_result", "handle_prepare",
+    "handle_register_player", "handle_vacation", "handle_rest_confirm",
+}
 
 # 游戏厅小游戏播动画期间，用这些「真实界面标记」判断动画结束了没。
 # 注意不能放「星期 / 比赛」这类顶栏文字：小游戏画面本身也带顶栏（第N周 星期六）。
@@ -214,6 +226,34 @@ class TrainingFlowMixin:
         self._skill_dumps = 0
         self._stock_dumps = 0
 
+    def snap_event(self, handler_name, texts):
+        """事件命中时存一帧 + 一份 OCR 摘要，供报告页「事件 ↔ 截图」配对。
+
+        限流：同一秒只存一张；只存 SNAP_HANDLERS 里的 handler。
+        """
+        if handler_name not in SNAP_HANDLERS:
+            return
+        now = time.time()
+        if now - getattr(self, "_last_snap_at", 0.0) < 1.0:
+            return
+        self._last_snap_at = now
+        frame = self.frame
+        if frame is None or not frame.any():
+            return
+        try:
+            os.makedirs(EVENT_DIR, exist_ok=True)
+            stamp = time.strftime("%m%d-%H%M%S", time.localtime(now))
+            base = os.path.join(EVENT_DIR, f"{stamp}_{handler_name}")
+            cv2.imwrite(base + ".jpg", frame, JPEG_PARAMS)
+            names = [t.name.strip() for t in texts if t.name.strip()][:30]
+            with open(base + ".json", "w", encoding="utf-8") as f:
+                json.dump({"at": time.strftime("%Y-%m-%d %H:%M:%S",
+                                               time.localtime(now)),
+                           "handler": handler_name, "texts": names},
+                          f, ensure_ascii=False)
+        except Exception as e:                   # noqa: BLE001
+            self.log_debug(f"事件截图失败: {type(e).__name__}: {e}")
+
     @staticmethod
     def _signature(texts):
         """界面指纹：只看**文字内容**，不看位置。
@@ -327,6 +367,7 @@ class TrainingFlowMixin:
             try:
                 if handler(self, texts):
                     self._last_state = handler.__name__
+                    self.snap_event(handler.__name__, texts)
                     self._recent_actions.append(f"step{self._steps} {handler.__name__}")
                     # 记录「点击之后应该看到的那一帧」的指纹，下一拍对比是否变化
                     self._sig_after_click = self._signature(texts)

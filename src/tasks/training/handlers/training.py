@@ -74,6 +74,12 @@ class TrainingHandlers:
         """
         if not self.is_training_plan(texts):
             return False
+        # 2026-10-30：每到新一天/新一周游戏都会自己弹这页。流派一旦定了就不再解析，
+        # 只把日历关掉（用户口径：流派非空就不用一直看，又不会变）。
+        if self.style_known:
+            self.exit_page(after_sleep=0.8)
+            self.log_debug(f"日历：流派已定（{self.style}）→ 直接关掉")
+            return True
         name = self.read_plan_captain(texts)
         style = self.style_for_name(name) if name else None
         if style:
