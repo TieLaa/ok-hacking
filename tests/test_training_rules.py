@@ -879,6 +879,8 @@ class ArcadeRules(unittest.TestCase):
         task = self._task(texts)
         self.assertTrue(task.handle_arcade(texts))
         self.assertEqual(task.actions[-2][1], "弹跳20~70")
+        # 买完要先等小游戏自己打完（进场动画没有 UI，别让看门狗判卡死）
+        self.assertGreater(task._arcade_wait_until, time.time())
 
     def test_blue_card_is_not_bought(self):
         """蓝色品质不买（用户 2026-10-27：只买黄/紫 + 带自动）。"""

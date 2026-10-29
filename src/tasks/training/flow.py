@@ -58,6 +58,20 @@ class TrainingFlowMixin:
                 self.sleep(0.3)
                 continue
 
+            # 游戏厅买完小游戏：先让游戏自己播完（2026-10-29 实跑：买完画面只剩一个
+            # 角色站在球场中间、只有顶栏 4 行文字，5 秒就被卡死看门狗当成「点了不动」
+            # 停掉了整个任务）。这段时间只等不点；45 秒还没结束就点右上角 ↩ 退出。
+            wait_until = getattr(self, "_arcade_wait_until", 0.0)
+            if wait_until and len(texts) <= 8:
+                if time.time() < wait_until:
+                    self.sleep(0.5)
+                    continue
+                self._arcade_wait_until = 0.0
+                self.log_warning("游戏厅小游戏 45 秒还没结束 → 点右上角退出游戏厅")
+                self.exit_page(after_sleep=0.8)
+                self.sleep(0.8)
+                continue
+
             # 界面指纹：同一页面每拍都一样，用来判「卡住了没」
             sig = self._signature(texts)
             if sig == last_sig:

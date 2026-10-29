@@ -561,6 +561,9 @@ class WeekendHandlers:
                 return True
             self.click_box(pick["box"], after_sleep=0.4)
             self.click_box(confirm, after_sleep=1.0)
+            # 小游戏会自己打完，但先有一段无 UI 的进场动画（角色站场上），
+            # 这段时间交给 run() 的等待分支，别让卡死看门狗误判。
+            self._arcade_wait_until = time.time() + 45
             self.log_info(f"游戏厅：买了「{pick['attr']}」小游戏"
                           f"（奖励上限 {pick['hi']}，价格 {pick['price']}，"
                           f"零用钱 {money}），等它自己打完")
