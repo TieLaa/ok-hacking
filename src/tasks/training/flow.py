@@ -71,10 +71,14 @@ class TrainingFlowMixin:
                     self.log_warning("游戏厅小游戏 5 分钟还没结束 → 继续按普通流程处理")
                     self._arcade_wait_since = 0.0
                 else:
+                    stuck, last_sig = 0, None      # 动画期间不算卡死
                     self.sleep(0.5)
                     continue
             elif getattr(self, "_arcade_wait_since", 0.0):
+                # 动画刚结束：5 秒看门狗从这一刻重新计时，别拿买小游戏之前的时间戳判卡死
                 self._arcade_wait_since = 0.0
+                self._last_click_at = time.time()
+                stuck, last_sig = 0, None
 
             # 界面指纹：同一页面每拍都一样，用来判「卡住了没」
             sig = self._signature(texts)
