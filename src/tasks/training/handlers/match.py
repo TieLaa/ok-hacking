@@ -614,6 +614,25 @@ class MatchHandlers:
         except Exception as e:                   # noqa: BLE001
             self.log_debug(f"技能帧存证失败: {type(e).__name__}: {e}")
 
+    def has_long_dialog(self, texts):
+        """台词条区域里有没有一整行长句（有就说明这是剧情页，不是选项页）。
+
+        用于 `handle_event_choice`：没有「跳过」时，靠「没有长台词」来区分
+        「事件选项」和「剧情对话」（2026-10-26 把台词当选项点过）。
+        """
+        x1, y1, x2, y2 = Defs.region("dialog_text")
+        for t in texts:
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if not (x1 <= cx <= x2 and y1 <= cy <= y2):
+                continue
+            s = t.name.strip()
+            if len(s) < 12:
+                continue
+            if any("\u4e00" <= ch <= "\u9fff" for ch in s):
+                return True
+        return False
+
     @staticmethod
     def _pick_choice(infos, kind):
         """按用户规则挑选项，返回 (选中项, 理由)。
@@ -757,7 +776,13 @@ class MatchHandlers:
                 return False
         # 只有 1 项也不是选项：剧情页右上角同样有「跳过」，has_skip 会把它放进来
         # （2026-10-27 10:07 周末前对话「我要去和小式一起去看电影」被点 5 次空点）
-        if group and len(group) >= 2 and (has_skip or len(group) >= 3):
+        # 2026-10-29 器材事件：`精力恢复 / 资金援助` 两行短选项、**没有「跳过」**。
+        # 旧条件要求 has_skip，导致这里放弃 → 兜底点中央正好压中下面那个选项。
+        # 新增：两行都短（≤8 字）且页面上没有长台词时，没有跳过也认。
+        short_pair = (len(group) >= 2
+                      and all(len(t.name.strip()) <= 8 for t in group)
+                      and not self.has_long_dialog(texts))
+        if group and len(group) >= 2 and (has_skip or len(group) >= 3 or short_pair):
             pick = min(group, key=lambda t: t.y)
             if os.environ.get("OK_DUMP_CHOICES"):
                 self.dump_unknown(texts, "choice_vertical")

@@ -2191,6 +2191,20 @@ class TalentStockEvent(unittest.TestCase):
         self.assertEqual(pick["name"], "婉拒邀请")
         self.assertIn("第一个", why)
 
+    def test_short_pair_without_skip_is_a_choice(self):
+        """器材事件：两行短选项、没有「跳过」也要认，选上面那个。
+
+        2026-10-29 实机：`精力恢复 / 资金援助` 被放弃 → 兜底点中央正好压中
+        下面那个（用户看到「选了下面那个」）。
+        """
+        texts = [box(69, 165, "器材事件", 115, 34),
+                 box(70, 206, "器材加成-70熟练度", 231, 36),
+                 box(686, 322, "精力恢复", 176, 54),
+                 box(684, 434, "资金援助", 179, 56)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_event_choice(texts))
+        self.assertEqual(task.actions[-1][1], "精力恢复")
+
     def test_no_separate_stock_button_on_training_day(self):
         """炒股**不是**训练日主按钮：入口只有「二选一」选第一个。
 
