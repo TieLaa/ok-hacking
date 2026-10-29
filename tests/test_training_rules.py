@@ -2258,6 +2258,19 @@ class TalentStockEvent(unittest.TestCase):
         self.assertIn("加强训练（文字效果）", "".join(task.logs))
         self.assertGreater(task.actions[0][1], int(task.width * 0.5))   # 点了右边
 
+    def test_effect_value_shared_rule(self):
+        """统一口径：纯回精力=flat；等级/属性按 100；属性 +N 按真实总量。"""
+        def val(*names):
+            return FakeTask.effect_value([box(0, 0, n, 100, 40) for n in names])
+
+        self.assertEqual(val("精力提升+30"), (6.0, True))
+        self.assertEqual(val("意识训练的等级增加至2"), (100.0, False))
+        self.assertEqual(val("投射+10"), (10.0, False))
+        # 同一张卡既给等级又回精力：不算纯回精力
+        ev, flat = val("意识训练的等级增加至2", "精力提升+30")
+        self.assertFalse(flat)
+        self.assertEqual(ev, 100.0)
+
     def test_no_separate_stock_button_on_training_day(self):
         """炒股**不是**训练日主按钮：入口只有「二选一」选第一个。
 

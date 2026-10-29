@@ -191,14 +191,10 @@ class TrainingHandlers:
             bands["left" if cx < 0.5 else "right"].append(t)
 
         def score_of(items):
-            joined = "".join(t.name for t in items)
-            if not joined:
-                return None
-            if any(k in joined for k in ("等级", "属性", "训练")):
-                return 100.0
-            if "精力" in joined or "体力" in joined:
+            # 统一口径（同事件选项）：回精力=flat→0 分；其余按期望值
+            ev, flat = self.effect_value(items)
+            if flat:
                 return 0.0
-            ev = self._effect_ev(items)
             return ev if ev is not None else 1.0
 
         out = []

@@ -77,6 +77,30 @@ class TrainingScoringMixin:
     STAMINA_WEIGHT = 0.2
 
     @classmethod
+    def effect_value(cls, items):
+        """一组「效果文本」→ (ev, flat)。**事件选项和加强训练共用这一份口径**。
+
+        - `flat=True`：纯回精力（出现「精力/体力」，但没有属性名、也没有「等级/属性」）
+          —— 调用方一律不选它（用户口径：回精力不如一点属性）；
+        - `ev`：真实属性总量（`_effect_ev`：全属性×6、精力×0.2、概率相乘）；
+          读不到数字但写着「等级/属性」时按 100 计（训练等级提升这类文字效果）。
+        """
+        joined = "".join(t.name for t in items)
+        if not joined:
+            return None, False
+        attrs = any(a in joined for a in cls.ATTR_NAMES)
+        level = any(k in joined for k in ("等级", "属性"))
+        flat = (("精力" in joined or "体力" in joined) and not attrs and not level)
+        ev = cls._effect_ev(items)
+        if level:
+            # 「等级/属性提升」按 100 计（比任何单条属性都值钱）；
+            # 同一张卡还写着精力+30 时也取 100，不取 6。
+            ev = 100.0 if ev is None else max(ev, 100.0)
+        if ev is None and flat:
+            ev = 0.0
+        return ev, flat
+
+    @classmethod
     def _effect_ev(cls, effect_texts):
         """从效果文本里算**真实属性总量**（用户 2026-10-27 口径）。
 

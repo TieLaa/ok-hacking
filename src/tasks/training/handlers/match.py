@@ -730,10 +730,8 @@ class MatchHandlers:
         if len(cards) >= 2:
             infos = []
             for box, effs in cards:
-                ev = self._effect_ev(effs)
-                attrs = any(any(a in e.name for a in Defs.TRAINING_SUBJECTS)
-                            for e in effs)
-                flat = (any("精力" in e.name for e in effs) and not attrs)
+                # 统一口径：回精力=flat（不选），期望值见 scoring.effect_value
+                ev, flat = self.effect_value(effs)
                 infos.append({"x": box.x, "y": box.y, "box": (box.x, box.y, box.width, box.height),
                               "name": box.name.strip(), "name_box": box,
                               "ev": ev, "flat": flat})
