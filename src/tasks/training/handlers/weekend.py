@@ -72,6 +72,25 @@ class WeekendHandlers:
             self.log_info(f"确定 @({confirm.x},{confirm.y})")
         return True
 
+    # 购买没成交的保护：同一件东西连点这么多次还没变化，就认为点不动。
+    # 用户 2026-10-29 口径：**不要按次数限制购买** —— 羽漱川湊能买两次、
+    # 卧云真昼能买到升级版、白神时久多一件免费商品，商店/游戏厅/步行街
+    # 一天买几件都可能是正常的。要防的是「点了没成交还一直点」。
+    BUY_RETRY_LIMIT = 3
+
+    def buy_stalled(self, scene, money, item):
+        """判断「这一下购买有没有成交」。
+
+        成交一定会让页面状态变（零用钱变少、卡片消失、剩余数变化），
+        所以只盯 **同一场景 + 零用钱没变 + 还是同一件（名字+价格）** 连续出现几次。
+        零用钱变了 = 上一次真花钱了，计数自然重置 → 想买几次买几次。
+        """
+        key = (scene, money, item[0], item[1])
+        same = getattr(self, "_buy_key", None) == key
+        tries = (getattr(self, "_buy_tries", 0) + 1) if same else 1
+        self._buy_key, self._buy_tries = key, tries
+        return tries >= self.BUY_RETRY_LIMIT
+
     def mark_visited(self, place):
         """地点内页真的打开后才登记「今天去过」。
 
@@ -189,14 +208,18 @@ class WeekendHandlers:
         money = self.read_money(texts)
         items = self.read_shop_items(texts)
         threshold = int(self.config.get("商店进店余额", 300))
+        # 免费商品（白神时久：每天多一件 0 元商品）：不花零用钱，
+        # 余额不够、甚至钱读不到时都应该拿 —— 旧逻辑先按余额判死，永远买不到。
+        free = [i for i in items if i["price"] == 0]
         self.log_info("商店：" + "、".join(
             f"{i['name']}({i['price']}/{i['quality']})" for i in items)
             + f"｜零用钱 {money}｜策略 {policy}"
             + ("｜赛前清空" if self._shop_spend_all else ""))
 
-        # 平时余额低于门槛就不该待在店里（周末商店流等入口可能绕过进店检查）
-        if (not self._shop_spend_all and money is not None and money < threshold
-                and policy != "不买"):
+        # 平时余额低于门槛就不该待在店里（周末商店流等入口可能绕过进店检查）；
+        # 但有免费商品时例外：先把 0 元的拿走，再按老规则关店。
+        if (not self._shop_spend_all and not free and money is not None
+                and money < threshold and policy != "不买"):
             self.log_info(f"商店：零用钱 {money} < {threshold}，不买，关店")
             self.finish_shop(texts)
             return True
@@ -206,13 +229,19 @@ class WeekendHandlers:
             self.finish_shop(texts)
             return True
 
-        affordable = [i for i in items if money is not None and i["price"] <= money]
+        affordable = free + [i for i in items
+                             if i["price"] > 0 and money is not None and i["price"] <= money]
         if not affordable:
-            self.log_info("商店：没有买得起的商品了，关店")
+            self.log_info("商店：没有买得起的商品了，关店"
+                          + ("（零用钱读不到，不盲买）" if money is None else ""))
             self.finish_shop(texts)
             return True
 
-        if policy == "只买金和紫":
+        if free:
+            # 免费优先：0 元不花钱，品质只影响先拿哪张
+            order = {"金": 2, "紫": 1}
+            pick = max(free, key=lambda i: (order.get(i["quality"], 0), -i["y"]))
+        elif policy == "只买金和紫":
             pool = [i for i in affordable if i["quality"] in ("金", "紫")]
             if self._shop_spend_all and not pool:
                 # 赛前一天：金紫买完了，剩下的钱继续买别的，反正带不走
@@ -233,6 +262,14 @@ class WeekendHandlers:
         else:
             pick = max(affordable, key=lambda i: (
                 1 if "器材手册" in i["name"] else 0, i["price"]))
+
+        if self.buy_stalled("商店", money, (pick["name"], pick["price"])):
+            self.log_warning(
+                f"商店：「{pick['name']}」连续 {self.BUY_RETRY_LIMIT} 次点了没成交"
+                "（零用钱没变、卡片还在）→ 今天不再买，关店")
+            self._buy_key = None
+            self.finish_shop(texts)
+            return True
 
         self.click(pick["x"], pick["y"], after_sleep=0.6)
         # 右侧黄色购买条（实机相对位置 0.79, 0.84）
@@ -501,14 +538,27 @@ class WeekendHandlers:
         auto_cards.sort(key=lambda c: -c["hi"])
         pick = None
         for c in auto_cards:
-            # 价格读不到就按最低档 60 试一次（点确定买不起时游戏不会扣钱、页面不动，
-            # 下一拍 mark_visited 已经记过，会直接离开，不会死循环）
-            need = c["price"] if c["price"] is not None else 60
-            if money is None or money >= need:
+            price = c["price"]
+            if price == 0:
+                # 免费小游戏（白神时久那类 0 元商品）：不花钱，钱读不到也能买
+                pick = c
+                break
+            if price is None:
+                continue                    # 价格读不到：不猜
+            if money is None:
+                continue                    # 钱读不到就不买，盲买就是 2026-10-29 的死循环
+            if money >= price:
                 pick = c
                 break
         confirm = self.exact_text(texts, ("确定",))
         if pick is not None and confirm is not None:
+            if self.buy_stalled("游戏厅", money, (pick["attr"], pick["price"])):
+                self.log_warning(
+                    f"游戏厅：「{pick['attr']}」连续 {self.BUY_RETRY_LIMIT} 次点了没成交"
+                    "（零用钱没变、卡片还在）→ 今天不再买，退出")
+                self._buy_key = None
+                self.exit_page()
+                return True
             self.click_box(pick["box"], after_sleep=0.4)
             self.click_box(confirm, after_sleep=1.0)
             self.log_info(f"游戏厅：买了「{pick['attr']}」小游戏"
@@ -516,7 +566,10 @@ class WeekendHandlers:
                           f"零用钱 {money}），等它自己打完")
             return True
 
-        self.log_warning(f"游戏厅：带「自动」的都买不起（零用钱 {money}），退出")
+        if money is None:
+            self.log_warning("游戏厅：零用钱读不到，先不买（避免盲买）→ 退出")
+        else:
+            self.log_warning(f"游戏厅：带「自动」的都买不起（零用钱 {money}），退出")
         self.exit_page()
         return True
 
@@ -531,6 +584,16 @@ class WeekendHandlers:
         # 结果首页被判成地图、永远不点「出行」。现在统一用「有出行 = 首页」。
         if self.match_text(texts, "出行") is None:
             return False
+
+        # 训练日里的额外出行（野上泷：周五也能出行）：一天只用一次。
+        # 用过之后如果又停在一个「有出行」的页面（进地图又退回来的首页），
+        # 再点就是「出行 → 地图 → 退回首页」打转，所以这里直接退出去。
+        st = self.weekend_state()
+        day = st["date"][1] if st["date"] else None
+        if st.get("outing_done") and day not in ("六", "日"):
+            self.exit_page()
+            self.log_info("训练日的额外出行已经用过 → 返回主界面")
+            return True
 
         # 商店只有「商店流」才进（用户 2026-10-26：训练流的钱优先换步行街/游戏厅的黄色道具）
         if self.style == "商店流":

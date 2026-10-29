@@ -85,14 +85,20 @@ class TrainingParsersMixin:
         prices = []
         for t in texts:
             s = t.name.strip()
-            if not s.isdigit() or not (1 <= int(s) <= 9999):
+            # 免费商品（白神时久：每天多一件 0 元商品）：卡上是「0」或「免费」。
+            # 旧判据要求 1~9999，正好把 0 元商品整件丢掉（2026-10-29 用户指出）。
+            if s in ("免费", "免费！", "免费!"):
+                price = 0
+            elif s.isdigit() and 0 <= int(s) <= 9999:
+                price = int(s)
+            else:
                 continue
             cx = (t.x + t.width / 2) / self.width
             cy = (t.y + t.height / 2) / self.height
             # 上限 0.82：覆盖第二行价格（0.746）并留 0.07 余量；
             # 底部「上新时间」在 0.93 附近，不会被吃进来。
             if 0.15 <= cx <= 0.58 and 0.38 <= cy <= 0.82:
-                prices.append((int(s), t))
+                prices.append((price, t))
 
         names = []
         for t in texts:
@@ -353,6 +359,8 @@ class TrainingParsersMixin:
                 "bought": False,
                 "park_choice": None,
                 "visited": set(),
+                # 训练日里出现「出行」时先外出（野上泷周五也能出行），一天只做一次
+                "outing_done": False,
             }
         return self._weekend
 

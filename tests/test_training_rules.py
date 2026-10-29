@@ -850,6 +850,7 @@ class ArcadeRules(unittest.TestCase):
             box(199, 236, "自动", 64, 30),
             box(308, 238, "弹跳", 70, 42),
             box(251, 370, "弹跳20~70", 155, 31),
+            box(355, 484, "64", 44, 32),
             box(520, 236, "运控", 70, 39),          # 没有「自动」= 没打过，不能买
             box(539, 370, "运控20~70", 178, 31),
             box(615, 646, "确定", 71, 39),
@@ -1436,6 +1437,132 @@ class ShopGrid(unittest.TestCase):
         item = next(i for i in task.read_shop_items(task._texts) if i["name"] == "防守教科书")
         self.assertGreater(item["y"], int(1080 * 0.544))
         self.assertLess(item["y"], int(1080 * 0.746))
+
+
+class PurchaseRules(unittest.TestCase):
+    """商店 / 游戏厅的购买控制（用户 2026-10-29 口径）。
+
+    - **不限制购买次数**：羽漱川湊能买两次、卧云真昼能买到升级版、
+      白神时久多一件免费商品，一天买几件都可能是正常的；
+    - 要防的是「点了没成交还一直点」（2026-10-29 实跑：游戏厅买了 237 次）；
+    - 免费商品（0 元）不花零用钱，余额不足 / 读不到钱时也应该拿。
+    """
+
+    COLS = (0.223, 0.357, 0.490)
+
+    def _shop(self, items, money=80, quality="金"):
+        """items = [(名字, 价格)]，价格写 "免费" 表示 0 元卡。"""
+        texts = [box(760, 60, "商店", 160, 40),
+                 box(1200, 60, "上新时间", 200, 30)]
+        if money is not None:
+            texts.append(box(1100, 20, str(money), 80, 40))
+        for i, (name, price) in enumerate(items):
+            cx = self.COLS[i % 3]
+            texts.append(box(int(1920 * cx) - 75, int(1080 * 0.30) - 21, name, 150, 42))
+            texts.append(box(int(1920 * cx) - 35, int(1080 * 0.45) - 18,
+                             str(price), 70, 36))
+        task = FakeTask(texts, config={"购买策略": "只买金和紫"})
+        task.read_money = lambda texts=None: money
+        task.card_quality = lambda name, pt: (quality, 30, 150)
+        return task, texts
+
+    def _arcade(self, money=300, price="64", quality="金"):
+        texts = [
+            box(600, 115, "请选择一个小游戏", 220, 36),
+            box(199, 236, "自动", 64, 30),
+            box(308, 238, "弹跳", 70, 42),
+            box(251, 370, "弹跳20~70", 155, 31),
+            box(355, 484, price, 44, 32),
+            box(615, 646, "确定", 71, 39),
+        ]
+        task = FakeTask(texts, config={"游戏厅付费": True})
+        task.read_money = lambda texts=None: money
+        task.card_quality_at = lambda cx, y1, y2: (quality, 30, 150)
+        return task, texts
+
+    def test_shop_buys_free_item_when_poor(self):
+        """白神时久：0 元商品不花零用钱，余额 80 < 门槛 300 也要买。"""
+        task, texts = self._shop([("器材手册+", 150), ("精力饮料", 0)])
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「精力饮料」", "".join(task.logs))
+
+    def test_shop_closes_when_poor_and_nothing_free(self):
+        task, texts = self._shop([("器材手册+", 150)])
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("不买，关店", "".join(task.logs))
+
+    def test_shop_unknown_money_buys_nothing_paid(self):
+        """零用钱读不到时不盲买（旧游戏厅死循环就是这么来的）。"""
+        task, texts = self._shop([("器材手册+", 100)], money=None)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertFalse(any("器材手册" in str(a) for a in task.actions))
+
+    def test_arcade_buys_twice_when_money_changes(self):
+        """羽漱川湊能买两次：钱变了就不算「没成交」，不设次数上限。"""
+        task, texts = self._arcade(money=300)
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertIn("买了", task.logs[-1])
+        task.read_money = lambda texts=None: 200          # 第一件已扣钱
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertIn("买了", task.logs[-1])
+
+    def test_arcade_stops_after_three_stalled_clicks(self):
+        """零用钱没变 + 同一张卡还在 → 第 3 次判定「点不动」，退出而不是继续买。"""
+        task, texts = self._arcade(money=300)
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertIn("没成交", "".join(task.logs))
+        self.assertEqual(task.actions[-1][0], "click")     # exit_page 的右上角返回
+
+    def test_arcade_unknown_money_buys_nothing(self):
+        task, texts = self._arcade(money=None, price="100")
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertNotIn("买了", "".join(task.logs))
+        self.assertIn("零用钱读不到", "".join(task.logs))
+
+    def test_arcade_free_card_bought_without_money(self):
+        task, texts = self._arcade(money=None, price="0")
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertIn("买了", task.logs[-1])
+
+
+class OutingOnTrainingDay(unittest.TestCase):
+    """野上泷：周五的训练日主界面也会出现「出行」入口（用户 2026-10-29）。"""
+
+    def _texts(self):
+        return [
+            box(37, 18, "第3周", 120, 33),
+            box(163, 18, "星期五", 130, 35),
+            box(310, 16, "130/130", 185, 38),
+            box(850, 21, "80", 55, 30),
+            box(1320, 548, "休息", 105, 59),
+            box(1299, 708, "训练", 156, 83),
+            box(1378, 748, "出行", 110, 40),
+        ]
+
+    def test_goes_out_before_training_once(self):
+        task = FakeTask(self._texts())
+        task.try_speed_2x = lambda texts: False       # 倍速按钮靠像素判，测试里没有帧
+        self.assertTrue(task.handle_training_day(task._texts))
+        self.assertEqual(task.actions[-1][1], "出行")
+        # 同一天第二次进来：外出已经用过，不能再点出行（否则会打转）
+        self.assertTrue(task.handle_training_day(task._texts))
+        self.assertNotEqual(task.actions[-1][1], "出行")
+
+
+class RegisterWatchdog(unittest.TestCase):
+    """注册球员看门狗的拍数上限只在**进入流程后**才计（2026-10-29 实跑误报 25 次）。"""
+
+    def test_outside_flow_does_not_count_ticks(self):
+        texts = [box(37, 18, "第3周", 120, 33),
+                 box(163, 18, "星期三", 130, 35),
+                 box(310, 16, "80/130", 185, 38)]
+        task = FakeTask(texts)
+        for _ in range(30):
+            self.assertFalse(task.handle_register_player(texts))
+        self.assertEqual(getattr(task, "_reg_ticks", 0), 0)
+        self.assertFalse(any("没推进" in m for m in task.logs))
 
 
 if __name__ == "__main__":

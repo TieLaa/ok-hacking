@@ -66,6 +66,15 @@ class TrainingHandlers:
             return False
         if self.try_speed_2x(texts):
             return True
+        # 2026-10-29 用户补充：野上泷周五也能出行 —— 训练日主界面上出现「出行」时，
+        # 先把这次外出机会用掉（一天一次），再回来训练/休息；否则练完这天就过去了。
+        if self.match_text(texts, "出行") is not None:
+            st = self.weekend_state()
+            if not st.get("outing_done"):
+                st["outing_done"] = True
+                self.click_text("出行", after_sleep=0.6)
+                self.log_info("训练日有「出行」入口 → 先外出（一天一次）")
+                return True
         state = self.top_bar()
         cur = state.get("stamina")
         limit = int(self.config.get("休息体力阈值", 40))
@@ -295,16 +304,19 @@ class TrainingHandlers:
             if not final_only or is_final:
                 spend_all = True
                 self.log_info("今天比赛前一天 → 进店把零用钱花光")
-        if not spend_all and (money is None or money < threshold):
-            self.log_info(f"零用钱 {money} < {threshold}，今天不进店")
-            return False
+        # 2026-10-29：余额不够也要**每天进店看一眼** —— 白神时久每天多一件
+        # 0 元商品，不进店就永远看不到。进店只看不买不花钱，handle_shop 会在
+        # 没有免费商品且余额 < 门槛时立刻关店。
+        poor = (money is None or money < threshold)
 
         self._shop_at = time.monotonic()
         self._shop_key = key
         self._shop_spend_all = spend_all
         self.click_box(shop, after_sleep=0.9)
-        self.log_info(f"每日商店：第{key[0]}周 星期{key[1]}｜零用钱 {money}"
-                      f"｜{'赛前清空' if spend_all else f'只买金/紫（≥{threshold}）'}")
+        purpose = ("赛前清空" if spend_all
+                   else ("余额不足，进店看免费商品" if poor
+                         else f"只买金/紫（≥{threshold}）"))
+        self.log_info(f"每日商店：第{key[0]}周 星期{key[1]}｜零用钱 {money}｜{purpose}")
         return True
 
     def handle_boost_training(self, texts):

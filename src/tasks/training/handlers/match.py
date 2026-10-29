@@ -274,18 +274,23 @@ class MatchHandlers:
         """
         stage = getattr(self, "_register_stage", None)
         # 拍数上限：连续 20 拍停在同一 stage 上（页面没推进）就存证 + 放弃，
-        # 绝不允许无限重试（2026-10-28 18:17 空烧 890 拍）
-        ticks = getattr(self, "_reg_ticks", 0) + 1
-        if getattr(self, "_reg_tick_stage", None) == stage:
-            self._reg_ticks = ticks
+        # 绝不允许无限重试（2026-10-28 18:17 空烧 890 拍）。
+        # 2026-10-29 修正：stage 为 None = **还没进注册流程**（普通训练/剧情页），
+        # 这时也累加会让 21 拍就报一次 ERROR + 存一张废图（一轮 25 张）。
+        if stage is None:
+            self._reg_tick_stage, self._reg_ticks = None, 0
         else:
-            self._reg_tick_stage, self._reg_ticks, ticks = stage, 1, 1
-        if ticks > 20:
-            self.dump_unknown(texts, "register_stuck")
-            self.log_error(f"注册球员流程连续 {ticks} 拍没推进（stage={stage}）"
-                           "→ 存证 logs/debug/ 后放弃")
-            self._reg_ticks = 0
-            return False
+            ticks = getattr(self, "_reg_ticks", 0) + 1
+            if getattr(self, "_reg_tick_stage", None) == stage:
+                self._reg_ticks = ticks
+            else:
+                self._reg_tick_stage, self._reg_ticks, ticks = stage, 1, 1
+            if ticks > 20:
+                self.dump_unknown(texts, "register_stuck")
+                self.log_error(f"注册球员流程连续 {ticks} 拍没推进（stage={stage}）"
+                               "→ 存证 logs/debug/ 后放弃")
+                self._reg_ticks = 0
+                return False
 
         # 2) 训练结束弹窗：**必须排在第 1 步前面**。
         # 这个弹窗正文是「成为注册球员后，可以编队加入队伍。」，里面有「注册球员」，
