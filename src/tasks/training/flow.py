@@ -319,14 +319,6 @@ class TrainingFlowMixin:
                 return True  # 吞掉这一拍，避免同一异常反复刷屏
         return False
 
-    @staticmethod
-    def is_label(name):
-        """浮层/角标文字（「划船比赛！」这种），只是视觉提示，点了没反应。"""
-        s = (name or "").strip()
-        if not s:
-            return False
-        return s.endswith("！") or s.endswith("!") or "加成" in s or "比赛！" in s
-
     def arcade_still_playing(self, texts):
         """游戏厅小游戏还在播动画吗？
 

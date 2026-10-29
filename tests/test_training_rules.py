@@ -2158,6 +2158,17 @@ class TalentStockEvent(unittest.TestCase):
                                Defs.SKILL_CARDS[1][0], places=2)
         self.assertIn("道具1", "".join(task.logs))
 
+    def test_quick_match_has_is_label(self):
+        """2026-10-29 实机：QuickMatchTask 报 AttributeError: 'is_label'。
+
+        match.py 的选卡判据调用 self.is_label，但 QuickMatch 不继承 TrainingFlowMixin，
+        所以这个方法必须在基类上。
+        """
+        from src.tasks.QuickMatchTask import QuickMatchTask
+        self.assertTrue(hasattr(QuickMatchTask, "is_label"))
+        self.assertTrue(QuickMatchTask.is_label("一定能赚!"))
+        self.assertFalse(QuickMatchTask.is_label("防守"))
+
     def test_no_separate_stock_button_on_training_day(self):
         """炒股**不是**训练日主按钮：入口只有「二选一」选第一个。
 

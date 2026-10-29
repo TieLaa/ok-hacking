@@ -154,6 +154,18 @@ class BaseGirlsTask(BaseTask):
         return None
 
     @staticmethod
+    def is_label(name):
+        """浮层/角标文字（「划船比赛！」「一定能赚!」这种），只是提示，不是按钮。
+
+        2026-10-29 从 TrainingFlowMixin 挪到基类：match.py 的选卡判据也要用它，
+        而 QuickMatchTask 不继承 TrainingFlowMixin（实机报 AttributeError）。
+        """
+        s = (name or "").strip()
+        if not s:
+            return False
+        return s.endswith("！") or s.endswith("!") or "加成" in s or "比赛！" in s
+
+    @staticmethod
     def is_decor(name):
         """这段文字是不是纯视觉标签（折扣！/限时特惠/UP! …），不是可点元素。
 
