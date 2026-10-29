@@ -98,8 +98,9 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         # 周末状态：按「第N周+星期X」区分，跨天自动重置
         self._weekend = {"date": None, "shop_checked": False, "bought": False,
                          "park_choice": None}
-        # 进店只在「周日 训练流/商店流」（见 WEEKEND_PLAN）；这个标志由
-        # handle_go_out 决定：比赛前一天进店要把零用钱花光。
+        # 进店只在「比赛日、进比赛之前」（训练流/商店流各一次）；
+        # _shop_day 记当天已经逛过的日期键，_shop_spend_all = 赛前把钱花光。
+        self._shop_day = None
         self._shop_spend_all = False
         # 科目页：记录上次探测结果，防止同一天重复探测
         self._subject_cache = {"date": None, "best": None}

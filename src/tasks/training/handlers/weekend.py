@@ -814,13 +814,13 @@ class WeekendHandlers:
         return True
 
     def handle_go_out(self, texts):
-        """周末首页：周日训练流/商店流先点「商店」看一眼，再点「出行」进地图。
+        """周末首页：点「出行」进地图。
 
         实机（2026-10-25 周六）：出行页只有「出行」两个字，没有任何地点名，
         所以 handle_weekend 认不出来，必须先点这一下。
 
-        用户 2026-10-29 口径（覆盖旧版「商店流周六周日各进一次店」）：
-        **只有周日**、而且只有训练流 / 商店流会先进店，其他流派（含周六所有人）直接出行。
+        2026-10-29 口径：周末首页**不再进店**（进店挪到「比赛日进比赛前」，
+        见 `training.handle_pre_match_shop`），这里只负责点出行。
         """
         # 地图上没有「出行」按钮（2026-10-27 修正）：旧判据是「有地点名就是地图」，
         # 但周末首页的台词也含地点名（「告诉她公园的草坪是假的」），
@@ -837,21 +837,6 @@ class WeekendHandlers:
             self.exit_page()
             self.log_info("训练日的额外出行已经用过 → 返回主界面")
             return True
-
-        # 周末首页的商店入口：2026-10-29 起只有周日 + 训练流/商店流才进。
-        # 周六其他流派都要去餐厅打工，没有时间去商店（用户口径）。
-        if day == "日" and self.style in ("训练流", "商店流"):
-            shop = self.match_text(texts, "商店")
-            if shop is not None and not st["shop_checked"]:
-                st["shop_checked"] = True
-                # 比赛前一天：进店把零用钱花光（钱不带进下一场）
-                self._shop_spend_all = bool(
-                    self.config.get("赛前清空余额", False)
-                    and self.is_pre_match_day(texts))
-                self.click_box(shop, after_sleep=0.9)
-                self.log_info(f"周末：{self.style}周日，先去商店"
-                              + ("（赛前清空）" if self._shop_spend_all else ""))
-                return True
 
         self.click_text("出行", after_sleep=0.6)
         self.log_info("周末：点「出行」进地图")

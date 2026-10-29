@@ -317,6 +317,56 @@ class TrainingHandlers:
         """
         return self.subjects_from_texts(self._ocr_region()).get(name)
 
+    def handle_pre_match_shop(self, texts):
+        """比赛日主界面：进比赛之前先逛一次商店（只有训练流/商店流）。
+
+        用户 2026-10-29 口径：周一比赛之前还能买一次商品再进比赛；
+        周日首页的「先逛店」逻辑已删除，改成这里。
+        判据：训练日主界面（星期 + 休息 + 商店）且**右下主按钮是比赛/VS**。
+        """
+        if self.style not in ("训练流", "商店流"):
+            return False
+        if self.match_text(texts, "星期") is None or self.match_text(texts, "休息") is None:
+            return False
+        if self.match_text(self.texts_in_region(texts, "main_action"),
+                           ("比赛", "VS")) is None:
+            return False
+        shop = self.find_shop_button(texts)
+        if shop is None:
+            return False
+        if self.match_text(texts, ("点击屏幕继续", "目标达成", "获得奖励")) is not None:
+            return False
+        state = self.top_bar()
+        key = (state.get("week"), state.get("day"))
+        if key[1] is None or key == getattr(self, "_shop_day", None):
+            return False
+        self._shop_day = key
+        # 赛前清空：比赛当天把零用钱花光（配置开关）
+        self._shop_spend_all = bool(self.config.get("赛前清空余额", False))
+        self.click_box(shop, after_sleep=0.9)
+        self.log_info(f"比赛日：{self.style}先进店买一次"
+                      + ("（赛前清空）" if self._shop_spend_all else ""))
+        return True
+
+    def find_shop_button(self, texts):
+        """训练日右上角的「商店」按钮（只认整词；OCR 拆字时拼回来）。"""
+        from ok.feature.Box import Box
+        area = self.texts_in_region(texts, "top_right")
+        btn = self.exact_text(area, ("商店",))
+        if btn is not None:
+            return btn
+        singles = [t for t in area if t.name.strip() in ("商", "店")]
+        left = next((t for t in singles if t.name.strip() == "商"), None)
+        right = next((t for t in singles if t.name.strip() == "店"), None)
+        if left is not None and right is not None and right.x > left.x:
+            if abs((left.y + left.height / 2) - (right.y + right.height / 2)) < left.height:
+                x = min(left.x, right.x)
+                y = min(left.y, right.y)
+                w = max(left.x + left.width, right.x + right.width) - x
+                h = max(left.y + left.height, right.y + right.height) - y
+                return Box(name="商店", x=x, y=y, width=w, height=h)
+        return self.exact_text(texts, ("商店",))
+
     def handle_boost_training(self, texts):
         """加强训练二选一：按 **收益 × 成功率** 的期望值选（2026-10-26 用户口径）。
 

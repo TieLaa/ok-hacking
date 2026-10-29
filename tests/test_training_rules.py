@@ -1107,21 +1107,12 @@ class WeekendMapRules(unittest.TestCase):
         task._style = style
         return task
 
-    def test_sunday_enters_shop_too(self):
-        """商店流周日在首页先逛一次商店（用户 2026-10-29 保留）。"""
-        task = self.styled("商店流", self._home_texts("星期日"))
-        self.assertTrue(task.handle_go_out(task._texts))
-        self.assertEqual(task.actions[-1][0], "click_box")
-        self.assertEqual(task.actions[-1][1], "商店")
-
-    def test_training_style_enters_shop_on_sunday(self):
-        """训练流周日也先逛商店，再出行（用户 2026-10-29 新口径）。"""
-        task = self.styled("训练流", self._home_texts("星期日"))
-        self.assertTrue(task.handle_go_out(task._texts))
-        self.assertEqual(task.actions[-1][1], "商店")
-        task.actions.clear()
-        self.assertTrue(task.handle_go_out(task._texts))
-        self.assertEqual(task.actions[-1][1], "出行")
+    def test_sunday_never_enters_shop(self):
+        """2026-10-29：周末首页不再进店，训练流/商店流也只点「出行」。"""
+        for style in ("商店流", "训练流"):
+            task = self.styled(style, self._home_texts("星期日"))
+            self.assertTrue(task.handle_go_out(task._texts))
+            self.assertEqual(task.actions[-1][1], "出行", style)
 
     def test_saturday_does_not_enter_shop(self):
         """2026-10-29：周六所有人都不进商店 —— 其他流派去餐厅打工。"""
@@ -1181,13 +1172,36 @@ class WeekendMapRules(unittest.TestCase):
         self.assertTrue(task.handle_weekend(task._texts))
         self.assertEqual(task.actions[-1][1], "公园")
 
-    def test_shop_only_once_per_day(self):
-        """同一天不重复进店：第二拍直接点「出行」。"""
-        task = self.styled("商店流", self._home_texts("星期日"))
-        task.handle_go_out(task._texts)
+    def test_pre_match_shop_for_training_and_shop_style(self):
+        """比赛日主界面：训练流/商店流先点一次商店，再进比赛；其他流派不点。"""
+        def hub(style, action="比赛"):
+            texts = [box(30, 20, "第3周", 120, 40),
+                     box(200, 20, "星期一", 130, 40),
+                     box(380, 16, "120/130", 210, 53),
+                     box(1420, 190, "商店", 70, 38),
+                     box(1450, 900, action, 120, 60),
+                     box(1600, 900, "休息", 120, 60)]
+            task = self.styled(style, texts)
+            task._shop_day = None
+            return task
+
+        task = hub("训练流")
+        self.assertTrue(task.handle_pre_match_shop(task._texts))
+        self.assertEqual(task.actions[-1][1], "商店")
         task.actions.clear()
-        self.assertTrue(task.handle_go_out(task._texts))
-        self.assertEqual(task.actions[-1][1], "出行")
+        self.assertFalse(task.handle_pre_match_shop(task._texts))   # 当天只进一次
+
+        task = hub("商店流")
+        self.assertTrue(task.handle_pre_match_shop(task._texts))
+        self.assertEqual(task.actions[-1][1], "商店")
+
+        for style in ("扭蛋流", "小游戏流"):
+            task = hub(style)
+            self.assertFalse(task.handle_pre_match_shop(task._texts), style)
+
+        # 普通训练日（主按钮是训练）不进店
+        task = hub("训练流", action="训练")
+        self.assertFalse(task.handle_pre_match_shop(task._texts))
 
     def test_training_style_never_enters_shop_on_saturday(self):
         """训练流周六不逛商店（钱优先换步行街/游戏厅的黄道具）。"""
