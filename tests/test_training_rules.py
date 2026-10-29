@@ -2180,6 +2180,17 @@ class TalentStockEvent(unittest.TestCase):
         self.assertIsNone(task._shop_day)
         self.assertEqual(task._no_change, 0)
 
+    def test_unknown_effect_falls_back_to_first_option(self):
+        """收益读不出来（`?`）时不许硬选它，改选第一个（2026-10-29 用户口径）。
+
+        实机三条都是这个形态：婉拒邀请(2·回精力)/热情答应(?) 等。
+        """
+        infos = [{"name": "婉拒邀请", "ev": 2, "flat": True, "x": 100, "y": 300},
+                 {"name": "热情答应", "ev": None, "flat": False, "x": 800, "y": 300}]
+        pick, why = FakeTask._pick_choice(infos, "h")
+        self.assertEqual(pick["name"], "婉拒邀请")
+        self.assertIn("第一个", why)
+
     def test_no_separate_stock_button_on_training_day(self):
         """炒股**不是**训练日主按钮：入口只有「二选一」选第一个。
 

@@ -628,6 +628,11 @@ class MatchHandlers:
             return min(infos, key=lambda i: i["y"]), "竖向排列 → 第一个"
         pool = [i for i in infos if not i["flat"]] or infos
         pick = max(pool, key=lambda i: (i["ev"] if i["ev"] is not None else -1, i["x"]))
+        if pick["ev"] is None:
+            # 2026-10-29 实机：`默默吃饭(2·回精力)、上前围观(?)` —— 收益读不出来的
+            # 那个被「排除回精力」硬选了。用户口径：读不出收益就选第一个。
+            first = min(infos, key=lambda i: (i["y"], i["x"]))
+            return first, "收益读不出来 → 选第一个"
         why = ("二选一 → 排除纯回精力，取期望最高" if len(infos) == 2
                else "横向多选 → 排除纯回精力，取期望最高")
         return pick, why
@@ -795,6 +800,13 @@ class MatchHandlers:
         if len(best_group) < 2:
             return False
         buttons = best_group
+        # 2026-10-29 实机：上下两个选项被当成横向，机器人选了下面那个。
+        # 用几何形状兜底：一组按钮的纵向跨度 > 横向跨度，就是竖排 → 选最上面。
+        centers = [(b[0] + b[2] / 2, b[1] + b[3] / 2) for b in buttons]
+        dx = max(c[0] for c in centers) - min(c[0] for c in centers)
+        dy = max(c[1] for c in centers) - min(c[1] for c in centers)
+        if dy > dx:
+            best_kind = "v"
 
         infos = []
         for (bx, by, bw, bh) in buttons:
