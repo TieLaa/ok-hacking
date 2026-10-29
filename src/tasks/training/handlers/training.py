@@ -166,6 +166,55 @@ class TrainingHandlers:
             self.log_info(f"体力 {cur}，进入训练科目")
         return True
 
+    def _boost_text_cards(self, texts):
+        """把「文字效果版」加强训练的两张卡按左右分半，算各自的分数。
+
+        返回 (left, right)，每个是 {"x","y","label","score"} 或 None。
+        判据（用户口径：优先级 = 属性/等级 > 精力）：
+        - 出现「等级 / 属性 / 训练」→ 100 分（这类是给训练等级或六维的）；
+        - 只有「精力 / 体力」→ 0 分（纯回精力，不选）；
+        - 其它能用 `_effect_ev` 读出 +N 的，按真实属性总量算。
+        """
+        h = self.height
+        bands = {"left": [], "right": []}
+        for t in texts:
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / h
+            if not (0.05 <= cx <= 0.95 and 0.25 <= cy <= 0.88):
+                continue
+            if len(t.name.strip()) < 2:
+                continue
+            if any(k in t.name for k in ("加强训练", "球队经理")):
+                continue                     # 标题，不算卡片内容
+            if t.name.strip() in ("失败", "成功", "确定", "取消"):
+                continue                     # UI 词，不是卡片效果
+            bands["left" if cx < 0.5 else "right"].append(t)
+
+        def score_of(items):
+            joined = "".join(t.name for t in items)
+            if not joined:
+                return None
+            if any(k in joined for k in ("等级", "属性", "训练")):
+                return 100.0
+            if "精力" in joined or "体力" in joined:
+                return 0.0
+            ev = self._effect_ev(items)
+            return ev if ev is not None else 1.0
+
+        out = []
+        for name, key in (("left", "left"), ("right", "right")):
+            items = bands[key]
+            sc = score_of(items)
+            if sc is None:
+                out.append(None)
+                continue
+            # 点这一半的中心偏下一点（卡片正文区）
+            cx = sum(t.x + t.width / 2 for t in items) / len(items) / self.width
+            label = max(items, key=lambda t: len(t.name.strip())).name.strip()
+            out.append({"x": min(max(cx, 0.12), 0.88), "y": 0.55,
+                        "label": label, "score": sc})
+        return out[0], out[1]
+
     def handle_subject_select(self, texts):
         """训练科目页：先探测带队友小人的科目，再按「队友 + 装备 + 满经验暴击」选。
 
@@ -384,7 +433,23 @@ class TrainingHandlers:
         rates = [t for t in texts if Defs.PERCENT_RE.match(t.name.strip())]
         gains = [t for t in texts if Defs.GAIN_RE.match(t.name.strip())]
         if not rates:
-            # 加载/动画帧读不到数字：不盲点卡片，先按默认选择点「确定」，下一拍再判
+            # 2026-10-30：这一版加强训练是**文字效果**（「训练等级提升 / 精力提升+30」），
+            # 没有百分比。以前直接点「确定」= 吃默认（正好是回精力那张）。
+            # 现在按左右两半算分：等级/属性类算 100 分，纯「精力提升」排除，
+            # 其余读得到 +N 的用 _effect_ev。
+            left, right = self._boost_text_cards(texts)
+            cards = [c for c in (left, right) if c is not None]
+            if cards:
+                best = max(cards, key=lambda c: (c["score"], -c["x"]))
+                self.click(int(best["x"] * self.width),
+                           int(best["y"] * self.height), after_sleep=0.35)
+                self.log_info("加强训练（文字效果）："
+                              + "｜".join(f"{c['label']}={c['score']:.0f}"
+                                          for c in cards)
+                              + f" → 选「{best['label']}」")
+                self.click_text(("确定",), after_sleep=0.6, must=False)
+                return True
+            # 实在认不出卡片：不盲点卡片，先按默认选择点「确定」，下一拍再判
             self.click_text(("确定",), must=False)
             return True
 

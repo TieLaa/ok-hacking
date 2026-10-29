@@ -2245,6 +2245,19 @@ class TalentStockEvent(unittest.TestCase):
         self.assertTrue(task.handle_boost_training(texts))
         self.assertIn("选 55%/+66", "".join(task.logs))
 
+    def test_boost_text_cards_skip_stamina_card(self):
+        """文字效果版加强训练：左边纯「精力提升+30」→ 选右边的等级提升。"""
+        texts = [box(615, 263, "球队经理的加强训练", 314, 36),
+                 box(250, 319, "失败", 65, 41),
+                 box(200, 560, "精力提升+30", 200, 40),
+                 box(1100, 460, "训练等级提升", 220, 45),
+                 box(1100, 560, "意识训练的等级增加至2", 260, 40),
+                 box(1200, 900, "确定", 200, 60)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_boost_training(texts))
+        self.assertIn("加强训练（文字效果）", "".join(task.logs))
+        self.assertGreater(task.actions[0][1], int(task.width * 0.5))   # 点了右边
+
     def test_no_separate_stock_button_on_training_day(self):
         """炒股**不是**训练日主按钮：入口只有「二选一」选第一个。
 
