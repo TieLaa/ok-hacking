@@ -84,8 +84,8 @@ config = {
         'exe': ['k3_windows_ob.exe'],
         # optional, if set, will search the exe only
         'hwnd_class': 'UnityWndClass', #增加重名检查准确度
-        'interaction': [GirlsInteraction, 'PostMessage', 'Pynput', 'Genshin', 'PyDirect', 'ForegroundPostMessage'], # GirlsInteraction: 后台点击 + 真光标定位(Unity适配) PostMessage:框架原生后台点击 Pynput/PyDirect:仅前台使用,需要管理员
-        'capture_method': ['WGC', 'BitBlt_RenderFull', 'BitBlt'],  # Windows版本支持的话, 优先使用WGC, 否则使用BitBlt_Full. 支持的capture有 BitBlt, WGC, BitBlt_RenderFull, DXGI
+        'interaction': [GirlsInteraction], # 只保留实测可用的真鼠标后端（2026-10-29）：PostMessage 对本游戏完全无效，Pynput/PyDirect 需要前台且不能配合 GirlsInteraction 的置前逻辑，列在首页只会让人选错
+        'capture_method': ['WGC'],  # 只保留实测可用的 WGC（2026-10-29）：BitBlt 系对 Unity 全屏会拿到黑帧/旧帧；WGC 支持遮挡捕获
         'check_hdr': False, #当用户开启AutoHDR时候提示用户, 但不禁止使用
         'force_no_hdr': False, #True=当用户开启AutoHDR时候禁止使用
         'require_bg': True # 要求使用后台截图
