@@ -628,6 +628,20 @@ class MatchHandlers:
             self.click_box(pick["name_box"], after_sleep=0.45)
             return True
 
+        # 2026-10-29 新事件（docs/shots/2026-10-29-event-sim-software.png）：
+        # 「只是模拟软件而已，让她们试试 / 不许她们乱来」是各自居中的整句，
+        # choice_candidates 的「短名词、无句读」判据会把它们全筛掉，
+        # 于是 dialog_continue 一直点灰的「跳过」，卡在原地不动。
+        # 这里先认「非段落式整句选项」，再走原来的短名词判据。
+        lenient = self.options_not_paragraph(texts)
+        if len(lenient) >= 2:
+            pick = min(lenient, key=lambda t: t.y)
+            self.log_info("事件选项（整句）："
+                          + "、".join(t.name.strip() for t in lenient)
+                          + f" → 选第一个「{pick.name.strip()}」")
+            self.click_box(pick, after_sleep=0.45)
+            return True
+
         group = self.choice_candidates(texts)
         # 事件只可能二/三选一：组里出现 4 项以上，说明把表格列或信息栏捞进来了
         # （2026-10-27 00:02 周结算页 5 个位置名「控卫…中锋」就是这样被当成选项的）

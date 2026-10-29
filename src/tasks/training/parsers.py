@@ -988,6 +988,7 @@ class TrainingParsersMixin:
             # 选项名是短名词：带句读的台词、学校名都不是选项。
             # 2026-10-26 周末首页把「眼镜的度数又上涨了，教练 / 您可以陪我去配一副
             # 新的吗？/ 北空之丘女子高校」当成三选一，每拍点第一个导致卡死。
+            # 选项名是短名词：带句读的台词、学校名都不是选项。
             if re.search(r"[，。？！、；：]", s):
                 continue
             if re.search(r"(高校|公学|中学|大学|学校)$", s):
@@ -1013,6 +1014,47 @@ class TrainingParsersMixin:
             return []
         group = max(groups, key=len)
         return group if len(group) >= 2 else []
+
+
+    def options_not_paragraph(self, texts):
+        """2026-10-29 新事件：选项是**各自居中的整句**，不是左对齐的段落。
+
+        真帧 docs/shots/2026-10-29-event-sim-software.png（1549x871）：
+            只是模拟软件而已，让她们试试 (371,299,714,97)
+            不许她们乱来                 (647,440,253,44)
+        两条左边缘差 276px、宽度差 461px；而对话/关卡列表/本周总结都是
+        **左对齐等宽**的段落（左边缘几乎相同）。所以这里只认「左边缘不齐」的
+        2 行以上，避免把对话当选项（2026-10-26 卡死事故）。
+        """
+        ui = {"下一步", "下一场", "跳过", "确定", "取消", "关闭",
+              "继续", "领取", "开始训练"}
+        rows = []
+        for t in texts:
+            s = t.name.strip()
+            if s in ui or s in Defs.WEEKEND_PLACES or self.is_decor(s):
+                continue
+            if re.search(r"[0-9%]", s) or not (2 <= len(s) <= 30):
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if not (0.30 <= cx <= 0.70 and 0.20 <= cy <= 0.72):
+                continue
+            if t.height > self.height * 0.13:
+                continue
+            rows.append(t)
+        if len(rows) < 2:
+            return []
+        rows.sort(key=lambda t: t.y)
+        lefts = [t.x for t in rows]
+        widths = [t.width for t in rows]
+        if max(lefts) - min(lefts) <= self.width * 0.05:
+            return []                      # 左对齐 = 段落，不是选项
+        if max(widths) - min(widths) <= self.width * 0.10:
+            return []                      # 等宽换行 = 段落
+        centers = [(t.x + t.width / 2) / self.width for t in rows]
+        if max(centers) - min(centers) > 0.10:
+            return []                      # 不在同一列
+        return rows
 
     def _yellow_buttons(self):
         """找屏幕下半部分的黄色按钮框（事件选项 / 确认按钮）。

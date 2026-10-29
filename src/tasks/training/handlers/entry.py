@@ -28,7 +28,8 @@ class EntryHandlers:
         这时必须让位给 handle_event_choice（用户 2026-10-26 反馈：
         机器人一直点跳过，不点第一个选项）。
         """
-        if len(self.choice_candidates(texts)) >= 2:
+        if (len(self.choice_candidates(texts)) >= 2
+                or len(self.options_not_paragraph(texts)) >= 2):
             return False
         skip = self.match_text(self.texts_in_region(texts, "top_right"), ("跳过", "点击屏幕继续"))
         if skip is not None:

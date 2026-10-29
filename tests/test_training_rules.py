@@ -2021,6 +2021,55 @@ class ArcadeTeammatePriority(unittest.TestCase):
         self.assertIn("买了「投射」", "".join(task.logs))
 
 
+class TalentStockEvent(unittest.TestCase):
+    """2026-10-29 闪堂电天赋「股神!」事件：选项是整句，右上是灰的「跳过」。
+
+    真帧 docs/shots/2026-10-29-event-sim-software.png（1549x871）：
+        含只是模拟软件而已，让她们试试 (371,299,714,97)
+        不许她们乱来                 (647,440,253,44)
+    旧判据认为「选项=短名词、不带句读」，这两条全被筛掉 → dialog_continue
+    反复点灰「跳过」，卡在原地（用户当场看到）。
+    """
+
+    def _texts(self):
+        return [box(371, 299, "含只是模拟软件而已，让她们试试", 714, 97),
+                box(647, 440, "不许她们乱来", 253, 44),
+                box(1347, 96, "跳过", 110, 40)]
+
+    def test_options_are_recognised(self):
+        task = FakeTask(self._texts())
+        names = [b.name for b in task.options_not_paragraph(task._texts)]
+        self.assertEqual(names, ["含只是模拟软件而已，让她们试试", "不许她们乱来"])
+
+    def test_clicks_the_first_option(self):
+        task = FakeTask(self._texts())
+        self.assertTrue(task.handle_event_choice(task._texts))
+        self.assertEqual(task.actions[-1][0], "click_box")
+        self.assertIn("只是模拟软件", task.actions[-1][1])
+
+    def test_dialog_continue_yields_to_choice(self):
+        """有整句选项时不能再点「跳过」（点了没反应，每拍重复）。"""
+        task = FakeTask(self._texts())
+        self.assertFalse(task.handle_dialog_continue(task._texts))
+        self.assertEqual(task.actions, [])
+
+    def test_stock_page_picks_left_card(self):
+        """天赋「股神!」后续：请选择你要投资的股票 → 选第一个（最左）卡片再确定。"""
+        texts = [box(700, 130, "请选择你要投资的股票", 500, 50),
+                 box(430, 495, "稳健型", 120, 50),
+                 box(815, 495, "平衡型", 120, 50),
+                 box(1200, 495, "风险型", 120, 50),
+                 box(540, 960, "放弃", 280, 60),
+                 box(1030, 960, "确定", 280, 60)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_stock_pick(texts))
+        first = task.actions[0]
+        self.assertEqual(first[0], "click")
+        self.assertLess(first[1], int(task.width * 0.33))      # 最左那张
+        self.assertIn("选第一个「稳健型」", "".join(task.logs))
+        self.assertEqual(task.actions[-1][1], "确定")
+
+
 class RegisterWatchdog(unittest.TestCase):
     """注册球员看门狗的拍数上限只在**进入流程后**才计（2026-10-29 实跑误报 25 次）。"""
 

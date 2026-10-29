@@ -215,6 +215,41 @@ class WeekendHandlers:
                 best = int(m.group(1))
         return best
 
+
+    STOCK_TITLE = "请选择你要投资的股票"
+    STOCK_TYPES = ("稳健型", "平衡型", "风险型")
+
+    def handle_stock_pick(self, texts):
+        """天赋「股神!」的模拟炒股：选**第一个（最左）**卡片，再点确定。
+
+        用户 2026-10-29 口径。判据用页面标题「请选择你要投资的股票」——
+        这句只有这一页有，不会和普通事件/卡片页混淆。
+        卡片按「稳健型/平衡型/风险型」三个类型名定位（整词），点类型名下方
+        0.18 个屏高处（卡片正文区），避免点到类型色带或价格。
+        """
+        if self.match_text(texts, self.STOCK_TITLE) is None:
+            return False
+        cards = []
+        for name in self.STOCK_TYPES:
+            box = self.exact_text(texts, (name,))
+            if box is not None:
+                cards.append(box)
+        if not cards:
+            self.log_warning("炒股：认不出三张卡片，点第一个类型附近兜底")
+            self.click(int(self.width * 0.25), int(self.height * 0.55), after_sleep=0.6)
+            return True
+        cards.sort(key=lambda b: b.x)
+        pick = cards[0]
+        badge = "有" if self.match_text(texts, "股神") is not None else "无"
+        cx = pick.x + pick.width / 2
+        cy = pick.y + self.height * 0.18
+        self.click(int(cx), int(cy), after_sleep=0.6)
+        self.log_info(f"炒股：股神标记{badge}｜三张卡 {'、'.join(b.name for b in cards)}"
+                      f" → 选第一个「{pick.name}」")
+        if self.click_text(("确定",), after_sleep=0.8, must=False):
+            self.log_info("炒股：确定")
+        return True
+
     def handle_park(self, texts):
         """公园内页：散步（零用钱+）/ 划船（属性+）/ 野餐（精力++）。
 
