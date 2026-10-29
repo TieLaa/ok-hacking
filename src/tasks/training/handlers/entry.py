@@ -221,7 +221,11 @@ class EntryHandlers:
         口径：不选，直接下一步（选了反而会占用一个笔记位）。
         判据用标题整词，避免和「器材」页混。
         """
-        if self.match_text(texts, "选择笔记") is None:
+        # 必须**整词**：确认编队页有「未选择笔记 / 请携带笔记一起训练吧」，
+        # 包含匹配会把那一页也当成选择笔记页，反复点下一步（2026-10-29 实机）。
+        if self.exact_text(texts, ("选择笔记",)) is None:
+            return False
+        if self.match_text(texts, "确认编队") is not None:
             return False
         target = self.exact_text(texts, ("下一步",))
         if target is not None:

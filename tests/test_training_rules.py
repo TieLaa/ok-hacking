@@ -2216,6 +2216,16 @@ class TalentStockEvent(unittest.TestCase):
         self.assertEqual(task.actions[-1][1], "下一步")
         self.assertIn("不选", "".join(task.logs))
 
+    def test_note_select_ignores_confirm_team_page(self):
+        """确认编队页有「未选择笔记」，不能被当成「选择笔记」页（2026-10-29 实机）。"""
+        texts = [box(71, 72, "确认编队", 136, 43),
+                 box(1295, 157, "训练笔记", 132, 30),
+                 box(1171, 213, "未选择笔记", 134, 32),
+                 box(1113, 251, "请携带笔记一起训练吧", 254, 28)]
+        task = FakeTask(texts)
+        self.assertFalse(task.handle_note_select(texts))
+        self.assertEqual(task.actions, [])
+
     def test_no_separate_stock_button_on_training_day(self):
         """炒股**不是**训练日主按钮：入口只有「二选一」选第一个。
 
