@@ -2197,12 +2197,12 @@ class TalentStockEvent(unittest.TestCase):
         self.assertEqual(pick["name"], "紧张准备")
         self.assertIn("未知", why)
 
-    def test_all_flat_takes_first(self):
-        """两个都是回精力时退回选第一个。"""
+    def test_all_flat_takes_biggest(self):
+        """两个都是回精力时退回到「取数值最高的」。"""
         infos = [{"name": "休息", "ev": 2, "flat": True, "x": 100, "y": 300},
                  {"name": "睡觉", "ev": 3, "flat": True, "x": 800, "y": 300}]
         pick, _why = FakeTask._pick_choice(infos, "h")
-        self.assertEqual(pick["name"], "休息")
+        self.assertEqual(pick["name"], "睡觉")
 
     def test_short_pair_without_skip_is_a_choice(self):
         """器材事件：两行短选项、没有「跳过」也要认，选上面那个。

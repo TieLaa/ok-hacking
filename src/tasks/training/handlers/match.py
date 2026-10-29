@@ -647,8 +647,10 @@ class MatchHandlers:
             return min(infos, key=lambda i: i["y"]), "竖向排列 → 第一个"
         pool = [i for i in infos if not i["flat"]]
         if not pool:
-            # 全都是回精力：只能选第一个
-            return min(infos, key=lambda i: (i["y"], i["x"])), "全是回精力 → 选第一个"
+            # 全都是回精力：没有别的选择，取数值最高的那个（不能因此不选）
+            pick = max(infos, key=lambda i: (i["ev"] if i["ev"] is not None else -1,
+                                             i["x"]))
+            return pick, "全是回精力 → 取数值最高的"
         pick = max(pool, key=lambda i: (i["ev"] if i["ev"] is not None else -1, i["x"]))
         why = ("二选一 → 排除纯回精力，取期望最高" if len(infos) == 2
                else "横向多选 → 排除纯回精力，取期望最高")
