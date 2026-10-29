@@ -645,15 +645,18 @@ class MatchHandlers:
         """
         if kind == "v":
             return min(infos, key=lambda i: i["y"]), "竖向排列 → 第一个"
-        pool = [i for i in infos if not i["flat"]] or infos
+        pool = [i for i in infos if not i["flat"]]
+        if not pool:
+            # 全都是回精力：只能选第一个
+            return min(infos, key=lambda i: (i["y"], i["x"])), "全是回精力 → 选第一个"
         pick = max(pool, key=lambda i: (i["ev"] if i["ev"] is not None else -1, i["x"]))
-        if pick["ev"] is None:
-            # 2026-10-29 实机：`默默吃饭(2·回精力)、上前围观(?)` —— 收益读不出来的
-            # 那个被「排除回精力」硬选了。用户口径：读不出收益就选第一个。
-            first = min(infos, key=lambda i: (i["y"], i["x"]))
-            return first, "收益读不出来 → 选第一个"
         why = ("二选一 → 排除纯回精力，取期望最高" if len(infos) == 2
                else "横向多选 → 排除纯回精力，取期望最高")
+        if pick["ev"] is None:
+            # 2026-10-30 实机：`以逸待劳(2·回精力)、紧张准备(?)` —— 收益读不出来的
+            # 那个也**必须**选它：用户口径是「永远不选回精力的」，
+            # 之前「未知→选第一个」正好又选回了回精力那张。
+            why = "另一个是纯回精力 → 选收益未知的那个"
         return pick, why
 
     def handle_event_choice(self, texts):

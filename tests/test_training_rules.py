@@ -2187,15 +2187,22 @@ class TalentStockEvent(unittest.TestCase):
         self.assertEqual(task._no_change, 0)
 
     def test_unknown_effect_falls_back_to_first_option(self):
-        """收益读不出来（`?`）时不许硬选它，改选第一个（2026-10-29 用户口径）。
+        """收益读不出来但**另一个是纯回精力** → 必须选这个未知的（2026-10-30 口径）。
 
-        实机三条都是这个形态：婉拒邀请(2·回精力)/热情答应(?) 等。
+        实机：`以逸待劳(2·回精力)、紧张准备(?)` —— 旧规则「未知→选第一个」又选回了回精力。
         """
-        infos = [{"name": "婉拒邀请", "ev": 2, "flat": True, "x": 100, "y": 300},
-                 {"name": "热情答应", "ev": None, "flat": False, "x": 800, "y": 300}]
+        infos = [{"name": "以逸待劳", "ev": 2, "flat": True, "x": 100, "y": 300},
+                 {"name": "紧张准备", "ev": None, "flat": False, "x": 800, "y": 300}]
         pick, why = FakeTask._pick_choice(infos, "h")
-        self.assertEqual(pick["name"], "婉拒邀请")
-        self.assertIn("第一个", why)
+        self.assertEqual(pick["name"], "紧张准备")
+        self.assertIn("未知", why)
+
+    def test_all_flat_takes_first(self):
+        """两个都是回精力时退回选第一个。"""
+        infos = [{"name": "休息", "ev": 2, "flat": True, "x": 100, "y": 300},
+                 {"name": "睡觉", "ev": 3, "flat": True, "x": 800, "y": 300}]
+        pick, _why = FakeTask._pick_choice(infos, "h")
+        self.assertEqual(pick["name"], "休息")
 
     def test_short_pair_without_skip_is_a_choice(self):
         """器材事件：两行短选项、没有「跳过」也要认，选上面那个。
