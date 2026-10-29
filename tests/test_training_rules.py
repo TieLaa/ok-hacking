@@ -2054,20 +2054,60 @@ class TalentStockEvent(unittest.TestCase):
         self.assertEqual(task.actions, [])
 
     def test_stock_page_picks_left_card(self):
-        """天赋「股神!」后续：请选择你要投资的股票 → 选第一个（最左）卡片再确定。"""
+        """天赋「股神!」后续：请选择你要投资的股票 → 选买得起的第一张，再确定。"""
         texts = [box(700, 130, "请选择你要投资的股票", 500, 50),
+                 box(1150, 90, "104", 80, 40),
                  box(430, 495, "稳健型", 120, 50),
                  box(815, 495, "平衡型", 120, 50),
                  box(1200, 495, "风险型", 120, 50),
+                 box(480, 760, "24", 60, 40),
+                 box(870, 760, "120", 60, 40),
+                 box(1255, 760, "200", 60, 40),
                  box(540, 960, "放弃", 280, 60),
                  box(1030, 960, "确定", 280, 60)]
         task = FakeTask(texts)
+        task.read_money = lambda texts=None: 104
         self.assertTrue(task.handle_stock_pick(texts))
         first = task.actions[0]
         self.assertEqual(first[0], "click")
         self.assertLess(first[1], int(task.width * 0.33))      # 最左那张
-        self.assertIn("选第一个「稳健型」", "".join(task.logs))
+        self.assertIn("选「稳健型」", "".join(task.logs))
         self.assertEqual(task.actions[-1][1], "确定")
+
+    def test_stock_page_skips_unaffordable(self):
+        """最左那张买不起（24 > 10）→ 往右挑第一张买得起的。"""
+        texts = [box(700, 130, "请选择你要投资的股票", 500, 50),
+                 box(430, 495, "稳健型", 120, 50),
+                 box(815, 495, "平衡型", 120, 50),
+                 box(480, 760, "24", 60, 40),
+                 box(870, 760, "8", 60, 40),
+                 box(1030, 960, "确定", 280, 60)]
+        task = FakeTask(texts)
+        task.read_money = lambda texts=None: 10
+        self.assertTrue(task.handle_stock_pick(texts))
+        self.assertIn("选「平衡型」", "".join(task.logs))
+
+    def test_stock_result_clicks_sell(self):
+        """股票走势页只能点「卖出」。"""
+        texts = [box(600, 240, "第2周股票走势", 500, 60),
+                 box(950, 620, "涨跌幅-20.0%", 260, 50),
+                 box(700, 940, "卖出", 300, 60)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_stock_result(texts))
+        self.assertEqual(task.actions[-1][1], "卖出")
+
+    def test_no_separate_stock_button_on_training_day(self):
+        """炒股**不是**训练日主按钮：入口只有「二选一」选第一个。
+
+        用户 2026-10-29 纠正：主界面没有「炒股」按钮，别在训练日乱点。
+        """
+        texts = [box(30, 20, "第2周", 120, 40), box(200, 20, "星期四", 130, 40),
+                 box(380, 16, "92/130", 210, 53),
+                 box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
+        task = FakeTask(texts)
+        task.try_speed_2x = lambda *a, **k: False
+        self.assertTrue(task.handle_training_day(texts))
+        self.assertEqual(task.actions[-1][1], "训练")
 
 
 class RegisterWatchdog(unittest.TestCase):

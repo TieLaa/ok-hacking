@@ -521,6 +521,33 @@ class MatchHandlers:
             self.log_info("技能：确定")
         return True
 
+    def card_has_corner_badge(self, cx, cy):
+        """卡片**左上角**有没有小标记（道具加成）。
+
+        用户 2026-10-29：周结算三选一（请选择1个技能）时，2/3 张卡左上角带着
+        道具加成标记，应该优先选带标记的那张；机器人当时默认选了第一张。
+        判据：左上角一小块里「高饱和且不太暗」的像素占比 > 8%
+        （角标是彩色小图标，压在卡片边角上，一半在卡外）。
+        阈值/区域可调，日志会打出每张卡的占比，方便拿真帧校准。
+        """
+        frame = self.frame
+        if frame is None:
+            return False
+        h, w = frame.shape[:2]
+        x1 = int(w * (cx - 0.12))
+        x2 = int(w * (cx - 0.04))
+        y1 = int(h * (cy - 0.22))
+        y2 = int(h * (cy - 0.14))
+        roi = frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
+        if roi.size == 0:
+            return False
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        sat, val = hsv[:, :, 1], hsv[:, :, 2]
+        hit = (sat > 120) & (val > 120)
+        ratio = float(hit.mean())
+        self._badge_ratio = ratio
+        return ratio > 0.08
+
     @staticmethod
     def _pick_choice(infos, kind):
         """按用户规则挑选项，返回 (选中项, 理由)。

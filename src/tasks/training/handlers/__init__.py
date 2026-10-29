@@ -50,6 +50,7 @@ HANDLERS = (
     # 天赋「股神!」的模拟炒股页（2026-10-29）：必须排在事件选择之前，
     # 否则三张投资卡会被当成普通事件卡
     WeekendHandlers.handle_stock_pick,
+    WeekendHandlers.handle_stock_result,
     WeekendHandlers.handle_activity_go,
     WeekendHandlers.handle_restaurant,
     WeekendHandlers.handle_park,

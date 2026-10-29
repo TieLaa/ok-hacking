@@ -220,35 +220,74 @@ class WeekendHandlers:
     STOCK_TYPES = ("稳健型", "平衡型", "风险型")
 
     def handle_stock_pick(self, texts):
-        """天赋「股神!」的模拟炒股：选**第一个（最左）**卡片，再点确定。
+        """天赋「股神!」的模拟炒股：在**买得起**的卡里选第一张，再点确定。
 
-        用户 2026-10-29 口径。判据用页面标题「请选择你要投资的股票」——
-        这句只有这一页有，不会和普通事件/卡片页混淆。
-        卡片按「稳健型/平衡型/风险型」三个类型名定位（整词），点类型名下方
-        0.18 个屏高处（卡片正文区），避免点到类型色带或价格。
+        用户 2026-10-29 真机截图：
+        - 三张卡「稳健型/平衡型/风险型」，价格 24/120/200，买不起的价格显示红色；
+        - 黄色角标 + 头顶台词挂在游戏推荐的那张（两次分别在第一张、第二张），
+          所以「角标」不是可靠判据，可靠的是**价格 ≤ 当前零用钱**；
+        - 用户口径：选第一个（最左）能买的那张。
         """
         if self.match_text(texts, self.STOCK_TITLE) is None:
             return False
+        money = self.read_money(texts)
         cards = []
         for name in self.STOCK_TYPES:
             box = self.exact_text(texts, (name,))
-            if box is not None:
-                cards.append(box)
+            if box is None:
+                continue
+            price = self.stock_card_price(texts, box)
+            cards.append((box, price))
         if not cards:
             self.log_warning("炒股：认不出三张卡片，点第一个类型附近兜底")
             self.click(int(self.width * 0.25), int(self.height * 0.55), after_sleep=0.6)
             return True
-        cards.sort(key=lambda b: b.x)
-        pick = cards[0]
-        badge = "有" if self.match_text(texts, "股神") is not None else "无"
+        cards.sort(key=lambda pair: pair[0].x)
+        affordable = [pair for pair in cards
+                      if money is None or pair[1] is None or pair[1] <= money]
+        detail = "、".join(f"{b.name}={p}" for b, p in cards)
+        if not affordable:
+            self.log_warning(f"炒股：都没有买得起的（零用钱 {money}｜{detail}）→ 放弃")
+            self.click_text(("放弃",), after_sleep=0.6, must=False)
+            return True
+        pick, price = affordable[0]
+        badge = "有" if self.match_text(texts, "股神") is not None else ""
         cx = pick.x + pick.width / 2
         cy = pick.y + self.height * 0.18
         self.click(int(cx), int(cy), after_sleep=0.6)
-        self.log_info(f"炒股：股神标记{badge}｜三张卡 {'、'.join(b.name for b in cards)}"
-                      f" → 选第一个「{pick.name}」")
+        self.log_info(f"炒股：零用钱 {money}｜{detail} → 选「{pick.name}」({price}){badge}")
         if self.click_text(("确定",), after_sleep=0.8, must=False):
             self.log_info("炒股：确定")
         return True
+
+    def stock_card_price(self, texts, label_box):
+        """卡片价格：类型名下方、同一列的那个数字（买不起时是红色的，OCR 一样能读）。"""
+        best = None
+        for t in texts:
+            v = t.name.strip()
+            if not v.isdigit() or len(v) > 4:
+                continue
+            cx = t.x + t.width / 2
+            if abs(cx - (label_box.x + label_box.width / 2)) > self.width * 0.16:
+                continue
+            if not (label_box.y < t.y < label_box.y + self.height * 0.35):
+                continue
+            if best is None or t.y > best[0]:
+                best = (t.y, int(v))
+        return best[1] if best else None
+
+    def handle_stock_result(self, texts):
+        """股票走势页：点黄色「卖出」继续（2026-10-29 用户截图）。
+
+        用户口径：这一页**只能点卖出**，卖出后回到「请选择你要投资的股票」
+        再买下一只。
+        """
+        if self.match_text(texts, ("股票走势", "涨跌幅")) is None:
+            return False
+        if self.click_text(("卖出",), after_sleep=0.7, must=False):
+            self.log_info("炒股：走势页卖出 → 回去买下一只")
+            return True
+        return False
 
     def handle_park(self, texts):
         """公园内页：散步（零用钱+）/ 划船（属性+）/ 野餐（精力++）。
