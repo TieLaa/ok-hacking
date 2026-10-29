@@ -396,6 +396,20 @@ class TrainingParsersMixin:
                 found[name] = Box(name=name, x=x, y=y, width=w, height=h)
                 self.log_debug(f"科目名被拆开，已合并：{sa}+{b.name.strip()} → {name}")
                 break
+        # 2026-10-29 第 4 周海边合宿 星期三实跑：科目行是「防守 + MAX」（满级标签），
+        # OCR 把「守」吞进了「MAX」，整帧只剩一个「防」字 → 两个字拼不回来，
+        # 「有队友的防守」连探测都没探测就被跳过（用户：「有队友的防守训练被跳过了」）。
+        # 六个科目的首字/尾字在全表里都唯一，所以只剩一个字时也能确定是哪一行；
+        # 只在「整名没读出来、且这个字只属于唯一一个科目」时才补，避免乱认。
+        for t in singles:
+            ch = t.name.strip()
+            matches = [n for n in Defs.TRAINING_SUBJECTS
+                       if n not in found and (n.startswith(ch) or n.endswith(ch))]
+            if len(matches) != 1:
+                continue
+            name = matches[0]
+            found[name] = Box(name=name, x=t.x, y=t.y, width=t.width, height=t.height)
+            self.log_debug(f"科目名只剩一个字，按唯一首/尾字补全：{ch} → {name}")
         return found
 
     def current_subject(self, texts):

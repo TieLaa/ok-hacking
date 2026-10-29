@@ -177,6 +177,10 @@ class TrainingHandlers:
                 continue
             box = self.find_subject_box(name)
             if box is None:
+                # 2026-10-29 度假页：候选里有「防守」，但重新 OCR 时那一行被读成
+                # 「防 + MAX」、「守」丢了 → find_subject_box 找不到就静默跳过，
+                # 日志里看不出少测了一个科目。改成告警，并把没探测到的从候选池剔除。
+                self.log_warning(f"找不到「{name}」的按钮框，跳过（未参与打分）")
                 continue
             results[name] = self.probe_subject(box)
             last_probed = name
@@ -197,7 +201,11 @@ class TrainingHandlers:
                                      boxes[name].y)
 
         # 候选池 = 小人 / 金边 / 彩边 / 当前已选（用户 2026-10-27：三种信号都算）
-        pool = candidates or list(boxes)
+        # 但只保留**真正探测过**的科目：探测失败的名字没有分数，留在池里等于按 0 分
+        # 跟别人比，还可能被选去盲点；一个都没探到时退回当前已选，别乱点。
+        pool = [n for n in candidates if n in results]
+        if not pool:
+            pool = [current] if current in boxes else list(boxes)
         name = max(pool, key=rank)
         r = results.get(name) or self.empty_preview()
         # 2026-10-27：这一行必须同时打「金框」和「彩虹」。
