@@ -500,6 +500,13 @@ class MatchHandlers:
 
         pref = list(self.config.get("技能标签优先", ["得分手"]))
         frame = self.frame
+        icons = self.find_teammate_icons(0.0, 1.0) if frame is not None else []
+
+        def cx_of(i):
+            return Defs.SKILL_CARDS[i][0]
+
+        def cy_of(i):
+            return Defs.SKILL_CARDS[i][1]
 
         best_idx, best_score = 0, -1
         detail = []
@@ -507,11 +514,18 @@ class MatchHandlers:
             card_texts = self._card_texts(texts, i)
             has_pref = 1 if self.match_text(card_texts, tuple(pref)) is not None else 0
             quality = self._card_quality(frame, i)      # 3 彩 / 2 金 / 1 白
+            # 2026-10-29 撤回：曾给「道具角标」加过 +100 权重，但角标只是
+            # 「左上角高饱和像素」的猜测，误判后压过了两张真金边卡（用户当场指出）。
+            # 现在回到「品质优先，标签只做同品质微调」；队友/道具标记只打日志不动权重，
+            # 等拿到真帧再按证据加。
+            marks = self.skill_card_marks(cx_of(i), cy_of(i))
             score = quality * 10 + has_pref
-            detail.append(f"{i + 1}:{Defs.QUALITY_LABEL[quality]}/标签{has_pref}")
+            detail.append(f"{i + 1}:{Defs.QUALITY_LABEL[quality]}/标签{has_pref}"
+                          f"/队友{marks}")
             if score > best_score:
                 best_idx, best_score = i, score
         self.log_info("技能评分 " + " ".join(detail) + f" → 选第 {best_idx + 1} 张")
+        self.dump_skill_frame(texts)
 
         cx, cy = Defs.SKILL_CARDS[best_idx]
         self.click(int(self.width_of_screen(cx)), int(self.height_of_screen(cy)), after_sleep=0.4)
@@ -521,32 +535,54 @@ class MatchHandlers:
             self.log_info("技能：确定")
         return True
 
-    def card_has_corner_badge(self, cx, cy):
-        """卡片**左上角**有没有小标记（道具加成）。
+    def skill_card_marks(self, cx, cy):
+        """这张技能卡上/角上挂了几个「队友」橙色小头像（只做诊断，不参与打分）。
 
-        用户 2026-10-29：周结算三选一（请选择1个技能）时，2/3 张卡左上角带着
-        道具加成标记，应该优先选带标记的那张；机器人当时默认选了第一张。
-        判据：左上角一小块里「高饱和且不太暗」的像素占比 > 8%
-        （角标是彩色小图标，压在卡片边角上，一半在卡外）。
-        阈值/区域可调，日志会打出每张卡的占比，方便拿真帧校准。
+        2026-10-29 用户两次反馈三选一没选「有队友」的卡，但当时没有帧，
+        无法确定标记位置。这里先只统计 + 保帧，判据等真帧再定。
         """
         frame = self.frame
         if frame is None:
-            return False
+            return 0
         h, w = frame.shape[:2]
-        x1 = int(w * (cx - 0.12))
-        x2 = int(w * (cx - 0.04))
-        y1 = int(h * (cy - 0.22))
-        y2 = int(h * (cy - 0.14))
+        x1, x2 = int(w * (cx - 0.14)), int(w * (cx + 0.14))
+        y1, y2 = int(h * (cy - 0.22)), int(h * (cy + 0.18))
         roi = frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
         if roi.size == 0:
-            return False
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        sat, val = hsv[:, :, 1], hsv[:, :, 2]
-        hit = (sat > 120) & (val > 120)
-        ratio = float(hit.mean())
-        self._badge_ratio = ratio
-        return ratio > 0.08
+            return 0
+        b = roi[:, :, 0].astype(int)
+        g = roi[:, :, 1].astype(int)
+        r = roi[:, :, 2].astype(int)
+        orange = ((r > 225) & (g > 100) & (g < 190) & (b < 70)).astype(np.uint8)
+        if not orange.any():
+            return 0
+        n, _lab, stats, _cent = cv2.connectedComponentsWithStats(orange, 8)
+        size = 42 * w / 1920.0
+        return sum(1 for i in range(1, n)
+                   if size * 0.5 <= stats[i][2] <= size * 1.8
+                   and size * 0.5 <= stats[i][3] <= size * 1.8
+                   and stats[i][4] >= size * size * 0.25)
+
+    def dump_skill_frame(self, texts):
+        """三选一限流存帧（每局最多 6 张），用于校准「有队友/有道具」判据。"""
+        if getattr(self, "_skill_dumps", 0) >= 6:
+            return
+        frame = self.frame
+        if frame is None or not frame.any():
+            return
+        try:
+            folder = os.path.join(PROJECT_ROOT, "logs", "debug")
+            os.makedirs(folder, exist_ok=True)
+            idx = getattr(self, "_skill_dumps", 0)
+            path = os.path.join(
+                folder, f"{time.strftime('%m%d-%H%M%S')}_skill{idx:02d}.jpg")
+            cv2.imwrite(path, frame, JPEG_PARAMS)
+            with open(path[:-4] + ".txt", "w", encoding="utf-8") as f:
+                f.write("\n".join(
+                    f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
+            self._skill_dumps = idx + 1
+        except Exception as e:                   # noqa: BLE001
+            self.log_debug(f"技能帧存证失败: {type(e).__name__}: {e}")
 
     @staticmethod
     def _pick_choice(infos, kind):

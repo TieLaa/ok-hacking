@@ -230,7 +230,11 @@ class WeekendHandlers:
         """
         if self.match_text(texts, self.STOCK_TITLE) is None:
             return False
+        # 这一页的金币在右上角（真机截图 cx≈0.80, cy≈0.11），不在训练日顶栏的
+        # 0.50~0.62 区域，read_money 读不到 → 用页内的读法兜底。
         money = self.read_money(texts)
+        if money is None:
+            money = self.stock_money(texts)
         cards = []
         for name in self.STOCK_TYPES:
             box = self.exact_text(texts, (name,))
@@ -243,15 +247,20 @@ class WeekendHandlers:
             self.click(int(self.width * 0.25), int(self.height * 0.55), after_sleep=0.6)
             return True
         cards.sort(key=lambda pair: pair[0].x)
-        affordable = [pair for pair in cards
-                      if money is None or pair[1] is None or pair[1] <= money]
-        detail = "、".join(f"{b.name}={p}" for b, p in cards)
+        detail = "、".join(
+            f"{b.name}={p}{'·队友' * m}"
+            for (b, p), m in ((pair, self.stock_card_marks(texts, pair[0]))
+                              for pair in cards))
+        affordable = [(b, p, self.stock_card_marks(texts, b)) for b, p in cards
+                      if money is None or p is None or p <= money]
         if not affordable:
             self.log_warning(f"炒股：都没有买得起的（零用钱 {money}｜{detail}）→ 放弃")
             self.click_text(("放弃",), after_sleep=0.6, must=False)
             return True
-        pick, price = affordable[0]
-        badge = "有" if self.match_text(texts, "股神") is not None else ""
+        # 用户口径：买得起的里**有队友推荐（头顶气泡）优先**，同档价格高的优先。
+        pick, price, marks = max(
+            affordable, key=lambda x: (x[2], x[1] if x[1] is not None else -1))
+        badge = f"·队友{marks}" if marks else ""
         cx = pick.x + pick.width / 2
         cy = pick.y + self.height * 0.18
         self.click(int(cx), int(cy), after_sleep=0.6)
@@ -259,6 +268,37 @@ class WeekendHandlers:
         if self.click_text(("确定",), after_sleep=0.8, must=False):
             self.log_info("炒股：确定")
         return True
+
+    def stock_card_marks(self, texts, label_box):
+        """卡片头顶的台词气泡（「相信奇迹!」「一定能赚!」「我梭哈了」）= 队友推荐。
+
+        气泡是**短文本 + 感叹号**，按 x 关联到最近的卡片（±0.12 屏宽）。
+        OCR 偶尔把「!」吃掉，那就当这张没有标记（退化成按价格取高）。
+        """
+        if label_box is None:
+            return 0
+        cx_card = (label_box.x + label_box.width / 2) / self.width
+        n = 0
+        for t in texts:
+            s = t.name.strip()
+            if not s.endswith(("！", "!")) or len(s) > 12:
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            if abs(cx - cx_card) <= 0.12:
+                n += 1
+        return n
+
+    def stock_money(self, texts):
+        """炒股页右上角的金币数字（裸数字，没有斜杠）。"""
+        for t in texts:
+            v = t.name.strip()
+            if not v.isdigit() or len(v) > 5:
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if 0.70 <= cx <= 0.90 and 0.05 <= cy <= 0.18:
+                return int(v)
+        return None
 
     def stock_card_price(self, texts, label_box):
         """卡片价格：类型名下方、同一列的那个数字（买不起时是红色的，OCR 一样能读）。"""

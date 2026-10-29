@@ -2087,6 +2087,25 @@ class TalentStockEvent(unittest.TestCase):
         self.assertTrue(task.handle_stock_pick(texts))
         self.assertIn("选「平衡型」", "".join(task.logs))
 
+    def test_stock_page_prefers_teammate_bubble_then_price(self):
+        """151 币、41/120/50：中间和右边都有队友气泡 → 取价格高的中间那张。"""
+        texts = [box(700, 130, "请选择你要投资的股票", 500, 50),
+                 box(1150, 95, "151", 80, 40),
+                 box(430, 495, "稳健型", 120, 50),
+                 box(815, 495, "平衡型", 120, 50),
+                 box(1200, 495, "稳健型", 120, 50),
+                 box(480, 760, "41", 60, 40),
+                 box(870, 760, "120", 60, 40),
+                 box(1255, 760, "50", 60, 40),
+                 box(900, 330, "一定能赚!", 200, 40),
+                 box(1290, 330, "我梭哈了", 200, 40),
+                 box(1030, 960, "确定", 280, 60)]
+        task = FakeTask(texts)
+        task.read_money = lambda texts=None: 151
+        self.assertTrue(task.handle_stock_pick(texts))
+        self.assertIn("选「平衡型」(120)", "".join(task.logs))
+        self.assertIn("队友1", "".join(task.logs))
+
     def test_stock_result_clicks_sell(self):
         """股票走势页只能点「卖出」。"""
         texts = [box(600, 240, "第2周股票走势", 500, 60),
