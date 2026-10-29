@@ -23,6 +23,12 @@ from src.util.emergency_stop import STOP
 # 放在 logs/ 下，已被 .gitignore 忽略；任务结束后用它复盘「第几秒点了哪里」。
 CLICK_LOG = os.path.join(PROJECT_ROOT, "logs", "clicks.jsonl")
 
+# 游戏厅小游戏播动画期间，用这些「真实界面标记」判断动画结束了没。
+# 注意不能放「星期 / 比赛」这类顶栏文字：小游戏画面本身也带顶栏（第N周 星期六）。
+ARCADE_WAIT_MARKS = ("出行", "公园", "步行街", "游戏厅", "失败率", "决定", "休息",
+                     "训练", "商店", "获得奖励", "点击屏幕继续", "跳过", "下一步",
+                     "战术板", "赛程")
+
 
 class TrainingFlowMixin:
 
@@ -58,19 +64,17 @@ class TrainingFlowMixin:
                 self.sleep(0.3)
                 continue
 
-            # 游戏厅买完小游戏：先让游戏自己播完（2026-10-29 实跑：买完画面只剩一个
-            # 角色站在球场中间、只有顶栏 4 行文字，5 秒就被卡死看门狗当成「点了不动」
-            # 停掉了整个任务）。这段时间只等不点；45 秒还没结束就点右上角 ↩ 退出。
-            wait_until = getattr(self, "_arcade_wait_until", 0.0)
-            if wait_until and len(texts) <= 8:
-                if time.time() < wait_until:
+            # 游戏厅买完小游戏：小游戏会**自己打完**，只等动画结束就行（用户 2026-10-29
+            # 口径），不要点、也不要算卡死。等画面重新出现已知界面标记再交回 handler。
+            if self.arcade_still_playing(texts):
+                if time.time() - self._arcade_wait_since > 300:
+                    self.log_warning("游戏厅小游戏 5 分钟还没结束 → 继续按普通流程处理")
+                    self._arcade_wait_since = 0.0
+                else:
                     self.sleep(0.5)
                     continue
-                self._arcade_wait_until = 0.0
-                self.log_warning("游戏厅小游戏 45 秒还没结束 → 点右上角退出游戏厅")
-                self.exit_page(after_sleep=0.8)
-                self.sleep(0.8)
-                continue
+            elif getattr(self, "_arcade_wait_since", 0.0):
+                self._arcade_wait_since = 0.0
 
             # 界面指纹：同一页面每拍都一样，用来判「卡住了没」
             sig = self._signature(texts)
@@ -302,6 +306,18 @@ class TrainingFlowMixin:
         if not s:
             return False
         return s.endswith("！") or s.endswith("!") or "加成" in s or "比赛！" in s
+
+    def arcade_still_playing(self, texts):
+        """游戏厅小游戏还在播动画吗？
+
+        买完小游戏后画面只有顶栏、没有按钮（角色站在球场中间那种）。
+        用户 2026-10-29 口径：小游戏会自己打完，**一直等到动画结束**就行。
+        这里用「有没有重新出现已知界面标记」判断，不按时间猜。
+        """
+        if not getattr(self, "_arcade_wait_since", 0.0):
+            return False
+        names = "".join(t.name for t in texts)
+        return not any(k in names for k in ARCADE_WAIT_MARKS)
 
     def exit_page(self, after_sleep=0.45):
         """点右上角的返回箭头退出当前页面。

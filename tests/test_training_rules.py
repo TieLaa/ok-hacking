@@ -879,8 +879,8 @@ class ArcadeRules(unittest.TestCase):
         task = self._task(texts)
         self.assertTrue(task.handle_arcade(texts))
         self.assertEqual(task.actions[-2][1], "弹跳20~70")
-        # 买完要先等小游戏自己打完（进场动画没有 UI，别让看门狗判卡死）
-        self.assertGreater(task._arcade_wait_until, time.time())
+        # 买完要先等小游戏自己打完（进场动画没有按钮，别让看门狗判卡死）
+        self.assertGreater(task._arcade_wait_since, 0)
 
     def test_blue_card_is_not_bought(self):
         """蓝色品质不买（用户 2026-10-27：只买黄/紫 + 带自动）。"""
@@ -1643,6 +1643,31 @@ class DailyShopEntry(unittest.TestCase):
         task._shop_day = (5, "二")
         task._shop_at = 0.0
         self.assertFalse(task.handle_daily_shop(texts))
+
+
+class ArcadeAnimationWait(unittest.TestCase):
+    """游戏厅小游戏会自己打完，期间只能等（用户 2026-10-29 口径）。"""
+
+    def _task(self):
+        task = FakeTask([])
+        task._arcade_wait_since = time.time()
+        return task
+
+    def test_blank_animation_keeps_waiting(self):
+        """只剩顶栏文字（角色站球场上）→ 继续等，不能点也不能算卡死。"""
+        texts = [box(37, 18, "第3周", 89, 35), box(161, 18, "星期六", 89, 35),
+                 box(305, 13, "38/130", 169, 45), box(862, 22, "20", 34, 24)]
+        self.assertTrue(self._task().arcade_still_playing(texts))
+
+    def test_known_page_ends_the_wait(self):
+        texts = [box(37, 18, "第3周", 89, 35),
+                 box(1320, 548, "休息", 105, 59),
+                 box(1299, 708, "训练", 156, 83)]
+        self.assertFalse(self._task().arcade_still_playing(texts))
+
+    def test_no_flag_is_not_waiting(self):
+        texts = [box(37, 18, "第3周", 89, 35)]
+        self.assertFalse(FakeTask([]).arcade_still_playing(texts))
 
 
 class RegisterWatchdog(unittest.TestCase):
