@@ -7,6 +7,8 @@
 import re
 import time
 
+from ok.feature.Box import Box
+
 from src.tasks.ui import Defs  # noqa: F401
 
 
@@ -251,6 +253,30 @@ class TrainingHandlers:
         """
         return self.subjects_from_texts(self._ocr_region()).get(name)
 
+    def find_shop_button(self, texts):
+        """找训练日右上角的「商店」按钮。
+
+        2026-10-29 实跑：`match_text(texts, "商店")` 的**拼接兜底**把屏幕中间那条
+        教学提示（「体能不足时会【力竭】…」）当成了目标 —— 点它等于点空，然后每拍
+        重试，连点 60 秒。所以这里只认右上角区域里整词「商店」；
+        OCR 把「商店」拆成「商」「店」两个字时，按同一行拼回来。
+        """
+        area = self.texts_in_region(texts, "top_right")
+        btn = self.exact_text(area, ("商店",))
+        if btn is not None:
+            return btn
+        singles = [t for t in area if t.name.strip() in ("商", "店")]
+        left = next((t for t in singles if t.name.strip() == "商"), None)
+        right = next((t for t in singles if t.name.strip() == "店"), None)
+        if left is not None and right is not None and right.x > left.x:
+            if abs((left.y + left.height / 2) - (right.y + right.height / 2)) < left.height:
+                x = min(left.x, right.x)
+                y = min(left.y, right.y)
+                w = max(left.x + left.width, right.x + right.width) - x
+                h = max(left.y + left.height, right.y + right.height) - y
+                return Box(name="商店", x=x, y=y, width=w, height=h)
+        return self.exact_text(texts, ("商店",))
+
     def handle_daily_shop(self, texts):
         """训练日主界面：决定要不要进商店。
 
@@ -271,21 +297,12 @@ class TrainingHandlers:
         if (self.match_text(texts, "出行") is not None
                 and self.match_text(texts, "休息") is None):
             return False
-        shop = self.match_text(texts, "商店")
+        shop = self.find_shop_button(texts)
         if shop is None:
             return False
         # 界面还在过场/弹窗上时不要点：点击会被弹窗吃掉，白跑一次，
         # 关店标记也写不上（2026-10-29 12:51 实跑：点完商店直接进了训练科目）。
         if self.match_text(texts, ("点击屏幕继续", "目标达成", "获得奖励")) is not None:
-            return False
-        # 上一拍点了「商店」但没进店：当前帧已经是干净的训练日主界面（有商店、
-        # 没有商店页的「上新时间/剩余/能力详情」）就立刻补点，不适用 15 秒冷却。
-        if getattr(self, "_shop_pending", False):
-            self._shop_pending = False
-            if self.match_text(texts, ("上新时间", "剩余", "能力详情")) is None:
-                self._shop_at = 0.0
-        # 点进去没成功时不要每拍狂点（正常流程一次进店会在店里买完才关）
-        if time.monotonic() - self._shop_at < 15:
             return False
 
         state = self.top_bar()
@@ -297,6 +314,28 @@ class TrainingHandlers:
             m = re.search(r"(\d+)\s*天", banner)
             if m:
                 key = (key[0], f"倒计时{m.group(1)}")
+
+        # 上一拍点了「商店」但没进店：当前帧还是干净的训练日主界面（没有商店页的
+        # 「上新时间/剩余/能力详情」）就立刻补点，不适用 15 秒冷却；连续 3 次都进不去
+        # 就放弃当天（否则每拍都点，2026-10-29 13:08 实跑连点 60 秒）。
+        if getattr(self, "_shop_tries_key", None) != key:
+            self._shop_tries_key, self._shop_tries = key, 0
+        if getattr(self, "_shop_pending", False):
+            self._shop_pending = False
+            if self.match_text(texts, ("上新时间", "剩余", "能力详情")) is None:
+                tries = getattr(self, "_shop_tries", 0)
+                if tries >= 3:
+                    self.log_warning("商店：连点 3 次都没进店 → 今天不再试")
+                    if key[1] is not None:
+                        self._shop_day = key
+                    self._shop_at = time.monotonic()
+                    return False
+                self._shop_at = 0.0
+
+        # 点进去没成功时不要每拍狂点（正常流程一次进店会在店里买完才关）
+        if time.monotonic() - self._shop_at < 15:
+            return False
+
         if key[1] is not None:
             if key == self._shop_day:
                 return False
@@ -324,6 +363,7 @@ class TrainingHandlers:
         self._shop_key = key
         self._shop_spend_all = spend_all
         self._shop_pending = True
+        self._shop_tries = getattr(self, "_shop_tries", 0) + 1
         self.click_box(shop, after_sleep=0.9)
         purpose = ("赛前清空" if spend_all
                    else ("余额不足，进店看免费商品" if poor

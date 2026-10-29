@@ -1595,6 +1595,32 @@ class DailyShopEntry(unittest.TestCase):
         self.assertFalse(task.handle_daily_shop(texts))
         self.assertEqual(task.actions, [])
 
+    def test_shop_button_not_matched_from_tooltip(self):
+        """屏幕中间的教学提示里出现「商店」不能被当成按钮。
+
+        2026-10-29 13:08 实跑：match_text 的拼接兜底返回了「体能不足时会【力竭】…」
+        那一行，点它等于点空，然后每拍重试，连点 60 秒。
+        """
+        texts = self._home() + [box(600, 640, "在商店里可以买器材和道具", 380, 32)]
+        task = FakeTask(texts)
+        btn = task.find_shop_button(texts)
+        self.assertIsNotNone(btn)
+        self.assertGreater(btn.x, 1150)          # 只能是右上角那个按钮
+
+    def test_split_shop_button_is_merged(self):
+        """OCR 把「商店」拆成「商」「店」两个字时也要能点。"""
+        texts = [box(37, 18, "第5周", 120, 33),
+                 box(163, 18, "星期二", 130, 35),
+                 box(310, 16, "70/130", 185, 38),
+                 box(1400, 180, "商", 34, 38),
+                 box(1436, 180, "店", 34, 38),
+                 box(1320, 548, "休息", 105, 59),
+                 box(1299, 708, "训练", 156, 83)]
+        task = FakeTask(texts)
+        task.read_money = lambda texts=None: 70
+        self.assertTrue(task.handle_daily_shop(texts))
+        self.assertEqual(task.actions[-1][1], "商店")
+
     def test_retry_immediately_when_click_was_eaten(self):
         """点完「商店」没进店（被过场吃掉）：下一拍要立刻补点，不能等 15 秒。"""
         texts = self._home()
