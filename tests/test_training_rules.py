@@ -2115,6 +2115,25 @@ class TalentStockEvent(unittest.TestCase):
         self.assertTrue(task.handle_stock_result(texts))
         self.assertEqual(task.actions[-1][1], "卖出")
 
+    def test_skill_prefers_item_card(self):
+        """技能三选一：左上角有道具宝石（紫/粉）的卡优先。
+
+        2026-10-29 真机：左卡是书图标、中/右卡是道具小卡+宝石；
+        机器人当时选了左边那张 → 用户要求优先有道具的。
+        """
+        from src.tasks.ui import Defs
+        texts = [box(600, 200, "请选择1个技能", 400, 50),
+                 box(200, 420, "好斗者", 200, 60),
+                 box(700, 420, "远投擅长", 200, 60),
+                 box(1200, 420, "看破擅长", 200, 60)]
+        task = FakeTask(texts)
+        task._card_quality = lambda frame, i: 1          # 三张同品质
+        task.skill_card_item_gem = lambda cx, cy: cx > 0.4   # 中/右有道具
+        self.assertTrue(task.handle_skill_select(texts))
+        self.assertAlmostEqual(task.actions[0][1] / task.width_of_screen(1),
+                               Defs.SKILL_CARDS[1][0], places=2)
+        self.assertIn("道具1", "".join(task.logs))
+
     def test_no_separate_stock_button_on_training_day(self):
         """炒股**不是**训练日主按钮：入口只有「二选一」选第一个。
 

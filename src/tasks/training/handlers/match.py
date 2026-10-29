@@ -518,10 +518,10 @@ class MatchHandlers:
             # 「左上角高饱和像素」的猜测，误判后压过了两张真金边卡（用户当场指出）。
             # 现在回到「品质优先，标签只做同品质微调」；队友/道具标记只打日志不动权重，
             # 等拿到真帧再按证据加。
-            marks = self.skill_card_marks(cx_of(i), cy_of(i))
-            score = quality * 10 + has_pref
+            gem = 1 if self.skill_card_item_gem(cx_of(i), cy_of(i)) else 0
+            score = gem * 100 + quality * 10 + has_pref
             detail.append(f"{i + 1}:{Defs.QUALITY_LABEL[quality]}/标签{has_pref}"
-                          f"/队友{marks}")
+                          f"/道具{gem}({getattr(self, '_gem_ratio', 0):.3f})")
             if score > best_score:
                 best_idx, best_score = i, score
         self.log_info("技能评分 " + " ".join(detail) + f" → 选第 {best_idx + 1} 张")
@@ -534,6 +534,36 @@ class MatchHandlers:
             self.click_box(confirm, after_sleep=0.5)
             self.log_info("技能：确定")
         return True
+
+    def skill_card_item_gem(self, cx, cy):
+        """卡片**左上角**那个小图标里有没有「道具宝石」（紫/粉色）。
+
+        用户 2026-10-29 截图（docs/shots/2026-10-29-skill-item.png）：
+        - 左卡左上角是**书/纸**图标（黄白）→ 不是道具；
+        - 中卡左上角是道具小卡 + **紫色宝石**；
+        - 右卡左上角是道具小卡 + **粉红宝石**。
+        所以判据取「左上角那一小块里的紫/粉高饱和像素占比」，书图标没有这两种色。
+        区域按技能卡中心算：x 左移 0.14~0.06 屏宽，y 上移 0.34~0.24 屏高
+        （三个卡片位置都一样，实测图标中心落在 (cx-0.11w, cy-0.30h)）。
+        """
+        frame = self.frame
+        if frame is None:
+            return False
+        h, w = frame.shape[:2]
+        x1 = int(w * (cx - 0.14))
+        x2 = int(w * (cx - 0.06))
+        y1 = int(h * (cy - 0.34))
+        y2 = int(h * (cy - 0.24))
+        roi = frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
+        if roi.size == 0:
+            return False
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        hue, sat, val = cv2.split(hsv)
+        gem = (sat > 110) & (val > 110) & (((hue >= 125) & (hue <= 165))
+                                           | (hue <= 8) | (hue >= 170))
+        ratio = float(gem.mean())
+        self._gem_ratio = ratio
+        return ratio > 0.02
 
     def skill_card_marks(self, cx, cy):
         """这张技能卡上/角上挂了几个「队友」橙色小头像（只做诊断，不参与打分）。
