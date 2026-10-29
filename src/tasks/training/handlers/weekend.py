@@ -16,7 +16,8 @@ import cv2
 import numpy as np
 
 from src.tasks.ui import Defs  # noqa: F401
-from src.tasks.training.constants import JPEG_PARAMS, WORK_STAMINA_COST  # noqa: F401
+from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,
+                                          WORK_STAMINA_COST)  # noqa: F401
 
 
 class WeekendHandlers:
@@ -230,6 +231,7 @@ class WeekendHandlers:
         """
         if self.match_text(texts, self.STOCK_TITLE) is None:
             return False
+        self.dump_stock_frame(texts)
         # 这一页的金币在右上角（真机截图 cx≈0.80, cy≈0.11），不在训练日顶栏的
         # 0.50~0.62 区域，read_money 读不到 → 用页内的读法兜底。
         money = self.read_money(texts)
@@ -268,6 +270,27 @@ class WeekendHandlers:
         if self.click_text(("确定",), after_sleep=0.8, must=False):
             self.log_info("炒股：确定")
         return True
+
+    def dump_stock_frame(self, texts):
+        """炒股页限流存帧（每局最多 6 张）：用来量「头顶队友头像有几个」。"""
+        if getattr(self, "_stock_dumps", 0) >= 6:
+            return
+        frame = self.frame
+        if frame is None or not frame.any():
+            return
+        try:
+            folder = os.path.join(PROJECT_ROOT, "logs", "debug")
+            os.makedirs(folder, exist_ok=True)
+            idx = getattr(self, "_stock_dumps", 0)
+            path = os.path.join(
+                folder, f"{time.strftime('%m%d-%H%M%S')}_stock{idx:02d}.jpg")
+            cv2.imwrite(path, frame, JPEG_PARAMS)
+            with open(path[:-4] + ".txt", "w", encoding="utf-8") as f:
+                f.write("\n".join(
+                    f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
+            self._stock_dumps = idx + 1
+        except Exception as e:                   # noqa: BLE001
+            self.log_debug(f"炒股帧存证失败: {type(e).__name__}: {e}")
 
     def stock_card_marks(self, texts, label_box):
         """卡片头顶的台词气泡（「相信奇迹!」「一定能赚!」「我梭哈了」）= 队友推荐。
