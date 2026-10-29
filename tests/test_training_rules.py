@@ -2205,6 +2205,17 @@ class TalentStockEvent(unittest.TestCase):
         self.assertTrue(task.handle_event_choice(texts))
         self.assertEqual(task.actions[-1][1], "精力恢复")
 
+    def test_note_select_clicks_next(self):
+        """新流程「选择笔记」：不选笔记，直接点下一步（2026-10-29 用户口径）。"""
+        texts = [box(150, 80, "选择笔记", 300, 50),
+                 box(560, 780, "重置", 160, 50),
+                 box(700, 780, "自动选择", 200, 50),
+                 box(1150, 900, "下一步", 300, 60)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_note_select(texts))
+        self.assertEqual(task.actions[-1][1], "下一步")
+        self.assertIn("不选", "".join(task.logs))
+
     def test_no_separate_stock_button_on_training_day(self):
         """炒股**不是**训练日主按钮：入口只有「二选一」选第一个。
 

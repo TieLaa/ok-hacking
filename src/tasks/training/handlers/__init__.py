@@ -40,6 +40,7 @@ HANDLERS = (
     EntryHandlers.handle_training_entry,
     EntryHandlers.handle_captain,
     EntryHandlers.handle_team,
+    EntryHandlers.handle_note_select,
     EntryHandlers.handle_equipment,
     EntryHandlers.handle_confirm_team,
     # 流派未知时先开日历认队长（用户 2026-10-29）：必须排在训练日主界面之前，

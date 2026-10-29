@@ -210,6 +210,25 @@ class EntryHandlers:
         self.log_info("进入选择器材" if ok else "点「下一步」没反应")
         return True
 
+    def handle_note_select(self, texts):
+        """新流程多出来的「选择笔记」页：不选笔记，直接点「下一步」。
+
+        用户 2026-10-29 截图：标题「选择笔记」，右边一网格笔记（评分/属性），
+        底部「重置 / 自动选择」，右下黄色「下一步」。
+        口径：不选，直接下一步（选了反而会占用一个笔记位）。
+        判据用标题整词，避免和「器材」页混。
+        """
+        if self.match_text(texts, "选择笔记") is None:
+            return False
+        target = self.exact_text(texts, ("下一步",))
+        if target is not None:
+            self.click_box(target, after_sleep=0.8)
+        else:
+            x, y = self.flow_point("next_step")
+            self.click(x, y, after_sleep=0.8)
+        self.log_info("选择笔记：不选，直接下一步")
+        return True
+
     def handle_equipment(self, texts):
         if self.match_text(texts, "选择器材") is None:
             return False
