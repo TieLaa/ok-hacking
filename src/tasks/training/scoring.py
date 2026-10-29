@@ -89,7 +89,8 @@ class TrainingScoringMixin:
         if not joined:
             return None, False
         attrs = any(a in joined for a in cls.ATTR_NAMES)
-        level = any(k in joined for k in ("等级", "属性"))
+        # 只认「等级提升」这类；「属性+10」是普通属性收益，交给 _effect_ev
+        level = "等级" in joined
         flat = (("精力" in joined or "体力" in joined) and not attrs and not level)
         ev = cls._effect_ev(items)
         if level:
