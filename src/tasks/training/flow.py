@@ -38,6 +38,12 @@ class TrainingFlowMixin:
         self._steps = 0
         STOP.ensure_started()
         self.log_info(f"紧急停止热键：{STOP.label or '（注册失败，F8/F12 轮询兜底已启用）'}")
+        # 代码版本戳：确认跑的是哪份 parsers.py（圈识别调效果时排查过「改了不生效」）
+        try:
+            from src.tasks.training import parsers as _p
+            self.log_info(f"parsers: {_p.__file__} v{getattr(_p, 'CODE_VERSION', '?')}")
+        except Exception:                        # noqa: BLE001
+            pass
         interaction = self.apply_user_idle_wait(self.config.get("空闲等待(秒)", 3))
         # 等待用户空闲可能很久：把紧急停止挂进去，否则按了停止键要等用户停手才生效
         if interaction is not None and hasattr(interaction, "abort_check"):

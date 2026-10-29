@@ -520,7 +520,13 @@ class SubjectScoreWeights(unittest.TestCase):
 
     def test_weights(self):
         r = {"mates": 2, "equip": 1, "manager": 1, "gold": 1, "color": 1}
-        self.assertAlmostEqual(FakeTask.subject_score(r), 2 + 1 + 2.1 + 1.2 + 1.3, places=4)
+        self.assertAlmostEqual(FakeTask.subject_score(r), 2 + 1 + 2.1 + 1.2 + 2.3, places=4)
+
+    def test_crit_outranks_manager(self):
+        """2026-10-29 用户口径：彩框 2.3 要压过经理 2.1（有彩框就该练）。"""
+        crit = {"mates": 1, "equip": 1, "manager": 0, "gold": 0, "color": 1}
+        mgr = {"mates": 1, "equip": 1, "manager": 1, "gold": 0, "color": 0}
+        self.assertGreater(FakeTask.subject_score(crit), FakeTask.subject_score(mgr))
 
     def test_crit_border_excludes_gold_border(self):
         """彩框和金框互斥：彩虹边框里有一段橙黄，不能不互斥地双重计分。
@@ -537,7 +543,7 @@ class SubjectScoreWeights(unittest.TestCase):
         self.assertTrue(r["crit"])
         self.assertEqual(r["color"], 1)
         self.assertEqual(r["gold"], 0)                     # 彩框优先，金框不计
-        self.assertAlmostEqual(task.subject_score(r), 1 + 1.3, places=4)
+        self.assertAlmostEqual(task.subject_score(r), 1 + 2.3, places=4)
 
     def test_borders_come_from_button_not_from_cards(self):
         """金框/彩框只看科目按钮外圈；器材卡再多也不额外加分（避免重复计分）。"""

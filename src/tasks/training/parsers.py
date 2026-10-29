@@ -31,6 +31,8 @@ from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,  # noqa: F4
 GOLD_RING_MIN = 0.20
 GOLD_RING_FACTOR = 2.0
 CRIT_RING_MIN = 0.20
+# 代码版本戳（run() 会打到日志里）：排查「改完不生效」时一眼看出跑的是哪份代码
+CODE_VERSION = "2026-10-29b"
 
 
 def ring_is_border(ratio, baseline=None, floor=GOLD_RING_MIN,
@@ -623,13 +625,16 @@ class TrainingParsersMixin:
         try:
             folder = os.path.join(PROJECT_ROOT, "logs", "debug")
             os.makedirs(folder, exist_ok=True)
+            idx = getattr(self, "_subject_dumps", 0)
+            # 文件名只用 ASCII：提权进程写中文名会变成乱码，OpenCV 也读不了
             path = os.path.join(
-                folder, f"{time.strftime('%m%d-%H%M%S')}_subject_{subject}.jpg")
+                folder, f"{time.strftime('%m%d-%H%M%S')}_subject{idx:02d}.jpg")
             cv2.imwrite(path, frame, JPEG_PARAMS)
             with open(path[:-4] + ".txt", "w", encoding="utf-8") as f:
+                f.write(f"# subject={subject}\n")
                 f.write("\n".join(
                     f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
-            self._subject_dumps = getattr(self, "_subject_dumps", 0) + 1
+            self._subject_dumps = idx + 1
         except Exception as e:                   # noqa: BLE001
             self.log_debug(f"科目帧存证失败: {type(e).__name__}: {e}")
 
