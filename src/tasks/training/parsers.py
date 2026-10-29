@@ -509,27 +509,52 @@ class TrainingParsersMixin:
             望月     (184,74,158,91)
             的训练计划 (339,96,294,62)
         所以两种写法都要认：整段「真崎的训练计划」，或者「的训练计划」左边那个框。
-        不在 plan_title 区域里的同类文字（训练日台词「今天的训练计划，我看看」）
-        一律不算 —— 用户口径里 XX 只出现在左上角。
+
+        2026-10-29 实跑踩坑：名字被漏识别时，标题左边只剩**「星期」列头**
+        （同一行区域，离标题 60px），于是「队长」被认成「星期」。
+        现在候选名必须像人名（`_looks_like_captain`），并且**优先取能在角色表里
+        查到的那个**，一个都不像就返回 None（让上一拍重试，而不是认一个假名字）。
+        训练日台词「今天的训练计划，我看看」不在左上角区域，不会被当标题。
         """
         area = self.texts_in_region(texts, "plan_title")
+        cands = []
         for t in area:
             s = t.name.replace(" ", "").strip()
             m = Defs.PLAN_TITLE_RE.match(s)
-            if m and m.group(1) not in ("今天", "今日"):
-                return m.group(1)
+            if m:
+                cands.append(m.group(1))
         title = next((t for t in area
                       if t.name.replace(" ", "").strip() == "的训练计划"), None)
-        if title is None:
-            return None
-        cy = title.y + title.height / 2
-        left = [t for t in area
-                if t is not title
-                and t.x + t.width <= title.x + 8
-                and abs((t.y + t.height / 2) - cy) < title.height]
-        if not left:
-            return None
-        return max(left, key=lambda t: t.x + t.width).name.replace(" ", "").strip()
+        if title is not None:
+            cy = title.y + title.height / 2
+            for t in area:
+                if t is title or t.x + t.width > title.x + 8:
+                    continue
+                if abs((t.y + t.height / 2) - cy) >= title.height * 1.5:
+                    continue
+                cands.append(t.name.replace(" ", "").strip())
+        cands = [c for c in cands if self._looks_like_captain(c)]
+        for c in cands:                       # 能查到流派的优先（最可靠）
+            if self.style_for_name(c):
+                return c
+        return cands[0] if cands else None
+
+    @staticmethod
+    def _looks_like_captain(name):
+        """这段字像不像队长名（1~6 个汉字，可以带「·」）。
+
+        必须挡掉日历上的非人名：列头「星期」、周次「第1周」、状态「大胜」、
+        按钮「训练」「比赛」… 否则名字一旦漏识别，就会拿这些当队长。
+        """
+        s = (name or "").replace(" ", "").strip()
+        if not (1 <= len(s) <= 6):
+            return False
+        if s.startswith("星期") or s in ("今天", "今日", "训练", "计划", "比赛",
+                                        "周", "月", "日", "胜", "负"):
+            return False
+        if any(ch.isdigit() for ch in s):
+            return False
+        return all("\u4e00" <= ch <= "\u9fff" or ch in "·・" for ch in s)
 
     @staticmethod
     def style_for_name(name):

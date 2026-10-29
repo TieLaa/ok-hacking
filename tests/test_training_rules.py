@@ -1310,6 +1310,35 @@ class StylePlanRules(unittest.TestCase):
         task = FakeTask([box(184, 74, "真崎的训练计划", 450, 90)])
         self.assertEqual(task.read_plan_captain(task._texts), "真崎")
 
+    def test_calendar_week_header_is_not_captain(self):
+        """2026-10-29 实跑：名字漏识别时只剩「星期」列头，不能被当成队长。
+
+        日志原文：`训练计划：队长「星期」不在角色表里 → 沿用「训练流」`。
+        """
+        texts = [box(184, 170, "星期", 68, 37),
+                 box(339, 96, "的训练计划", 294, 62),
+                 box(365, 170, "星期二", 87, 35),
+                 box(547, 171, "星期三", 90, 34),
+                 box(357, 280, "运控训练", 108, 37),
+                 box(539, 283, "投射训练", 108, 34),
+                 box(721, 283, "意识训练", 108, 32)]
+        task = FakeTask(texts)
+        self.assertIsNone(task.read_plan_captain(texts))
+        self.assertTrue(task.handle_training_plan(texts))
+        self.assertIsNone(task._style)                 # 不能写成「星期」
+        self.assertEqual(task.style, "训练流")          # 兜底
+        self.assertLess(task._style_probe_tries, 3)    # 还要允许再试
+
+    def test_calendar_prefers_roster_name_over_week_header(self):
+        """名字和「星期」列头同时在时，取能查到流派的那个人名。"""
+        texts = [box(184, 74, "真崎", 158, 91),
+                 box(339, 96, "的训练计划", 294, 62),
+                 box(184, 170, "星期", 68, 37),
+                 box(365, 170, "星期二", 87, 35),
+                 box(357, 280, "投射训练", 108, 37)]
+        task = FakeTask(texts)
+        self.assertEqual(task.read_plan_captain(texts), "真崎")
+
     def test_training_day_dialogue_is_not_calendar_title(self):
         """训练日台词「今天的训练计划，我看看」不在左上角，不能当队长名。"""
         texts = [box(600, 400, "今天的训练计划，我看看", 500, 50),

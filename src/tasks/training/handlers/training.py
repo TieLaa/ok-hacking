@@ -81,10 +81,10 @@ class TrainingHandlers:
             self._style_name = name
             self.log_info(f"训练计划：队长「{name}」→ 流派「{style}」", notify=True)
         elif name:
-            # 角色表里没有（SR/R 卡没收录）→ 按训练流跑，别再反复开了
+            # 名字看着像人名但角色表里没有（SR/R 卡没收录 / OCR 认错）：
+            # 先按训练流跑，但**允许再试**（最多 3 次，见 handle_style_probe）
             self._style_name = name
-            self._style_probe_tries = 3
-            self.log_warning(f"训练计划：队长「{name}」不在角色表里 → 沿用「{self.style}」")
+            self.log_warning(f"训练计划：队长「{name}」不在角色表里 → 先按「{self.style}」跑")
         else:
             self.log_warning("训练计划：没读出队长名字 → 关掉日历，下一拍再试")
         self.exit_page(after_sleep=0.8)
