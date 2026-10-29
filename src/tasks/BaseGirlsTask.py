@@ -75,7 +75,10 @@ class BaseGirlsTask(BaseTask):
             return False
         # 训练/比赛流程的关键标记出现时，说明这不是纯子菜单页（比如强化页里的
         # 器材选择、比赛里的结算），交回给正常 handler。
-        flow_marks = ("失败率", "决定", "休息", "出行", "下一步", "VS", "跳过")
+        # 2026-10-29 实跑：训练剧本页右侧有「强化/图鉴/成就」页签，整页被判成
+        # 大厅子菜单 → 从大厅点「训练」进来后空转到卡死（「启程」明明在屏幕上）。
+        flow_marks = ("失败率", "决定", "休息", "出行", "下一步", "VS", "跳过",
+                      "训练剧本", "训练核心", "启程", "备战")
         if any(k in names for k in flow_marks):
             return False
         return True

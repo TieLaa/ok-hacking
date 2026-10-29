@@ -786,6 +786,27 @@ class LobbySubpage(unittest.TestCase):
         task = FakeTask(texts)
         self.assertFalse(task.is_lobby_subpage(texts))
 
+    def test_training_scenario_page_is_not_lobby_subpage(self):
+        """训练剧本页右侧有「强化/图鉴/成就」页签，但它必须放行。
+
+        2026-10-29 实跑：从大厅点「训练」进来后整页被判成大厅子菜单，
+        任务不点「启程」也不走兜底，5 秒后看门狗点屏幕中央，连续 3 轮直接停任务。
+        """
+        texts = [box(47, 38, "《", 47, 40),
+                 box(124, 40, "训练剧本", 137, 38),
+                 box(897, 112, "大师模式", 125, 37),
+                 box(1413, 171, "强化", 75, 44),
+                 box(1347, 327, "训练记录", 141, 43),
+                 box(409, 398, "备战", 186, 104),
+                 box(1238, 729, "启程", 108, 59)]
+        task = FakeTask(texts)
+        self.assertFalse(task.is_lobby_subpage(texts))
+        called = {}
+        task.click_text_and_expect = (
+            lambda t, name, expect, **kw: called.setdefault("name", name) or True)
+        self.assertTrue(task.handle_training_entry(texts))
+        self.assertEqual(called.get("name"), "启程")
+
 
 class EventCardChoices(unittest.TestCase):
     """底排横向 3 选 1 大卡（按摩事件那种）：按期望值选，不能卡死。
