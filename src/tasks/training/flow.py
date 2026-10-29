@@ -369,7 +369,7 @@ class TrainingFlowMixin:
     def weekend_priority(self, day=None):
         """今天该去的地点（顺序 = 优先级）。
 
-        用户 2026-10-29 口径（见 docs/RULES.md 1.2）：
+        用户 2026-10-29 口径（见 docs/RULES.md 第 1 节）：
         - 周六：训练流原设定（步行街 → 游戏厅 → 公园）；其他流派只去餐厅打工；
         - 周日：训练流→公园、商店流→餐厅、扭蛋流→步行街、小游戏流→游戏厅。
 

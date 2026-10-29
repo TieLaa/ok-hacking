@@ -77,8 +77,16 @@
 - 训练流 + 「流派=自动」且队长是训练流角色：多两次点击（日历开/关），其余同上。
 - 唯一与旧版不同的训练流细节：日历页出现时不再误记「步行街已去」、不再误点「野餐」。
 
-## 三、待实测（我第一次跑就盯着这几条）
+### 7.1 因此作废的配置项（不是删掉，只是不再生效）
 
+| 配置 | 为什么作废 |
+|---|---|
+| `周末先看商店` | 新口径把「先逛店」绑死在**周日 + 训练流/商店流**，这个开关没有可表达的空间 |
+| `周末第一天优先资源点` | 周日地点由 `WEEKEND_PLAN` 表固定（训练流=公园），开关多余 |
+
+两项都保留在 `default_config` 里（读旧配置不报错），描述已标注「已作废 / 不再生效」。
+
+## 三、待实测（我第一次跑就盯着这几条）
 1. **餐厅内页判据**：没有实测帧。「队友数」用橙色小人连通域来数，需要第一次实跑看日志
    `餐厅：队友数 当服务员=x、桌游GM=y`；如果两个都恒为 0，说明这一页不是那种头像，
    要换成文字/立绘判据（届时只改 `restaurant_order` / `mates_near`）。
@@ -93,7 +101,7 @@
 ## 四、回归方式
 
 ```powershell
-.venv\Scripts\python.exe -m unittest discover -s tests -p "test_training_rules.py"   # 145 条
+.venv\Scripts\python.exe -m unittest discover -s tests -p "test_training_rules.py"   # 146 条
 .venv\Scripts\python.exe -m unittest tests.TestMain                                   # 12 条
 .venv\Scripts\python.exe tools\check_handlers.py --cache                              # 32 张，exit 0
 ```
