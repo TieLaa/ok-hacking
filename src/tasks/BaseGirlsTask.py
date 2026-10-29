@@ -16,28 +16,35 @@ from src.tasks.ui import Defs
 
 class BaseGirlsTask(BaseTask):
 
-    def apply_steal_pause(self, seconds):
-        """把「键鼠暂停(秒)」传给输入后端（GirlsInteraction），0 = 关闭检测。
+    def apply_user_idle_wait(self, seconds):
+        """把「空闲等待(秒)」传给输入后端（GirlsInteraction），0 = 不等（一直抢）。
+
+        语义：用户最后一次键鼠操作之后，要静默这么多秒脚本才继续动手。这是
+        "用户操作优先"的唯一开关——脚本要抢前台、要动真实鼠标，就必须等用户
+        停手；等待没有上限，不会因为等太久就去抢。
 
         为什么要从任务配置走：interaction 是框架全局单例，用户在任务页改的值
-        只能通过这里推下去；其它输入后端没有 steal_pause 属性时静默跳过。
+        只能通过这里推下去；其它输入后端没有 user_idle_wait 属性时静默跳过。
         """
         try:
             interaction = og.device_manager.interaction
         except Exception as e:                      # noqa: BLE001
-            self.log_debug(f"读不到 interaction，跳过键鼠暂停配置: {e}")
+            self.log_debug(f"读不到 interaction，跳过空闲等待配置: {e}")
             return None
-        if not hasattr(interaction, "steal_pause"):
+        if not hasattr(interaction, "user_idle_wait"):
             return interaction
         try:
             value = max(0.0, float(seconds))
         except (TypeError, ValueError) as e:
-            self.log_warning(f"键鼠暂停配置无效（{seconds}）：{e}")
+            self.log_warning(f"空闲等待配置无效（{seconds}）：{e}")
             return interaction
         # TriggerTask 每拍都会调到这里，只在值变化时打日志，别刷屏
-        if interaction.steal_pause != value:
-            interaction.steal_pause = value
-            self.log_info(f"键鼠暂停：{value:.1f} 秒{'（已关闭）' if value <= 0 else ''}")
+        if interaction.user_idle_wait != value:
+            interaction.user_idle_wait = value
+            if value <= 0:
+                self.log_info("空闲等待：已关闭（用户操作时也会抢前台）")
+            else:
+                self.log_info(f"空闲等待：你停手 {value:.1f} 秒后脚本才继续挂机")
         return interaction
 
     # ---------- 文字 ----------

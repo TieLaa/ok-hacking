@@ -38,7 +38,10 @@ class TrainingFlowMixin:
         self._steps = 0
         STOP.ensure_started()
         self.log_info(f"紧急停止热键：{STOP.label or '（注册失败，F8/F12 轮询兜底已启用）'}")
-        self.apply_steal_pause(self.config.get("键鼠暂停(秒)", 5))
+        interaction = self.apply_user_idle_wait(self.config.get("空闲等待(秒)", 3))
+        # 等待用户空闲可能很久：把紧急停止挂进去，否则按了停止键要等用户停手才生效
+        if interaction is not None and hasattr(interaction, "abort_check"):
+            interaction.abort_check = STOP.event.is_set
         max_steps = int(self.config.get("单局最大操作数", 400))
         interval = float(self.config.get("操作间隔(秒)", 0.8))
         stuck_seconds = float(self.config.get("卡死判定(秒)", 5))

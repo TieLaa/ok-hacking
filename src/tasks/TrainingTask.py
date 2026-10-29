@@ -62,7 +62,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
             "操作间隔(秒)": 0.3,
             "快进重复间隔(秒)": 1.0,
             "卡死判定(秒)": 5,
-            "键鼠暂停(秒)": 5,
+            "空闲等待(秒)": 3,
         })
         self.config_type.update({
             "流派": {"type": "drop_down",
@@ -96,7 +96,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
             "快进重复间隔(秒)": "快进点一次管一段时间，1 秒补点一次即可；0 = 只点一次",
             "单局最大操作数": "防止卡死无限点，超过后自动停止",
             "卡死判定(秒)": "连续这么多秒没有任何点击、界面文字也没变化，就判定卡住：存证 logs/debug/ 后点屏幕中央继续，连续 3 轮则停止",
-            "键鼠暂停(秒)": "你动鼠标或敲键盘时脚本就暂停这么久把操作权让给你；暂停到点后你还在操作就继续等，直到停手。0 = 关闭检测",
+            "空闲等待(秒)": "你动鼠标或敲键盘时脚本立刻停手，等你停手这么多秒后才重新拉起游戏继续挂机（期间绝不抢前台）。0 = 不等（用户操作时也照抢）",
         })
         self._steps = 0
         self.init_match_state()

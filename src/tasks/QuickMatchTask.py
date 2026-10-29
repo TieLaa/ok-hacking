@@ -55,7 +55,7 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
             "比赛日处理": "自动（先跳过，跳不了就进比赛加速）",
             "比赛内自动选技能和事件": True,
             "技能标签优先": ["得分手"],
-            "键鼠暂停(秒)": 5,
+            "空闲等待(秒)": 3,
         })
         self.config_type.update({
             "比赛日处理": {
@@ -67,7 +67,7 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
         self.config_description.update({
             "比赛日处理": "自动 = 先试跳过，跳不了就进比赛点 ▶▶；总是跳过 = 跳不了也不进",
             "比赛内自动选技能和事件": "比赛内出现「选择技能 / 事件二选一」时自动点；自动模式下游戏自己会处理，可关闭",
-            "键鼠暂停(秒)": "你动鼠标或敲键盘时脚本就暂停这么久把操作权让给你；暂停到点后你还在操作就继续等。0 = 关闭检测",
+            "空闲等待(秒)": "你动鼠标或敲键盘时脚本立刻停手，等你停手这么多秒后才重新拉起游戏继续挂机（期间绝不抢前台）。0 = 不等（用户操作时也照抢）",
             "技能标签优先": "同品质时优先的技能标签",
         })
         self.init_match_state()
@@ -107,7 +107,7 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
             self._mute_sig, self._mute_ticks = sig, 0
 
     def run(self):
-        self.apply_steal_pause(self.config.get("键鼠暂停(秒)", 5))
+        self.apply_user_idle_wait(self.config.get("空闲等待(秒)", 3))
         texts = self._ocr_region()
         if not texts or self.is_loading(texts):
             return False

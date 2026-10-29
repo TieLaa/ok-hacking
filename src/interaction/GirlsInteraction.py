@@ -11,9 +11,10 @@
 - 点击前必须 `SetForegroundWindow`（游戏不在前台时真实点击会落到别的窗口）。
 - 点击前把光标移到目标并留一点时间，点完还原光标，避免打扰用户。
 - `mouse_down/mouse_up` 成对，异常也要抬起，否则会卡住鼠标键。
-- **用户键鼠输入就让路**（见下面的 STEAL_* 常量）：每个动作前看系统"最后一次
-  输入事件"时间戳有没有被脚本之外的东西更新过，有就暂停（默认 5 秒，用户还在
-  操作就继续等），等手停下来再接着点。
+- **用户键鼠操作优先**（见下面的 USER_IDLE_* 常量，2026-10-29 改定）：这个游戏
+  只有前台才吃真实点击，所以脚本必须抢前台——那就把"抢的时机"交给用户：你一动
+  键鼠，脚本立刻停手；你停手满 `user_idle_wait` 秒（默认 3），才重新 Alt 拉起
+  游戏继续挂机。等待没有上限，绝不因为"等太久"就去抢正在操作的用户。
 """
 
 import ctypes
@@ -33,17 +34,18 @@ logger = Logger.get_logger(__name__)
 CURSOR_SETTLE = 0.04     # 绝对定位后等引擎采样（一步到位，不用滑行）
 FOREGROUND_WAIT = 0.15
 
-# ---------- 用户抢鼠标 / 键盘 ----------
-# 2026-10-29 需求：**任意键鼠输入都算用户在操作**，检测到就暂停操作。
+# ---------- 用户优先（前台挂机） ----------
+# 2026-10-29 需求（第二版）：**用户任意键鼠操作优先**。之前的写法是"暂停 5 秒
+# 到点就继续"，到点后第一个动作就是 Alt 抢前台，用户刚停手就被踢下焦点，等于没让。
+# 现在改成：只看"用户最后一次输入距今多久"，静默满 user_idle_wait 秒才算空闲。
 # 判据用 GetLastInputInfo：系统"最后一次输入事件"的时间戳（键盘、鼠标移动、
 # 滚轮、点击都算）。脚本自己的 mouse_event / keybd_event 也会更新它，所以每次
-# 脚本动作结束后把这个 tick 记成基准；下次动作前 tick 变了 = 中间有别人的输入。
+# 脚本动作结束后把这个 tick 记成基准；tick 变了 = 中间有别人的输入。
 # 比低级钩子（WH_KEYBOARD_LL / WH_MOUSE_LL）安全：钩子回调跑在 Python 里会拖慢
 # 整个系统的输入响应，这里只是读一个时间戳。
-STEAL_PAUSE = 5.0            # 秒：每次检测到用户输入，至少暂停这么久
-STEAL_SETTLE = 1.0           # 秒：暂停到点后还得静这么久没输入才恢复
-STEAL_TICK = 0.1             # 秒：暂停期间的采样间隔
-STEAL_MAX_WAIT = 120.0       # 秒：兜底，别让"用户一直在操作"把任务永久挂住
+USER_IDLE_WAIT = 3.0         # 秒：用户最后一次输入之后静默这么久才继续（0 = 不等，一直抢）
+IDLE_POLL = 0.1              # 秒：等待期间的采样间隔
+IDLE_LOG_EVERY = 30.0        # 秒：等这么久还没空闲就提醒一次（只提醒，**不强制恢复**）
 STEAL_MARK_SETTLE = 0.02     # 秒：脚本动作结束后等系统把这次注入记进输入队列
 
 MOUSEEVENTF_LEFTDOWN = 0x0002
@@ -76,9 +78,22 @@ class GirlsInteraction(BaseInteraction):
         self._saved_cursor = None
         self._down_pos = None
         self._pressed_keys = {}
-        self.steal_pause = STEAL_PAUSE   # 任务层可通过配置项覆盖；0 = 关闭检测
+        self.user_idle_wait = USER_IDLE_WAIT  # 任务层可通过配置项覆盖；0 = 关闭等待
         self._script_input_tick = None   # 脚本最后一次动作对应的输入事件 tick
         self.steal_count = 0             # 累计让路次数（复盘用）
+        # 可选：一个无参可调用对象，返回 True 表示"立刻结束等待"。
+        # 任务层用它挂紧急停止（等待可能很久，热键不能等到用户停手才生效）。
+        self.abort_check = None
+        self._stop_requested = False     # 等待期间收到停止请求 → 下一次点击直接跳过
+
+    @property
+    def steal_pause(self):
+        """旧名字的兼容别名（配置/外部脚本可能还在用它）。"""
+        return self.user_idle_wait
+
+    @steal_pause.setter
+    def steal_pause(self, value):
+        self.user_idle_wait = value
 
     # ---------- 窗口 ----------
 
@@ -97,6 +112,9 @@ class GirlsInteraction(BaseInteraction):
         1. 模拟按一下 Alt —— 让系统认为"用户有输入意图"；
         2. `AttachThreadInput` 把当前线程挂到前台窗口的输入队列，绕过前台锁；
         3. `SetWindowPos(... HWND_TOPMOST)` 后再撤回，强行上浮。
+
+        **抢之前先等用户空闲**（2026-10-29）：Alt 注入本身就是"拿走用户焦点"，
+        用户还在敲键盘/动鼠标时绝不能做。等他停手满 `user_idle_wait` 秒再抢。
         """
         hwnd = self.hwnd
         if not hwnd:
@@ -110,65 +128,77 @@ class GirlsInteraction(BaseInteraction):
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
             time.sleep(0.2)
 
-        for attempt in range(tries):
-            fg = win32gui.GetForegroundWindow()
+        # 用户还在用电脑 → 一声不响地等，绝不抢焦点
+        self.wait_for_user_idle()
 
-            # 1) Alt 技巧（只在游戏不在前台时才会走到这里：
-            #    上面已经「前台就是游戏 → 直接 return True」）
-            logger.debug(f"抢前台 attempt {attempt}：注入 Alt + SetForegroundWindow")
-            win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
-            time.sleep(0.02)
-            try:
-                win32gui.SetForegroundWindow(hwnd)
-            except Exception as e:
-                logger.debug(f"SetForegroundWindow attempt {attempt}: {e}")
-            finally:
-                # Alt 必须抬起，否则后续所有按键都会变成 Alt 组合键
-                win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+        injected = False
+        try:
+            for attempt in range(tries):
+                fg = win32gui.GetForegroundWindow()
 
-            if win32gui.GetForegroundWindow() == hwnd:
-                return True
+                # 1) Alt 技巧（只在游戏不在前台时才会走到这里：
+                #    上面已经「前台就是游戏 → 直接 return True」）
+                logger.debug(f"抢前台 attempt {attempt}：注入 Alt + SetForegroundWindow")
+                win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+                injected = True
+                time.sleep(0.02)
+                try:
+                    win32gui.SetForegroundWindow(hwnd)
+                except Exception as e:
+                    logger.debug(f"SetForegroundWindow attempt {attempt}: {e}")
+                finally:
+                    # Alt 必须抬起，否则后续所有按键都会变成 Alt 组合键
+                    win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
 
-            # 2) AttachThreadInput 兜底
-            try:
-                cur_tid = win32api.GetCurrentThreadId()
-                fg_tid = win32process.GetWindowThreadProcessId(fg)[0] if fg else 0
-                if fg_tid and fg_tid != cur_tid:
-                    win32process.AttachThreadInput(cur_tid, fg_tid, True)
-                    try:
-                        win32gui.SetForegroundWindow(hwnd)
-                    finally:
-                        win32process.AttachThreadInput(cur_tid, fg_tid, False)
-            except Exception as e:
-                logger.debug(f"AttachThreadInput attempt {attempt}: {e}")
+                if win32gui.GetForegroundWindow() == hwnd:
+                    return True
 
-            if win32gui.GetForegroundWindow() == hwnd:
-                return True
+                # 2) AttachThreadInput 兜底
+                try:
+                    cur_tid = win32api.GetCurrentThreadId()
+                    fg_tid = win32process.GetWindowThreadProcessId(fg)[0] if fg else 0
+                    if fg_tid and fg_tid != cur_tid:
+                        win32process.AttachThreadInput(cur_tid, fg_tid, True)
+                        try:
+                            win32gui.SetForegroundWindow(hwnd)
+                        finally:
+                            win32process.AttachThreadInput(cur_tid, fg_tid, False)
+                except Exception as e:
+                    logger.debug(f"AttachThreadInput attempt {attempt}: {e}")
 
-            # 3) 置顶再撤回
-            try:
-                win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                                      win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
-                win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0,
-                                      win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
-            except Exception as e:
-                logger.debug(f"SetWindowPos attempt {attempt}: {e}")
+                if win32gui.GetForegroundWindow() == hwnd:
+                    return True
 
-            time.sleep(FOREGROUND_WAIT)
-            if win32gui.GetForegroundWindow() == hwnd:
-                return True
+                # 3) 置顶再撤回
+                try:
+                    win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                                          win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
+                    win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0,
+                                          win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+                except Exception as e:
+                    logger.debug(f"SetWindowPos attempt {attempt}: {e}")
 
-        # 不要用「最小化再恢复」抢前台：前台是管理员进程时恢复会失败，
-        # 窗口会反复 visible=False，WGC 抓不到帧、点击也会全部落空
-        # （实训 2026-10-26）。抢不到就明确放弃，让上层报错/等用户点一下游戏。
-        fg_name = win32gui.GetWindowText(win32gui.GetForegroundWindow())
-        logger.warning(f"游戏未能置前（目标 {hwnd}，当前前台「{fg_name}」），本次操作放弃")
-        return False
+                time.sleep(FOREGROUND_WAIT)
+                if win32gui.GetForegroundWindow() == hwnd:
+                    return True
+
+            # 不要用「最小化再恢复」抢前台：前台是管理员进程时恢复会失败，
+            # 窗口会反复 visible=False，WGC 抓不到帧、点击也会全部落空
+            # （实训 2026-10-26）。抢不到就明确放弃，让上层报错/等用户点一下游戏。
+            fg_name = win32gui.GetWindowText(win32gui.GetForegroundWindow())
+            logger.warning(f"游戏未能置前（目标 {hwnd}，当前前台「{fg_name}」），本次操作放弃")
+            return False
+        finally:
+            if injected:
+                # 注入的 Alt 同样是系统输入事件。不记账的话，下一次动作会把它当成
+                # "用户还在操作"，白等 user_idle_wait 秒（尤其是抢前台失败直接抛错时，
+                # mark 根本走不到）。
+                self.mark_script_input()
 
     def is_foreground(self):
         return win32gui.GetForegroundWindow() == self.hwnd
 
-    # ---------- 用户抢鼠标 / 键盘 ----------
+    # ---------- 用户优先（键鼠操作让路） ----------
 
     @staticmethod
     def _last_input_tick():
@@ -182,14 +212,28 @@ class GirlsInteraction(BaseInteraction):
             logger.debug(f"GetLastInputInfo 失败: {e}")
         return None
 
+    @staticmethod
+    def _now_tick():
+        """开机毫秒，和 GetLastInputInfo 的 dwTime 同一个时钟（取低 32 位）。"""
+        return ctypes.windll.kernel32.GetTickCount() & 0xFFFFFFFF
+
+    def _idle_seconds(self, tick):
+        """距今多少秒没有输入事件；tick 为空返回 None。"""
+        if tick is None:
+            return None
+        delta = (self._now_tick() - tick) & 0xFFFFFFFF
+        if delta > 0x7FFFFFFF:          # 32 位回绕或时钟异常，按"刚刚动过"处理
+            return 0.0
+        return delta / 1000.0
+
     def mark_script_input(self, settle=STEAL_MARK_SETTLE):
         """动作结束：把当前的「最后一次输入」认定成脚本自己的。
 
         脚本注入的 mouse_event / keybd_event 也会更新 GetLastInputInfo，不记账的话
-        下一次检测会把脚本自己的点击当成用户输入，每拍都白停 5 秒。settle 是等
-        系统把这次注入记进输入队列的时间（注入是异步入队的）。
+        下一次检测会把脚本自己的点击当成用户输入，白等 user_idle_wait 秒。settle 是
+        等系统把这次注入记进输入队列的时间（注入是异步入队的）。
         """
-        if self.steal_pause <= 0:
+        if self.user_idle_wait <= 0:
             return
         if settle:
             time.sleep(settle)
@@ -197,14 +241,20 @@ class GirlsInteraction(BaseInteraction):
         if tick is not None:
             self._script_input_tick = tick
 
-    def wait_if_user_active(self):
-        """动作前调用：检测到用户有键鼠输入就暂停，返回这次是否让路停过。
+    def wait_for_user_idle(self):
+        """动作前调用：用户还在操作就一直等，直到他停手满 user_idle_wait 秒。
 
-        tick 变了 = 脚本动作结束后有新的输入事件（键盘/鼠标移动/滚轮/点击）。
-        暂停到点后如果还在输入就继续等，否则用户刚恢复操作立刻又被打断；
-        超过 STEAL_MAX_WAIT 强制恢复，避免别的软件持续注入输入时任务永久卡死。
+        判据是「最后一次输入事件距今多久」，不是「暂停了几秒」。差别很关键：
+        旧写法暂停到点就继续，而继续的第一个动作就是 Alt 抢前台，用户刚停手就被
+        踢下焦点，等于没让。现在只有用户真的静默满 user_idle_wait 秒才动手。
+
+        **没有等待上限**：用户的操作永远优先。如果日志里出现"仍在操作"的提醒，
+        说明有别的程序在持续注入键鼠事件，不是用户本人在用 —— 去查那个程序，
+        不要在这里加"等太久就抢"的兜底。
+
+        返回这次是否等过（复盘用）。0 = 不等（一直抢）。
         """
-        if self.steal_pause <= 0:
+        if self.user_idle_wait <= 0:
             return False
         tick = self._last_input_tick()
         if tick is None:
@@ -212,27 +262,35 @@ class GirlsInteraction(BaseInteraction):
         if self._script_input_tick is None:
             self._script_input_tick = tick
             return False
+        # tick 跟基准一致 = 上次脚本记账之后没人动过键鼠
         if tick == self._script_input_tick:
             return False
 
         start = time.monotonic()
-        deadline = start + self.steal_pause
-        last_input = start
         self.steal_count += 1
-        logger.info(f"检测到键鼠输入 → 暂停操作至少 {self.steal_pause:.1f} 秒")
+        logger.info(f"检测到键鼠操作 → 暂停，等你停手 {self.user_idle_wait:.1f} 秒后继续")
+        last_log = start
         while True:
-            time.sleep(STEAL_TICK)
+            time.sleep(IDLE_POLL)
+            if self.abort_check is not None and self.abort_check():
+                # 用户按了停止键：不要再抢前台（那一瞬间最不该做的事）,也不必真点这一下
+                logger.info("收到停止请求 → 结束等待，取消本次操作")
+                self._stop_requested = True
+                return True
             now_tick = self._last_input_tick()
-            now = time.monotonic()
-            if now_tick is not None and now_tick != tick:
-                tick, last_input = now_tick, now
-            if now >= deadline and now - last_input >= STEAL_SETTLE:
+            if now_tick is None:
+                now_tick = tick
+            idle = self._idle_seconds(now_tick) or 0.0
+            if idle >= self.user_idle_wait:
                 break
-            if now - start >= STEAL_MAX_WAIT:
-                logger.warning(f"用户持续操作超过 {STEAL_MAX_WAIT:.0f} 秒 → 强制恢复操作")
-                break
-        self._script_input_tick = tick
-        logger.info(f"输入已停止，暂停 {time.monotonic() - start:.1f} 秒 → 继续操作")
+            waited = time.monotonic() - start
+            if waited - (last_log - start) >= IDLE_LOG_EVERY:
+                last_log = time.monotonic()
+                logger.info(f"用户仍在操作 → 继续等待（已等 {waited:.0f} 秒，最近一次输入 {idle:.1f} 秒前）")
+
+        self._script_input_tick = now_tick
+        logger.info(f"用户已停手 {self.user_idle_wait:.1f} 秒 → 恢复挂机"
+                    f"（本次让路 {time.monotonic() - start:.1f} 秒）")
         return True
 
     # ---------- 光标 ----------
@@ -288,8 +346,13 @@ class GirlsInteraction(BaseInteraction):
             x = round(self.capture.width * 0.5)
             y = round(self.capture.height * 0.5)
 
-        # 用户有键鼠输入就先让路（需求 2026-10-29），别跟人手抢鼠标
-        self.wait_if_user_active()
+        # 用户还在用键鼠 → 一声不响地等着（2026-10-29：用户操作永远优先）
+        self.wait_for_user_idle()
+        if self._stop_requested:
+            # 等待期间按了紧急停止：这一下不点，把焦点/鼠标还给用户
+            self._stop_requested = False
+            logger.info("已收到停止请求，本次点击跳过")
+            return
 
         # 抢不到前台就**绝不点击**：真实鼠标事件一定会落到别的窗口上，
         # 轻则空点、重则把别的程序按坏（实测点到了 ok-script GUI 上）。
@@ -323,11 +386,13 @@ class GirlsInteraction(BaseInteraction):
         if x < 0 or y < 0:
             x = round(self.capture.width * 0.5)
             y = round(self.capture.height * 0.5)
-        self.wait_if_user_active()
+        self.wait_for_user_idle()
         self.ensure_foreground()
         self._move_cursor(x, y)
         self._down_key = key
         win32api.mouse_event(self._EVENTS.get(key, self._EVENTS["left"])[0], 0, 0, 0, 0)
+        # 按下也是一次注入：不记账的话，下一次动作会把它当成"用户还在操作"。
+        self.mark_script_input()
 
     def mouse_up(self, name=None, key="left"):
         key = getattr(self, "_down_key", key)
@@ -335,21 +400,21 @@ class GirlsInteraction(BaseInteraction):
         self.mark_script_input()
 
     def scroll(self, x, y, scroll_amount):
-        self.wait_if_user_active()
+        self.wait_for_user_idle()
         self.ensure_foreground()
         self._move_cursor(x, y)
         win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0, int(scroll_amount) * 120, 0)
         self.mark_script_input()
 
     def move(self, x, y, down_btn=0):
-        self.wait_if_user_active()
+        self.wait_for_user_idle()
         self.ensure_foreground()
         self._move_cursor(int(x), int(y))
         self.mark_script_input()
 
     def swipe(self, x1, y1, x2, y2, duration=0.3, settle_time=0):
         """按住拖动（真实鼠标），用于列表/视角。"""
-        self.wait_if_user_active()
+        self.wait_for_user_idle()
         self.ensure_foreground()
         self._move_to(x1, y1)
         win32api.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
@@ -373,6 +438,7 @@ class GirlsInteraction(BaseInteraction):
         return win32api.VkKeyScan(str(key)) & 0xFF
 
     def send_key_down(self, key):
+        self.wait_for_user_idle()
         self.ensure_foreground()
         vk = self._vk(key)
         win32api.keybd_event(vk, 0, 0, 0)
@@ -394,6 +460,7 @@ class GirlsInteraction(BaseInteraction):
         self.send_key_up(key)
 
     def input_text(self, text, **kwargs):
+        self.wait_for_user_idle()
         for ch in str(text):
             vk = win32api.VkKeyScan(ch) & 0xFF
             win32api.keybd_event(vk, 0, 0, 0)
