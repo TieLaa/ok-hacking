@@ -942,10 +942,15 @@ class WeekendHandlers:
                               "→ 不管队友，先进步行街")
                 return ["步行街"] + [p for p in places if p != "步行街"]
             # 用户 2026-10-30 完整口径（扭蛋流的周五/周六/周日）：
-            #   1. 两边都有队友 → 先进步行街；
+            #   0. 钱 > 300 → 先去步行街（钱多就该花）；
+            #   1. 钱 <= 300：两边都有队友 → 先进步行街；
             #   2. 只有一边有队友 → 去有队友的那边；
             #   3. 都没队友 → 周五/周六去餐厅赚钱，周日去步行街消费。
-            if len(mates) == 2:
+            money = self.read_money(texts)
+            if money is not None and money > 300:
+                chosen = "步行街"
+                reason = f"零用钱 {money} > 300，先去步行街消费"
+            elif len(mates) == 2:
                 chosen = "步行街"
                 reason = "两边都有队友，先进步行街"
             elif mates:
