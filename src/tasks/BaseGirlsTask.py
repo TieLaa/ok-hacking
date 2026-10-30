@@ -218,17 +218,44 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
             self.attempt_dump("recover_failed", texts)
         return ok
 
+    # 这些页面是「任务可以正常工作」的起点（不一定在大厅）
+    START_MARKS = ("星期", "出行", "失败率", "训练剧本", "赛前准备",
+                   "跳过比赛", "训练核心", "选择队友", "选择笔记", "选择器材")
+
+    def is_startable(self, texts=None):
+        """当前界面能不能直接开始跑任务（大厅 or 已知流程页）。
+
+        2026-10-30：进程被杀后游戏停在「训练日/周末首页」，这类页面没有返回入口，
+        recover_to_lobby 必然失败。但任务本来就在这些页面工作，所以把它们也算合法起点；
+        比赛内部仍然排除（不能盲点）。
+        """
+        if texts is None:
+            texts = self._ocr_region()
+        if self.is_lobby(texts):
+            return True
+        if self.looks_like_match(texts):
+            return False
+        names = "".join(t.name for t in texts or [])
+        return any(k in names for k in self.START_MARKS)
+
     def reset_to_start(self):
-        """MCP 契约：回到大厅。GUI 路径由各任务自行决定是否调用。"""
+        """MCP 契约：优先回大厅；回不去但停在已知流程页时，就地开始。"""
         self.begin_attempt()
-        return self.recover_to_lobby()
+        if self.recover_to_lobby():
+            return True
+        if self.is_startable():
+            self.log_warning("回大厅失败，但当前是已知流程页 → 直接从当前界面开始")
+            return True
+        self.attempt_dump("reset_refused")
+        return False
 
     def verify_start_state(self):
-        """MCP 契约：断言「确实在大厅」。校验失败必须抛异常，不能返回 False。"""
+        """MCP 契约：断言「大厅或已知流程页」。校验失败必须抛异常。"""
         texts = self._ocr_region()
         assert texts, "起始校验失败：这一帧没有识别到任何文字（窗口被遮挡？）"
         names = "/".join(t.name for t in texts[:10])
-        assert self.is_lobby(texts), f"起始校验失败：不在大厅主界面（识别到：{names}）"
+        assert self.is_startable(texts), (
+            f"起始校验失败：既不是大厅也不是已知流程页（识别到：{names}）")
         return True
 
     # ---------- 文字 ----------
