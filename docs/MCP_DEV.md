@@ -107,6 +107,26 @@ ESC → 放弃并存证 `recover_failed`。遇到比赛/小游戏标记（`VS`/`
    assert 并以文字返回结论，只在核对坐标时读一张图。
 6. **识别层回归仍走 `check_handlers.py --cache`**：它不用起 runtime，秒级，MCP 不替代它。
 
+## PostMessage 能不能用（2026-10-30 结论：仍然不行）
+
+2.0.20 修了 PostMessage 的鼠标坐标（`update_mouse_pos` 按子窗口选 target、按钮消息复用
+同一套 client 坐标），但**对本游戏无效**。同一次运行里的对照实验：
+
+| 方式 | 结果 |
+|---|---|
+| `PostMessageInteraction.click(赛事)` @(1180,630) | 无反应，OCR 没有出现「玩法目录」 |
+| 同一坐标用真实鼠标（GirlsInteraction）点一次 | 打开「玩法目录」，OCR 命中 |
+
+两次坐标完全相同、`pm_target_hwnd` 就是顶层窗口 1182186、`pm_mouse_pos` 也正确，
+所以**不是坐标问题**，是 Unity 侧不消费投递的鼠标消息。结论保持不变：
+`src/config.py` 的 `windows.interaction` 只留 `GirlsInteraction`。
+
+探测工具：`tools/mcp/postmessage_probe.py`，两个开关：
+
+- `OK_PM_NO_RESET=1`：只读模式，**全程不动真实鼠标**，不在大厅就直接判失败退出；
+- `OK_PM_CONTROL=1`：对照实验（同一坐标再用真实鼠标点一次）。会抢前台、夺走光标，
+  只在你确认电脑空闲时打开。
+
 ## 常用命令
 
 ```powershell

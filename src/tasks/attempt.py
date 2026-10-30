@@ -98,7 +98,7 @@ class AttemptSupport:
         图仍用 JPEG q95 + 4:4:4（见 constants.JPEG_PARAMS）。
         """
         try:
-            if getattr(self, "_attempt_images", 0) >= self.ATTEMPT_MAX_IMAGES:
+            if int(getattr(self, "_attempt_images", 0) or 0) >= self.ATTEMPT_MAX_IMAGES:
                 self.log_debug(f"产物图已达上限 {self.ATTEMPT_MAX_IMAGES}，跳过 {tag}")
                 return None
             folder = os.path.join(self.attempt_dir, "frames")
@@ -116,7 +116,7 @@ class AttemptSupport:
             with open(base + ".txt", "w", encoding="utf-8") as f:
                 f.write("\n".join(
                     f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts or []))
-            self._attempt_images = getattr(self, "_attempt_images", 0) + 1
+            self._attempt_images = int(getattr(self, "_attempt_images", 0) or 0) + 1
             self.log_info(f"存证 {os.path.relpath(base, PROJECT_ROOT)}")
             return folder
         except Exception as e:                   # noqa: BLE001
@@ -139,10 +139,18 @@ class AttemptSupport:
         return True
 
     def on_destroy(self):
-        """清掉本次运行的状态；MCP 和 GUI 都会在任务结束时调用。"""
+        """清掉本次运行的状态；MCP 和 GUI 都会在任务结束时调用。
+
+        用 delattr 而不是置 None：置 None 会让下一次 `getattr(..., 0)` 拿到 None，
+        attempt_dump 里的比较直接抛 TypeError（异常被吞掉，表现是「存证没生成」，
+        2026-10-30 实跑踩过）。
+        """
         for attr in ("_attempt_images", "_attempt_started_at"):
             if hasattr(self, attr):
-                setattr(self, attr, None)
+                try:
+                    delattr(self, attr)
+                except AttributeError:
+                    pass
         super_method = getattr(super(), "on_destroy", None)
         if callable(super_method):
             super_method()

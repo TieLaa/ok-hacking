@@ -50,23 +50,35 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
 
     # ---------- MCP / 基线 ----------
 
-    # 比赛/小游戏里点返回箭头是危险的（可能误触暂停菜单或技能），
-    # 所以「回大厅」遇到这些界面直接放弃，交给人工。
-    MATCH_MARKS = ("VS", "暂停", "比分", "战术板")
-
     def is_lobby(self, texts=None):
-        """当前画面是不是大厅主界面：同时有「赛事」和「训练」两个大按钮。"""
-        if texts is None:
-            texts = self._ocr_region()
-        names = "".join(t.name for t in texts or [])
-        return "赛事" in names and "训练" in names
+        """当前画面是不是大厅主界面。
+
+        判据复用 handle_lobby 的入口文案（社团 / 社团GO / 开学纳新祭 / 转一转 / 冠军之路），
+        再排除几个已知的非大厅页面。
+
+        2026-10-30 修正：旧判据是「同时出现赛事和训练」，但它是**子串**匹配——
+        「训练加速&弹跳UP！」这类 banner 会命中「训练」，「队伍调整页」也有
+        「赛事/训练」导航，于是队伍页被当成大厅，reset 直接跳过恢复、
+        探针把点击打在队伍页上（实跑日志 logs/mcp/3766817a…）。
+        """
+        texts = texts or []
+        names = "".join(t.name for t in texts)
+        if not any(k in names for k in self.LOBBY_MARKS):
+            return False
+        return not any(k in names for k in self.NOT_LOBBY_MARKS)
 
     def looks_like_match(self, texts=None):
-        """当前画面像比赛/小游戏吗（这类界面不能盲点返回）。"""
-        if texts is None:
-            texts = self._ocr_region()
-        names = "".join(t.name for t in texts or [])
-        return any(k in names for k in self.MATCH_MARKS)
+        """当前画面像比赛/小游戏吗（这类界面不能盲点返回）。
+
+        强标记（暂停/战术板）单个就够；VS/比分 太容易出现在队伍对比、
+        赛事列表里，必须两个同时出现才判定。2026-10-30 实跑：队伍调整页
+        被单个弱标记误判成比赛，导致回大厅直接中止。
+        """
+        texts = texts or []
+        names = "".join(t.name for t in texts)
+        if any(k in names for k in self.MATCH_STRONG_MARKS):
+            return True
+        return all(k in names for k in self.MATCH_WEAK_MARKS)
 
     def exit_page(self, after_sleep=0.45):
         """点右上角的返回箭头退出当前页面。
@@ -84,11 +96,32 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
     # 退出当前页面可控的控件文案（OCR 精确匹配，且必须落在屏幕顶部）。
     # 后半截是箭头图标被 OCR 认错的结果：2026-10-30 实测「选择队友」页左上角的
     # 返回图标识别成「《」，只写「×」永远匹配不上。
-    EXIT_TEXTS = ("关闭", "返回", "返回大厅", "×", "✕", "X", "x",
-                  "《", "く", "<", "〈", "‹", "‹")
+    EXIT_TEXTS = ("关闭", "返回", "返回大厅", "放弃", "取消", "退出",
+                  "上一页", "上一步", "×", "✕", "X", "x",
+                  "《", "く", "<", "〈", "‹")
+
+    # 返回箭头实测过的两个位置（相对坐标）：
+    #   训练页/日历页 (0.945, 0.040)  ← flow.exit_page
+    #   周末地点内页  (0.957, 0.047)  ← weekend.leave_street
+    # 两个不是同一个点，恢复时轮流点。
+    BACK_POINTS = ((0.945, 0.040), (0.957, 0.047))
+
+    # 比赛结算页：必须先把结算点掉，否则返回箭头无效。
+    # 只在这个页面允许点「下一步」这类前进按钮，别的页面一律不准（防止误开训练）。
+    RESULT_MARKS = ("比赛胜利", "比赛失败", "获得奖励", "结算")
+    RESULT_DISMISS = ("跳过比赛", "确定", "确认", "下一步", "返回大厅", "结束")
+
+    # 大厅指纹：沿用 handle_lobby 的入口文案（见 handlers/entry.py）。
+    LOBBY_MARKS = ("社团", "社团GO", "开学纳新祭", "转一转", "冠军之路")
+    # 这些文案出现就说明不是大厅主界面（队伍/训练/选人页面）
+    NOT_LOBBY_MARKS = ("保存调整", "队伍能力", "选择队友", "选择队长",
+                       "训练剧本", "失败率", "决定", "开始训练")
+    # 比赛界面标记：强标记单独生效，弱标记要两个同时出现
+    MATCH_STRONG_MARKS = ("暂停", "战术板")
+    MATCH_WEAK_MARKS = ("VS", "比分")
 
     def find_exit_control(self, texts):
-        """找当前页面顶部的退出控件（×/关闭/返回）。
+        """找当前页面顶部的退出控件（×/关闭/返回/放弃）。
 
         为什么不能只点右上角返回箭头：2026-10-30 实测「选队长」页的退出控件是
         **左上角 (52,40) 的 ×**，右上角那个位置点了 6 次画面纹丝不动，
@@ -101,6 +134,23 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
                 if t.name.strip() == name and (t.y + t.height / 2) <= limit:
                     return t
         return None
+
+    def dismiss_result_page(self, texts):
+        """比赛/结算页：把结算点掉。返回 True 表示点了一次。"""
+        names = "".join(t.name for t in texts)
+        if not any(k in names for k in self.RESULT_MARKS):
+            return False
+        target = self.match_text(texts, self.RESULT_DISMISS)
+        if target is None:
+            return False
+        self.log_info(f"结算页：点「{target.name}」")
+        self.click_box(target, after_sleep=0.8)
+        return True
+
+    def _back_arrow(self, index):
+        """按 BACK_POINTS 轮流点返回箭头（两个实测坐标）。"""
+        rx, ry = self.BACK_POINTS[index % len(self.BACK_POINTS)]
+        self.click(int(self.width * rx), int(self.height * ry), after_sleep=0.6)
 
     def recover_to_lobby(self, max_rounds=8):
         """把游戏带回大厅主界面（MCP 的 reset_to_start 基线）。
@@ -116,6 +166,7 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         返回 True 表示已经在大厅；False 表示没恢复成功（调用方决定是中止还是继续）。
         """
         last_sig, frozen = None, 0
+        back_index = 0
         texts = []
         for _ in range(max_rounds):
             texts = self._ocr_region()
@@ -135,6 +186,10 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
             if self.dismiss_popup():
                 self.sleep(0.4)
                 continue
+            # 结算页必须先把结算点掉，否则返回箭头是无效的
+            if self.dismiss_result_page(texts):
+                self.sleep(0.4)
+                continue
 
             sig = hash("|".join(sorted(t.name for t in texts)))
             frozen = frozen + 1 if sig == last_sig else 0
@@ -152,7 +207,9 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
                               f"@({exit_control.x},{exit_control.y})")
                 self.click_box(exit_control, after_sleep=0.6)
             else:
-                self.exit_page(after_sleep=0.6)
+                # 训练页和周末地点内页的箭头坐标不同，轮流点
+                self._back_arrow(back_index)
+                back_index += 1
 
         ok = self.is_lobby()
         if not ok:
