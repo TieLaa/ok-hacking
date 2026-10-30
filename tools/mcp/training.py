@@ -19,6 +19,19 @@ from _harness import borrow, run_registered
 
 STEPS = os.environ.get("OK_MCP_STEPS")
 
+# 本次运行要选的队长：由外部写 logs/mcp/next_captain.json 指定（不用重启 runtime）。
+# 内容示例：{"captain": "真崎辉世", "allow_delete": false}
+CAPTAIN_FILE = os.path.join("logs", "mcp", "next_captain.json")
+
+
+def _next_captain():
+    try:
+        import json
+        with open(CAPTAIN_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:                                # noqa: BLE001
+        return {}
+
 
 class Task(BaseTask):
 
@@ -34,8 +47,15 @@ class Task(BaseTask):
         overrides = {}
         if STEPS:
             overrides["单局最大操作数"] = int(STEPS)
-        # 安全阀：MCP 运行永远不允许删档，除非显式开了 OK_MCP_ALLOW_DELETE=1
-        if os.environ.get("OK_MCP_ALLOW_DELETE") != "1":
+        # 本次运行的队长（外部文件指定，跑完不写回 configs）
+        wanted = _next_captain()
+        if wanted.get("captain"):
+            overrides["指定队长"] = wanted["captain"]
+            self.log_info(f"本次指定队长：{wanted['captain']}")
+        # 安全阀：MCP 运行默认不允许删档，除非显式 allow_delete
+        if wanted.get("allow_delete") is True:
+            overrides["新一局删档"] = True
+        else:
             overrides["新一局删档"] = False
 
         task, result = run_registered(self, TrainingTask, overrides)
