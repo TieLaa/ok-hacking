@@ -265,6 +265,14 @@ class TrainingParsersMixin:
             quality, hue, sat = self.card_band_quality(cx)
             rank = {"金": 3, "紫": 2, "蓝": 1}.get(quality, 0)
             mate = self.has_mate_badge(cx)
+            # 「增强款」斜标签贴在卡片右上角（2026-10-30 截图：金/蓝卡都有）。
+            # 卡内说明里也有「增强 额外获得体能+14」，所以必须限定在卡片顶部
+            # y 0.24~0.35 那一带，不能整页找「增强」。
+            enhanced = any(
+                "增强" in n.name
+                and 0.24 <= (n.y + n.height / 2) / self.height <= 0.35
+                and abs((n.x + n.width / 2) / self.width - cx) < 0.14
+                for n in texts)
             # 效果文本：卡名下沿到价格药丸之间的同列文字。
             # 2026-10-26 漏读「消耗所有精力」导致 72 体力买了清空扭蛋。
             effect = " ".join(
@@ -277,6 +285,7 @@ class TrainingParsersMixin:
                 "price": int(s),
                 "quality": quality,
                 "mate": mate,
+                "enhanced": enhanced,
                 "hue": hue,
                 "sat": sat,
                 "effect": effect,
@@ -324,14 +333,20 @@ class TrainingParsersMixin:
         return "其他", hmed, smed
 
     def has_mate_badge(self, cx):
-        """卡头左上角有没有橙色「!」气泡（= 这次带队友加成）。"""
+        """卡头左上角有没有队友标记（= 这次带队友加成）。
+
+        2026-10-30 截图（扭蛋增强界面）该标记是**深蓝底 + 浅色头像 + 「!」**，
+        不是旧版的橙色「!」气泡，而且位置更靠下（y≈0.29~0.34h，旧 ROI 只到 0.26h）。
+        所以 ROI 放宽到 y 0.22~0.36，并同时接受「橙色气泡」和「深蓝紫块」两种样子。
+        金卡背景是亮黄（g 很高）、蓝卡背景是浅蓝（r 很高），都不会命中 deep。
+        """
         frame = self.frame
         if frame is None:
             return False
         h, w = frame.shape[:2]
-        x1 = int(w * (cx - 0.10))
+        x1 = int(w * (cx - 0.12))
         x2 = int(w * (cx + 0.02))
-        y1, y2 = int(h * 0.17), int(h * 0.26)
+        y1, y2 = int(h * 0.22), int(h * 0.36)
         roi = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
         if roi.size == 0:
             return False
@@ -339,7 +354,8 @@ class TrainingParsersMixin:
         g = roi[:, :, 1].astype(int)
         r = roi[:, :, 2].astype(int)
         orange = (r > 200) & (g > 90) & (g < 200) & (b < 90)
-        return int(orange.sum()) > 200
+        deep = (b > 100) & (b > r + 25) & (r < 120) & (g < 130)
+        return int(orange.sum()) > 200 or float(deep.mean()) > 0.10
 
     def weekend_state(self):
         """按「第N周 + 星期X」维护周末状态：去过哪些地点、商店看没看、公园选什么。

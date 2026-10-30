@@ -627,8 +627,12 @@ class WeekendHandlers:
         allow_clear = stamina is not None and stamina < clear_limit
 
         def score(c):
-            base = {"金": 100, "紫": 60, "蓝": 20}.get(c["quality"], 0)
-            s = base + (40 if c["mate"] else 0) + (1 if "+" in c["name"] else 0)
+            # 2026-10-30 用户口径（扭蛋增强界面）：**品质 > 增强款 > 队友**。
+            # 金 300 / 紫 200 / 蓝 100 的间隔远大于后两项，保证「优先金/紫」；
+            # 同品质里先看卡片右上角「增强款」斜标签，再看左上角队友标记。
+            base = {"金": 300, "紫": 200, "蓝": 100}.get(c["quality"], 0)
+            s = base + (30 if c.get("enhanced") else 0) + (20 if c["mate"] else 0)
+            s += 1 if "+" in c["name"] else 0
             # 2026-10-27（用户截图 45/130 三选一）：「精力恢复++」
             # （立刻恢复90，之后每天30×4天，金卡+队友）和「运控增加++」
             # 同为 141 分，max() 取第一个把恢复卡丢掉了。
@@ -656,6 +660,7 @@ class WeekendHandlers:
 
         detail = "、".join(
             f"{c['name']}({c['quality']}{'+队友' if c['mate'] else ''}"
+            f"{'·增强' if c.get('enhanced') else ''}"
             f"{'·恢复' + str(c['recover']) if c.get('recover') else ''}"
             f"{'·清空' if c['clear'] else ''}/{c['price']}币/{score(c)})" for c in cards)
         if not ok:
