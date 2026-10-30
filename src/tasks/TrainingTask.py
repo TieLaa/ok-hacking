@@ -23,11 +23,12 @@ from src.tasks.training.handlers.training import TrainingHandlers
 from src.tasks.training.handlers.weekend import WeekendHandlers
 from src.tasks.training.handlers.match import MatchHandlers
 from src.tasks.training.handlers.entry import EntryHandlers
+from src.tasks.training.handlers.fishing import FishingHandlers
 
 
 class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin,
                    PopupHandlers, TrainingHandlers, WeekendHandlers,
-                   MatchHandlers, EntryHandlers, BaseGirlsTask):
+                   MatchHandlers, EntryHandlers, FishingHandlers, BaseGirlsTask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
