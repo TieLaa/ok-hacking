@@ -930,6 +930,12 @@ class WeekendHandlers:
         discounted = [p for p in pair if info[p]["discount"]]
         chosen = None
         if mode == "扭蛋流":
+            # 2026-10-30 用户截图（第5周周五）：步行街上方出现彩色爆炸标签
+            # 「扭蛋增强！」时，**不管有没有队友都先进步行街**。
+            if self.match_text(texts, ("扭蛋增强", "扭蛋加强")):
+                self.log_info("周末地点：步行街有「扭蛋增强！」"
+                              "→ 不管队友，先进步行街")
+                return ["步行街"] + [p for p in places if p != "步行街"]
             # 用户 2026-10-30 完整口径（扭蛋流的周五/周六/周日）：
             #   1. 两边都有队友 → 先进步行街；
             #   2. 只有一边有队友 → 去有队友的那边；
