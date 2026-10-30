@@ -255,9 +255,8 @@ class TrainingFlowMixin:
         # 选择笔记页的限流标记（2026-10-30：同一页重复点击）
         self._note_auto_done = False
         self._note_next_tries = 0
-        # 钓鱼转盘的点击计数（佐久间雨乃天赋，防止认错界面时死循环）
-        self._fishing_spins = 0
-        self._fishing_last_at = 0.0
+        # 钓鱼转盘：点一次后锁定 8 秒（后面是动画，界面文字不变）
+        self._fishing_clicked_at = 0.0
 
     def snap_event(self, handler_name, texts, frame=None):
         """事件命中时存一帧 + 一份 OCR 摘要，供报告页「事件 ↔ 截图」配对。

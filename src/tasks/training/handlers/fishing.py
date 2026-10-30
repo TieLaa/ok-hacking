@@ -24,7 +24,6 @@ class FishingHandlers:
     """钓鱼天赋的两个界面（mixin，方法通过 self 访问任务状态）。"""
 
     GROUND_NAMES = ("家门口的小溪", "普通的钓鱼场", "专业的钓鱼场")
-    MAX_SPINS = 8          # 转盘最多点 8 次，防止界面认错时死循环
 
     def handle_fishing_ground(self, texts):
         """钓鱼场三选一：选最贵的（最右），再点「确定」。"""
@@ -69,28 +68,26 @@ class FishingHandlers:
         return True
 
     def handle_fishing_wheel(self, texts):
-        """「钓鱼啦！」转盘：点底部「转一转」。"""
+        """「钓鱼啦！」转盘：**只点一次**，后面全是动画。
+
+        用户口径（2026-10-30）：点一次「转一转」就够了，转盘动画要几秒；动画
+        期间界面文字还是「钓鱼啦/转一转」，旧版以为没反应就每秒再点一次（一次
+        钓鱼连点 4 次）。现在点完锁 8 秒，期间只等不点；8 秒后如果还停在
+        这一页（上次没点中/动画卡住），才允许再点一次。
+        """
         btn = self.exact_text(texts, ("转一转",))
         if btn is None and self.match_text(texts, ("钓鱼啦",)) is None:
             return False
-        # 一次钓鱼实测要点 **4 次**「转一转」（每次转一圈，转完出结果，第 4 次后
-        # 才跳「点击屏幕继续」）。旧版把计数器当整局共享，第二次钓鱼就从第 9 次
-        # 开始 → 直接被上限挡住，卡在转盘页（2026-10-30 15:41 实跑）。
-        # 所以按「两次点击间隔 > 15 秒」判断这是新的一次钓鱼，重置计数。
-        now = time.monotonic()
-        if now - getattr(self, "_fishing_last_at", 0.0) > 15:
-            self._fishing_spins = 0
-        self._fishing_last_at = now
-        spins = getattr(self, "_fishing_spins", 0) + 1
-        self._fishing_spins = spins
-        if spins > self.MAX_SPINS:
-            self.log_warning(f"钓鱼转盘连续点了 {spins} 次还没结束 → 不再点，等下一拍")
-            return False
+        if time.monotonic() - getattr(self, "_fishing_clicked_at", 0.0) < 8.0:
+            self.log_debug("钓鱼转盘：动画播放中，等它转完（不重复点）")
+            self.sleep(0.5)
+            return True
+        self._fishing_clicked_at = time.monotonic()
         if btn is not None:
             self.click_box(btn, after_sleep=0.6)
         else:
             # 按钮文字没认出来：底部中央固定位置（实测按钮中心 0.50w / 0.953h）
             self.click(int(self.width * 0.5), int(self.height * 0.953),
                        after_sleep=0.6)
-        self.log_info(f"钓鱼：点「转一转」（第 {spins} 次）")
+        self.log_info("钓鱼：点「转一转」（只点一次，后面是动画）")
         return True
