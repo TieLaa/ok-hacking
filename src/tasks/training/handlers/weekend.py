@@ -349,7 +349,12 @@ class WeekendHandlers:
             if self.click_text(("卖出",), after_sleep=0.7, must=False):
                 self.log_info("炒股：走势页卖出 → 回去买下一只")
                 return True
-            return False
+            # 2026-10-30 实机：面板上的「卖出」是白字黄底，OCR 经常读不到 →
+            # 落到 handle_dialog_continue 去点右上角「跳过」（快进图标，不推进），
+            # 连续 3 轮点不动后任务直接停。这里按位置兜底点底部黄色大按钮。
+            self.click(int(self.width * 0.5), int(self.height * 0.925), after_sleep=0.7)
+            self.log_info("炒股：没认出「卖出」→ 点底部黄色按钮兜底")
+            return True
         if self.match_text(texts, "收益排名") is not None:
             if self.click_text(("下一步",), after_sleep=0.7, must=False):
                 self.log_info("炒股：收益排名 → 下一步")
