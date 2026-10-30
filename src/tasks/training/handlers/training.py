@@ -423,12 +423,24 @@ class TrainingHandlers:
         return True
 
     def find_shop_button(self, texts):
-        """训练日右上角的「商店」按钮（只认整词；OCR 拆字时拼回来）。"""
+        """训练日右上角的商店入口按钮。
+
+        2026-10-30 实测：**比赛日**那张图右上角 OCR 读到的是「商品手册」
+        （1367,88），不是整词「商店」；旧版只认「商店」，于是整局不进店
+        （证据帧 logs/debug/1030-105329_prematch_noshop_一/）。
+        现在接受 商店 / 商品 / 手册 这几种读音，并要求落在右上角区域内。
+        """
         from ok.feature.Box import Box
         area = self.texts_in_region(texts, "top_right")
-        btn = self.exact_text(area, ("商店",))
-        if btn is not None:
-            return btn
+        for name in ("商店", "商品", "商品手册", "手册"):
+            btn = self.exact_text(area, (name,))
+            if btn is not None:
+                return btn
+        # 包含匹配兜底（OCR 拼接/多字）：长度限制住，别把正文当按钮
+        for t in area:
+            name = t.name.strip()
+            if ("商店" in name or "商品" in name) and len(name) <= 6:
+                return t
         singles = [t for t in area if t.name.strip() in ("商", "店")]
         left = next((t for t in singles if t.name.strip() == "商"), None)
         right = next((t for t in singles if t.name.strip() == "店"), None)

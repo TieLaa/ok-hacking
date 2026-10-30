@@ -1,5 +1,9 @@
 """采集卡池「卡池详情」里所有 SSR 角色的档案（2026-10-28 用户委托）。
 
+⚠️ 2026-10-30：本文件的**滚动逻辑已废弃**（固定两下大拖动，会直接越过 SR 区落到最底部
+R 区，导致「只采到几个」）。卡池详情页（SSR/SR/R 同页）请用 `tools/collect_roster.py`。
+保留本文件是因为它的字段解析和「点原型图标读技能面板」还在被复用。
+
 采集字段（用户在截图里逐个点出来教的）：
 - 名字 / 稀有度（SSR_ 前缀）
 - **风格**：名字右侧的圆形图标 —— 蓝色闪电=速度、绿色星星=技巧、红色拳头=力量（互相克制）
@@ -191,15 +195,15 @@ def parse_pool_cards(boxes, w, h):
     return cards
 
 
-def parse_character(boxes, frame, w, h):
+def parse_character(boxes, frame, w, h, rarity="SSR"):
     """角色详情页：名字 / 稀有度 / 风格 / 位置 / 技能标签。"""
     name_box = None
     for b in boxes:
-        if re.match(r"^SSR", b["text"]):
+        if re.match(rf"^{rarity}", b["text"]):
             name_box = b
             break
     name = name_box["text"] if name_box else "?"
-    name = re.sub(r"^SSR[_\-\s]*", "", name).strip() or name
+    name = re.sub(rf"^{rarity}[_\-\s]*", "", name).strip() or name
     # 名字被 OCR 拆成两个框（"SSR下" + "雨森琉璃"）时，把同一行右边那块接上
     if name_box is not None and len(name) <= 2:
         cy = name_box["y"] + name_box["h"] / 2
@@ -212,7 +216,7 @@ def parse_character(boxes, frame, w, h):
         if right and len(right[0]["text"].strip()) > len(name):
             # 左边那一截是 OCR 噪声（例：「SSR下」+「雨森琉璃」，真名是「雨森琉璃」）
             name = right[0]["text"].strip()
-    rarity = "SSR" if name_box else "?"
+    rarity = rarity if name_box else "?"
     pos = next((b["text"] for b in boxes if b["text"] in POSITIONS), "?")
     # 技能标签（如「得分手」）= 与位置同一行的另一个短词，不能带数字（避开 LV 1/10）
     tag = None
@@ -221,7 +225,7 @@ def parse_character(boxes, frame, w, h):
         pcy = pos_box["y"] + pos_box["h"] / 2
         for b in boxes:
             t = b["text"]
-            if t in POSITIONS or t.startswith("SSR") or any(ch.isdigit() for ch in t):
+            if t in POSITIONS or t.startswith(rarity) or any(ch.isdigit() for ch in t):
                 continue
             if not (2 <= len(t) <= 5):
                 continue
@@ -237,7 +241,7 @@ def parse_character(boxes, frame, w, h):
     }
 
 
-def parse_skill_panel(boxes, w, h):
+def parse_skill_panel(boxes, w, h, rarity="SSR"):
     """原型图标弹出的面板：技能名 / 流派 / 训练技能 / 升星效果。"""
     panel = []
     for b in boxes:
@@ -248,7 +252,7 @@ def parse_skill_panel(boxes, w, h):
         if b["text"] in ("满级", "OFF", "详情", "升星", "天赋", "特质",
                          "显示风格", "满级"):
             continue
-        if b["text"] in POSITIONS or b["text"].startswith("SSR"):
+        if b["text"] in POSITIONS or b["text"].startswith(rarity):
             continue
         if any(ch.isdigit() for ch in b["text"]) and len(b["text"]) <= 5:
             continue
@@ -295,13 +299,17 @@ def parse_skill_panel(boxes, w, h):
     }
 
 
-def collect(screen, limit=None, pause=0.8, verbose=False, no_scroll=False):
+def collect(screen, limit=None, pause=0.8, verbose=False, no_scroll=False,
+            rarity="SSR", max_minutes=10.0):
     """状态机采集：卡池页按顺序点卡 → 角色页采基础信息 → 点原型图标采技能 → 返回。
 
     关键点（都是实跑踩出来的）：
     - 点卡/返回都用 OCR 坐标，不按比例猜（截图带系统标题栏，y 会差 30px）
     - 第二行卡片被对话框切掉半截，点卡要试几个偏移
     - 同一画面连续 10 拍没变化就停，别发呆
+    - 滚动是否真的动了，看**第一张卡的位置**而不是整段 OCR
+      （2026-10-30：整段 OCR 可能因为动画/飘字变化，但列表没动，会假判成「滚动了」）
+    - 连续两次滚动都没动 = 到底了；另外有 max_minutes 总超时，绝对不会无限跑
     """
     rows, seen = [], set()
     stage = None            # None=待采 / "icon"=已点图标等面板 / "panel"=面板已采
@@ -310,6 +318,8 @@ def collect(screen, limit=None, pause=0.8, verbose=False, no_scroll=False):
     guard = 0
     last_txt, same_ticks = None, 0
     scrolls = 0
+    scroll_fail = 0
+    deadline = time.time() + max_minutes * 60
 
     def read():
         boxes, w, h = screen.boxes()
@@ -351,6 +361,9 @@ def collect(screen, limit=None, pause=0.8, verbose=False, no_scroll=False):
 
     while guard < 400:
         guard += 1
+        if time.time() > deadline:
+            print(f"！超过 {max_minutes:.0f} 分钟上限，收工（已采 {len(rows)} 个）")
+            return rows
         boxes, w, h, txt = read()
         if not boxes:
             time.sleep(1.0)
@@ -368,7 +381,7 @@ def collect(screen, limit=None, pause=0.8, verbose=False, no_scroll=False):
         # 1) 技能面板
         if ("训练技能" in txt) or ("升星效果" in txt):
             if stage != "panel" and rows:
-                info = parse_skill_panel(boxes, w, h)
+                info = parse_skill_panel(boxes, w, h, rarity)
                 rows[-1].update(info)
                 print(f"    技能：{info['skill_name']}｜{info['style_tag']}"
                       f"｜训练技能 {len(info['train_skill'])} 字"
@@ -390,7 +403,7 @@ def collect(screen, limit=None, pause=0.8, verbose=False, no_scroll=False):
                     return rows
                 continue
             if stage is None:
-                base = parse_character(boxes, screen.frame(), w, h)
+                base = parse_character(boxes, screen.frame(), w, h, rarity)
                 if base["name"] in seen or base["name"] == "?":
                     print(f"    （{base['name']} 已采过，跳过）")
                     if not back_to_pool():
@@ -429,22 +442,35 @@ def collect(screen, limit=None, pause=0.8, verbose=False, no_scroll=False):
                     print(f"这一屏的 {len(cards)} 张卡都采完了（未翻页）")
                     return rows
                 # 列表还要往下滚（用户 2026-10-28：下面还有两行 SSR）
-                if scrolls >= 8:
-                    print("这个卡池的卡片都跑完了")
+                if scrolls >= 12:
+                    print("滚动次数到上限，停止")
                     return rows
-                before = txt
+                before_top = cards[0]["cy"] if cards else None
                 # 滚轮对这个对话框无效，改用「按住往上拖」
                 screen.swipe(w * 0.5, h * 0.80, w * 0.5, h * 0.38)
                 screen.swipe(w * 0.5, h * 0.80, w * 0.5, h * 0.38)
                 scrolls += 1
-                after = read()[3]
-                if after == before:
+                nb, nw, nh, after_txt = read()
+                after_cards = parse_pool_cards(nb, nw, nh) if nb else []
+                after_top = after_cards[0]["cy"] if after_cards else None
+                moved = (after_top is not None and before_top is not None
+                         and abs(after_top - before_top) > 0.01)
+                if not moved and after_txt == txt:
                     screen.wheel(w * 0.5, h * 0.55, clicks=-3)   # 再兜底试一次滚轮
-                    after = read()[3]
-                if after == before:
-                    print("已经滚到底了")
-                    return rows
-                print(f"  往下滚一屏（第 {scrolls} 次）")
+                    nb, nw, nh, after_txt = read()
+                    after_cards = parse_pool_cards(nb, nw, nh) if nb else []
+                    after_top = after_cards[0]["cy"] if after_cards else None
+                    moved = (after_top is not None and before_top is not None
+                             and abs(after_top - before_top) > 0.01)
+                if not moved:
+                    scroll_fail += 1
+                    print(f"  滚动没动（{scroll_fail}/2）")
+                    if scroll_fail >= 2:
+                        print("连续两次滚动都没动 → 到列表底部")
+                        return rows
+                else:
+                    scroll_fail = 0
+                    print(f"  往下滚一屏（第 {scrolls} 次）")
                 card_idx = 0
                 continue
             card = cards[card_idx]
@@ -471,31 +497,36 @@ def collect(screen, limit=None, pause=0.8, verbose=False, no_scroll=False):
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--out", default=OUT_JSON)
+    ap.add_argument("--out", default=None)
+    ap.add_argument("--rarity", default="SSR", choices=("SSR", "SR", "R"))
+    ap.add_argument("--max-minutes", type=float, default=10.0)
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--no-scroll", action="store_true",
                     help="只采当前可见的卡片，不尝试滚动列表")
     args = ap.parse_args(argv)
+    out_path = args.out or os.path.join(
+        ROOT, "docs", "roster", f"{args.rarity.lower()}_roster.json")
 
     hwnd = find_game_hwnd()
     if not hwnd:
         print("找不到游戏窗口")
         return 1
-    print(f"游戏窗口 {hwnd}")
+    print(f"游戏窗口 {hwnd}｜采集 {args.rarity}｜上限 {args.max_minutes:.0f} 分钟")
     screen = Screen(hwnd)
     try:
         rows = collect(screen, limit=args.limit, verbose=args.verbose,
-                       no_scroll=args.no_scroll)
+                       no_scroll=args.no_scroll, rarity=args.rarity,
+                       max_minutes=args.max_minutes)
     finally:
         screen.close()
     if not rows:
         print("没采到任何角色")
         return 1
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     merged, order = {}, []
-    if os.path.exists(args.out):                     # 和已有数据合并（按名字去重）
+    if os.path.exists(out_path):                     # 和已有数据合并（按名字去重）
         try:
-            for r in json.load(open(args.out, encoding="utf-8")):
+            for r in json.load(open(out_path, encoding="utf-8")):
                 if r.get("name") and r["name"] not in merged:
                     merged[r["name"]] = r
                     order.append(r["name"])
@@ -506,9 +537,9 @@ def main(argv=None):
             order.append(r["name"])
         merged[r.get("name")] = r
     out = [merged[n] for n in order if n]
-    with open(args.out, "w", encoding="utf-8") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
-    print(f"已写入 {args.out}（本次 {len(rows)} 个，累计 {len(out)} 个）")
+    print(f"已写入 {out_path}（本次 {len(rows)} 个，累计 {len(out)} 个）")
     return 0
 
 

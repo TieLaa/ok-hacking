@@ -254,12 +254,15 @@ class EntryHandlers:
             self.click_box(auto, after_sleep=0.7)
             self.log_info("器材：自动选择")
         self.sleep(0.8)          # 同上：等卡片刷新完再找「下一步」
+        # 2026-10-30：新流程里器材页之后是「选择笔记」，不是直接「确认编队」。
+        # 只等确认编队会白等满 8 秒超时（用户实测「发呆 16 秒」就是这里 +
+        # 后面 5 秒兜底）。两个目标都算成功。
         ok = self.click_text_and_expect(
-            self._ocr_region(), "下一步", ("确认编队",), timeout=8)
+            self._ocr_region(), "下一步", ("选择笔记", "确认编队"), timeout=8)
         if not ok:
             x, y = self.flow_point("next_step")
-            ok = self.click_and_expect(x, y, ("确认编队",), timeout=5)
-        self.log_info("进入确认编队" if ok else "点「下一步」没反应")
+            ok = self.click_and_expect(x, y, ("选择笔记", "确认编队"), timeout=5)
+        self.log_info("器材：下一步" if ok else "点「下一步」没反应")
         return True
 
     def handle_confirm_team(self, texts):
