@@ -121,6 +121,13 @@ def parse_detail(boxes, w, h):
     name = "?"
     if name_box is not None:
         name = re.sub(r"^(SSR|SR|R)", "", name_box["text"]).strip()
+        name = name.lstrip("-_·•.。 　")          # OCR 噪声前缀
+    if name in ("?", "") or len(name) < 2:
+        # 兜底：详情页整段文字是 "…OFFSR亚理纱贾斯敏详情…"，直接从拼接文本里切
+        plain = "".join(b["text"] for b in boxes)
+        m = re.search(r"(SSR|SR|R)([^详情满级O]{2,10}?)详情", plain)
+        if m:
+            rarity, name = m.group(1), m.group(2).strip().lstrip("-_·•.。 　")
 
     pos = next((b["text"] for b in boxes if b["text"] in POSITIONS), "?")
     # 流派：右下角以「流」结尾的短词（小游戏流 / 商店流 / 训练流 / 扭蛋流）
