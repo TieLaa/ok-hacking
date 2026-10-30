@@ -373,24 +373,39 @@ class TrainingHandlers:
 
         用户 2026-10-29 口径：周一比赛之前还能买一次商品再进比赛；
         周日首页的「先逛店」逻辑已删除，改成这里。
-        判据：训练日主界面（星期 + 休息 + 商店）且**右下主按钮是比赛/VS**。
+
+        判据（2026-10-30 修正）：训练日主界面（有「星期」）+ 满足下面**任一**：
+        - 顶栏星期是**周一**（用户口径就是周一比赛前买）；或者
+        - 右下主按钮 OCR 到「比赛 / VS」。
+        旧版只认第二条，但比赛按钮是图标 + VS，OCR 经常读不出文字，
+        结果整局一次店都没进（见 docs/RUN_REPORT_2026-10-30.md 第四节）。
         """
         if self.style not in ("训练流", "商店流"):
             return False
-        # 2026-10-29：比赛日主界面不一定有「休息」（当天只剩比赛），
-        # 所以不再要求它；只要「星期」+ 右下主按钮是比赛/VS + 右上商店。
+        # 2026-10-29：比赛日主界面不一定有「休息」（当天只剩比赛），所以不要求它
         if self.match_text(texts, "星期") is None:
             return False
-        if self.match_text(self.texts_in_region(texts, "main_action"),
-                           ("比赛", "VS")) is None:
-            return False
-        shop = self.find_shop_button(texts)
-        if shop is None:
+        state = self.top_bar()
+        day = state.get("day")
+        main_text = self.match_text(self.texts_in_region(texts, "main_action"),
+                                    ("比赛", "VS")) is not None
+        is_match_day = (day == "一") or main_text
+        if not is_match_day:
             return False
         if self.match_text(texts, ("点击屏幕继续", "目标达成", "获得奖励")) is not None:
             return False
-        state = self.top_bar()
-        key = (state.get("week"), state.get("day"))
+
+        shop = self.find_shop_button(texts)
+        key = (state.get("week"), day)
+        if shop is None:
+            # 认成比赛日却找不到商店入口：存一帧，下次复盘直接看这张
+            # （遗留问题就是缺「比赛日主界面」的证据帧）。
+            if key != getattr(self, "_prematch_noshop_key", None):
+                self._prematch_noshop_key = key
+                self.log_warning(
+                    f"比赛日（周{day or '?'}）没找到右上角「商店」按钮 → 已存证")
+                self.dump_debug(texts, f"prematch_noshop_{day or 'x'}")
+            return False
         if key[1] is not None:
             if key == getattr(self, "_shop_day", None):
                 return False
@@ -403,7 +418,7 @@ class TrainingHandlers:
         # 赛前清空：比赛当天把零用钱花光（配置开关）
         self._shop_spend_all = bool(self.config.get("赛前清空余额", False))
         self.click_box(shop, after_sleep=0.9)
-        self.log_info(f"比赛日：{self.style}先进店买一次"
+        self.log_info(f"比赛日（周{day or '?'}）：{self.style}先进店买一次"
                       + ("（赛前清空）" if self._shop_spend_all else ""))
         return True
 
