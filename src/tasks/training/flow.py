@@ -71,8 +71,14 @@ class TrainingFlowMixin:
             interaction.abort_check = STOP.event.is_set
         # 流派只由队长决定（用户 2026-10-29）：配置里填了队长就先定流派，
         # 留空才等第一个训练日点日历解析一次。
+        # 2026-10-30 修正：**只有从大厅开新一局时才套用配置队长**。
+        # 中途接手别人的局时，实际队长可能不是配置里那个（实跑：配置春澄永远=扭蛋流，
+        # 但那一局队长是闪堂电=训练流 → 周末计划按扭蛋流走错）。
         self.reset_style()
-        self.apply_configured_captain()
+        if self.is_lobby():
+            self.apply_configured_captain()
+        else:
+            self.log_info("非大厅开局 → 流派以游戏内队长/日历为准，不套用配置队长")
         # 运行期状态每次开局都要清（2026-10-29 实机：连开第二把时任务秒退，
         # 因为 _register_stage 还停在上次的 "back"，run() 的终点判据立刻命中）
         self.reset_run_state()

@@ -239,13 +239,20 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         return any(k in names for k in self.START_MARKS)
 
     def reset_to_start(self):
-        """MCP 契约：优先回大厅；回不去但停在已知流程页时，就地开始。"""
+        """MCP 契约：只在大厅开始。
+
+        2026-10-30 事故：允许「流程中途也算起点」后，任务接手了用户正在跑的一局，
+        还把配置里的队长流派套到那一局上（实际队长不同）→ 周末计划全错。
+        现在默认**只认大厅**；确实需要中途接手时，显式设 OK_MCP_ALLOW_RESUME=1。
+        """
+        import os
         self.begin_attempt()
         if self.recover_to_lobby():
             return True
-        if self.is_startable():
-            self.log_warning("回大厅失败，但当前是已知流程页 → 直接从当前界面开始")
+        if os.environ.get("OK_MCP_ALLOW_RESUME") == "1" and self.is_startable():
+            self.log_warning("回大厅失败，OK_MCP_ALLOW_RESUME=1 → 从当前流程页接手")
             return True
+        self.log_warning("回大厅失败，且没有开启 OK_MCP_ALLOW_RESUME → 不接手中途的局")
         self.attempt_dump("reset_refused")
         return False
 

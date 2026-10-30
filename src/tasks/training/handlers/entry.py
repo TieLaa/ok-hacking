@@ -166,8 +166,10 @@ class EntryHandlers:
 
         want = (self.config.get("指定队长", "") or "").strip()
         if want and self.pick_captain_by_name(want):
+            self._captain_matched_config = True
             return True
         if want:
+            self._captain_matched_config = False
             self.log_warning(f"四张队长卡里没找到「{want}」，退回第一张")
 
         self.flow_click("captain_card", after_sleep=0.5)
@@ -294,6 +296,10 @@ class EntryHandlers:
             self.flow_click("confirm_start", after_sleep=0.8)
         # 新的一局：队长可能换了 —— 配置里填了队长就按它写流派，否则等日历解析
         self.reset_style()
+        # 只有「真的选到了配置里那个队长」才套用配置流派；
+        # 选的是别的卡（配置队长不在池子里）就等日历读实际队长。
+        if getattr(self, "_captain_matched_config", False):
+            self.apply_configured_captain()
         # 选择笔记页的限流标记清零，否则下一轮不会自动选择
         self._note_auto_done = False
         self._note_next_tries = 0
