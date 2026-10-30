@@ -13,6 +13,7 @@ from .training import TrainingHandlers
 from .weekend import WeekendHandlers
 from .match import MatchHandlers
 from .entry import EntryHandlers
+from .fishing import FishingHandlers
 
 HANDLERS = (
     # 注册球员收尾流程必须排在 handle_popup 之前：它有「关闭」按钮，
@@ -31,6 +32,10 @@ HANDLERS = (
     TrainingHandlers.handle_training_result,
     MatchHandlers.handle_match_result,
     MatchHandlers.handle_skill_select,
+    # 佐久间雨乃的天赋「钓鱼」：两页都是整页三选一/转盘，且带「确定」，
+    # 必须排在通用「确定/下一步」类 handler 之前（旧版落到 unknown 兜底，连点 3 次卡死）。
+    FishingHandlers.handle_fishing_ground,
+    FishingHandlers.handle_fishing_wheel,
     TrainingHandlers.handle_boost_training,
     TrainingHandlers.handle_subject_select,
     MatchHandlers.handle_event_choice,

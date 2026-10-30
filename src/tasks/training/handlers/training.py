@@ -206,6 +206,11 @@ class TrainingHandlers:
         out = []
         for name, key in (("left", "left"), ("right", "right")):
             items = bands[key]
+            if not items:
+                # 2026-10-30 实跑：页面切换途中 OCR 只剩标题，「这一半」一个框都没有，
+                # 下面 sum(...) / len(items) 直接 ZeroDivisionError，整个 handler 中断。
+                out.append(None)
+                continue
             sc = score_of(items)
             if sc is None:
                 out.append(None)

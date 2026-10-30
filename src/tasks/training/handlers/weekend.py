@@ -886,8 +886,9 @@ class WeekendHandlers:
 
         用户 2026-10-30 口径，优先级：
         1. **只有一个有队友** → 去有队友的；
-        2. **都有队友** → 再比**打折**（地点名左边红色大字），只有一个打折就去那个；
-        3. 其他情况（都没有队友 / 都有队友且都没打折）→ 保持原顺序
+        2. **都有队友** → 再比**打折**（地点名左边橙色「打折！」爆炸标签），只有一个打折就去那个；
+        3. **都没队友、但只有一个在打折** → 去打折的（2026-10-30 用户实机补充）；
+        4. 其他情况（都没队友也没打折 / 都打折）→ 保持原顺序
            （步行街 → 游戏厅 → 公园）。
 
         队友气泡判据见 BaseGirlsTask.venue_has_mate（深藏青色块）；
@@ -906,15 +907,23 @@ class WeekendHandlers:
                            "discount": bool(box) and self.venue_on_discount(texts, box)}
 
         mates = [p for p in pair if info[p]["mate"]]
+        discounted = [p for p in pair if info[p]["discount"]]
         chosen = None
         if len(mates) == 1:
             chosen = mates[0]
             reason = "只有一个有队友"
         elif len(mates) == 2:
-            discounted = [p for p in mates if info[p]["discount"]]
-            if len(discounted) == 1:
-                chosen = discounted[0]
+            only = [p for p in mates if info[p]["discount"]]
+            if len(only) == 1:
+                chosen = only[0]
                 reason = "都有队友，这个在打折"
+        elif len(discounted) == 1:
+            # 2026-10-30 用户实机：周六两个地点都没队友，游戏厅在打折
+            # （左侧橙色「打折！」爆炸标签，venue_on_discount 判 True），
+            # 但旧规则只在「都有队友」分支里比较折扣 → 退回原顺序选了步行街。
+            # 都没队友时，打折的那个比顺序更值得去。
+            chosen = discounted[0]
+            reason = "都没有队友，这个在打折"
         if chosen is None:
             self.log_info(f"周末地点：{info} → 没法分出高下，按原顺序 {pair}")
             return places
