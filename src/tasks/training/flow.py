@@ -69,8 +69,10 @@ class TrainingFlowMixin:
         # 等待用户空闲可能很久：把紧急停止挂进去，否则按了停止键要等用户停手才生效
         if interaction is not None and hasattr(interaction, "abort_check"):
             interaction.abort_check = STOP.event.is_set
-        # 流派只由队长决定（用户 2026-10-29）：留空则等第一个训练日点日历解析一次
+        # 流派只由队长决定（用户 2026-10-29）：配置里填了队长就先定流派，
+        # 留空才等第一个训练日点日历解析一次。
         self.reset_style()
+        self.apply_configured_captain()
         # 运行期状态每次开局都要清（2026-10-29 实机：连开第二把时任务秒退，
         # 因为 _register_stage 还停在上次的 "back"，run() 的终点判据立刻命中）
         self.reset_run_state()
@@ -450,6 +452,31 @@ class TrainingFlowMixin:
         self._style_name = None
         self._style_probe_tries = 0
         self._style_probe_at = 0.0
+
+    def apply_configured_captain(self):
+        """配置里填了「指定队长」→ 直接定流派，**不点日历**。
+
+        2026-10-30 用户反馈「星期二为什么开日历了，没这个设置吧」：
+        旧代码的「指定队长」只用于在选择队长页挑卡（handlers/entry.py），
+        从没写进 `_style`；而 `_style` 的唯一赋值点是日历解析
+        （handlers/training.py:handle_training_plan）。于是只要队长不是从日历读的，
+        第一个训练日就必然触发 handle_style_probe 去点左上角日历，
+        跟「配置里填了队长就开局有流派」的注释完全不一致。
+
+        现在：填了队长就查表定流派；查不到（SR/R 或 OCR 名不匹配）才回落到日历。
+        """
+        name = (self.config.get("指定队长", "") or "").strip()
+        if not name:
+            return False
+        style = self.style_for_name(name)
+        if not style:
+            self.log_warning(
+                f"配置的队长「{name}」不在角色表（STYLE_BY_NAME）→ 仍按日历识别流派")
+            return False
+        self._style = style
+        self._style_name = name
+        self.log_info(f"流派：{style}（配置指定队长「{name}」，跳过日历）")
+        return True
 
     def weekend_priority(self, day=None, st=None):
         """今天该去的地点（顺序 = 优先级，前一个走完才轮到下一个）。
