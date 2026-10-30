@@ -180,19 +180,31 @@ class EntryHandlers:
         self.log_info("进入选择队友" if ok else "点「下一步」没反应")
         return True
 
-    def pick_captain_by_name(self, want):
-        """逐张点开四张队长卡，读到名字匹配就点「下一步」。"""
-        for idx in (1, 2, 3, 4):
-            rx, ry = Defs.CAPTAIN_CARD[idx]
-            self.click(int(self.width_of_screen(rx)), int(self.height_of_screen(ry)),
-                       after_sleep=0.7)
-            name = self.read_captain_name()
-            self.log_info(f"队长卡 {idx}：{name or '（没认出名字）'}")
-            if name and want in name:
-                ok = self.click_text_and_expect(
-                    self._ocr_region(), "下一步", ("选择队友",), timeout=8)
-                self.log_info(f"选定队长「{name}」" + ("" if ok else "（点下一步没反应）"))
-                return True
+    def pick_captain_by_name(self, want, pages=4):
+        """按名字挑队长；一屏 4 张没找到就**往下翻一页**继续找。
+
+        2026-10-30 用户提醒：选队长列表能往下翻，春澄永远不在第一屏的 4 张里；
+        旧版只读 4 张，找不到就回落第一张，等于永远选不到她。
+        """
+        tried = 0
+        for page in range(pages):
+            for idx in (1, 2, 3, 4):
+                rx, ry = Defs.CAPTAIN_CARD[idx]
+                self.click(int(self.width_of_screen(rx)), int(self.height_of_screen(ry)),
+                           after_sleep=0.7)
+                name = self.read_captain_name()
+                tried += 1
+                self.log_info(f"队长卡 {tried}（第{page + 1}屏）：{name or '（没认出名字）'}")
+                if name and want in name:
+                    ok = self.click_text_and_expect(
+                        self._ocr_region(), "下一步", ("选择队友",), timeout=8)
+                    self.log_info(f"选定队长「{name}」" + ("" if ok else "（点下一步没反应）"))
+                    return True
+            if page < pages - 1:
+                self.log_info(f"第{page + 1}屏没有「{want}」→ 列表往下翻")
+                self.swipe(int(self.width * 0.85), int(self.height * 0.62),
+                           int(self.width * 0.85), int(self.height * 0.32),
+                           duration=0.4, after_sleep=0.8)
         return False
 
     def handle_team(self, texts):
