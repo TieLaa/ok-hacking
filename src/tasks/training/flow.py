@@ -511,6 +511,12 @@ class TrainingFlowMixin:
         places = list(WEEKEND_PLAN.get((day, self.style))
                       or WEEKEND_PLAN.get(("六", self.style))
                       or ["公园"])
+        # 2026-10-30 用户口径：扭蛋流（默认带野上泷，周五也有额外周末）先抽扭蛋，
+        # **今天没消费**才再去餐厅打工；已经买到东西就不去了。
+        if self.style == "扭蛋流" and day in ("五", "六", "日"):
+            places = ["步行街"]
+            if not st.get("gacha_spent"):
+                places.append("餐厅")
         places = [p for p in places if p != "商店"]
         if not self.config.get("允许进游戏厅", True):
             places = [p for p in places if p != "游戏厅"]

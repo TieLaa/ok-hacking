@@ -671,6 +671,8 @@ class WeekendHandlers:
 
         if self.click_text(("确定",), after_sleep=0.8, must=False):
             self.log_info("扭蛋：确定")
+            # 今天花过钱了：扭蛋流周末不必再去餐厅打工（flow.weekend_priority 用）
+            self.weekend_state()["gacha_spent"] = True
         else:
             self.click(int(self.width * 0.5), int(self.height * 0.93), after_sleep=0.8)
             self.log_warning("扭蛋：没认出「确定」，按底部中间兜底")
@@ -847,8 +849,20 @@ class WeekendHandlers:
             self.log_info("训练日的额外出行已经用过 → 返回主界面")
             return True
 
-        self.click_text("出行", after_sleep=0.6)
-        self.log_info("周末：点「出行」进地图")
+        # 2026-10-30 用户截图（野上泷周五额外周末）：对话框里有一句
+        # 「今天可以出行哦！要不…」，click_text("出行") 会命中这句**台词**
+        # （日志 `left_click 今天可以出行哦！要不 (950, 182)`），不是右侧按钮。
+        # 所以先找右侧（x>0.75w）、整词的「出行」，找不到才退回文字匹配。
+        target = next((t for t in texts if t.name.strip() == "出行"
+                       and (t.x + t.width / 2) / self.width > 0.75), None)
+        if target is not None:
+            self.click_box(target, after_sleep=0.6)
+            self.log_info("周末：点「出行」进地图"
+                          f"@({target.x + target.width // 2},"
+                          f"{target.y + target.height // 2})")
+        else:
+            self.click_text("出行", after_sleep=0.6)
+            self.log_info("周末：点「出行」进地图（按文字框兜底）")
         return True
 
     def venue_on_discount(self, texts, label_box):
@@ -894,9 +908,15 @@ class WeekendHandlers:
         队友气泡判据见 BaseGirlsTask.venue_has_mate（深藏青色块）；
         打折判据见 venue_on_discount（OCR 文本 + 名字左侧）。
         """
-        if day != "六" or self.style != "训练流":
+        if day == "六" and self.style == "训练流":
+            pair = [p for p in places if p in ("步行街", "游戏厅")]
+            mode = "训练流"
+        elif self.style == "扭蛋流" and day in ("五", "六", "日"):
+            # 野上泷（默认带）：周五额外周末也走同一套
+            pair = [p for p in places if p in ("步行街", "餐厅")]
+            mode = "扭蛋流"
+        else:
             return places
-        pair = [p for p in places if p in ("步行街", "游戏厅")]
         if len(pair) < 2:
             return places
 
@@ -909,7 +929,17 @@ class WeekendHandlers:
         mates = [p for p in pair if info[p]["mate"]]
         discounted = [p for p in pair if info[p]["discount"]]
         chosen = None
-        if len(mates) == 1:
+        if mode == "扭蛋流":
+            # 用户 2026-10-30：扭蛋流的五/六/日只进「扭蛋（步行街）」或「餐厅」；
+            # 两边都有队友时**优先进步行街**，只有餐厅有队友才去餐厅。
+            if "餐厅" in mates and "步行街" not in mates:
+                chosen = "餐厅"
+                reason = "只有餐厅有队友"
+            else:
+                chosen = "步行街"
+                reason = ("两边都有队友，先进步行街" if len(mates) == 2
+                          else "扭蛋流先进步行街")
+        elif len(mates) == 1:
             chosen = mates[0]
             reason = "只有一个有队友"
         elif len(mates) == 2:

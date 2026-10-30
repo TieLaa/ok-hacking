@@ -362,6 +362,8 @@ class TrainingParsersMixin:
                 "bought": False,
                 "park_choice": None,
                 "visited": set(),
+                # 今天在步行街抽到过扭蛋（扭蛋流决定要不要再去餐厅打工）
+                "gacha_spent": False,
                 # 训练日里出现「出行」时先外出（野上泷周五也能出行），一天只做一次
                 "outing_done": False,
             }
