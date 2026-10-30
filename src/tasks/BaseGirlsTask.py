@@ -233,11 +233,12 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
 
     # ---------- 文字 ----------
 
-    def _ocr_region(self, region_name=None, box=None):
+    def _ocr_region(self, region_name=None, box=None, frame=None):
+        """对某一帧做 OCR。传 frame 就只认这一帧（和存证图保持同一时刻）。"""
         if box is None and region_name:
             box = self.box_of_screen(*Defs.region(region_name))
         try:
-            return self.ocr(box=box) or []
+            return self.ocr(box=box, frame=frame) or []
         except Exception as e:
             self.log_debug(f"ocr failed: {e}")
             return []

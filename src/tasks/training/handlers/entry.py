@@ -214,11 +214,11 @@ class EntryHandlers:
         return True
 
     def handle_note_select(self, texts):
-        """新流程多出来的「选择笔记」页：不选笔记，直接点「下一步」。
+        """「选择笔记」页：先点「自动选择」，再点「下一步」。
 
         用户 2026-10-29 截图：标题「选择笔记」，右边一网格笔记（评分/属性），
         底部「重置 / 自动选择」，右下黄色「下一步」。
-        口径：不选，直接下一步（选了反而会占用一个笔记位）。
+        口径变更（2026-10-30）：**先自动选择，再下一步**（旧口径是不选直接过）。
         判据用标题整词，避免和「器材」页混。
         """
         # 必须**整词**：确认编队页有「未选择笔记 / 请携带笔记一起训练吧」，
@@ -227,13 +227,23 @@ class EntryHandlers:
             return False
         if self.match_text(texts, "确认编队") is not None:
             return False
+
+        auto = self.exact_text(texts, ("自动选择",))
+        if auto is not None:
+            self.click_box(auto, after_sleep=0.8)
+            self.log_info("选择笔记：自动选择")
+            # 自动选择后卡片会刷新，重新取一帧再找「下一步」
+            texts = self._ocr_region()
+        else:
+            self.log_info("选择笔记：没找到「自动选择」，直接下一步")
+
         target = self.exact_text(texts, ("下一步",))
         if target is not None:
             self.click_box(target, after_sleep=0.8)
         else:
             x, y = self.flow_point("next_step")
             self.click(x, y, after_sleep=0.8)
-        self.log_info("选择笔记：不选，直接下一步")
+        self.log_info("选择笔记：下一步")
         return True
 
     def handle_equipment(self, texts):

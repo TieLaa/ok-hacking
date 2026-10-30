@@ -93,7 +93,13 @@ class TrainingFlowMixin:
                 return False
             self._steps += 1
 
-            texts = self._ocr_region()
+            # 本拍只用这一帧：识别、存证、调试包都从它来。
+            # 坑（2026-10-30 用户反馈「截图没截到正确时间点」）：snap_event 原来在
+            # handler 返回后读 self.frame，那时采集线程已经给出**点击之后**的新帧，
+            # 存下来的是「已经翻页」的画面，报告里自然对不上事件。
+            frame = self.frame
+            self._tick_clicks = []
+            texts = self._ocr_region(frame=frame)
             if not texts:
                 self.log_debug("本帧没有识别到文字，等待")
                 self.sleep(0.3)
@@ -131,7 +137,7 @@ class TrainingFlowMixin:
             # 所以两个条件都要满足：既没有点击事件，界面也没变。
             if self._stalled(sig, last_sig, stuck_seconds):
                 self._stuck_rounds += 1
-                self.dump_debug(texts, f"stall{int(stuck_seconds)}s")
+                self.dump_debug(texts, f"stall{int(stuck_seconds)}s", frame)
                 self.log_warning(
                     f"{stuck_seconds:.0f} 秒没有点击、界面也没变化"
                     f"（上次动作：{self._last_state}）→ 已存证 logs/debug/，点击屏幕中央继续",
@@ -155,7 +161,7 @@ class TrainingFlowMixin:
 
             if self._no_change >= 3:
                 self._stuck_rounds += 1
-                self.dump_debug(texts, f"nochange{self._no_change}")
+                self.dump_debug(texts, f"nochange{self._no_change}", frame)
                 self.log_warning(
                     f"连续 {self._no_change} 次点击界面没变化（上次动作：{self._last_state}）"
                     f"→ 已存证 logs/debug/，点击屏幕中央重试")
@@ -188,7 +194,7 @@ class TrainingFlowMixin:
                 self.log_info("注册球员流程完成（已回大厅）→ 任务完成", notify=True)
                 return True
 
-            if self._handle_any(texts):
+            if self._handle_any(texts, frame):
                 self.sleep(interval)
                 continue
 
@@ -235,8 +241,12 @@ class TrainingFlowMixin:
         self._skill_dumps = 0
         self._stock_dumps = 0
 
-    def snap_event(self, handler_name, texts):
+    def snap_event(self, handler_name, texts, frame=None):
         """事件命中时存一帧 + 一份 OCR 摘要，供报告页「事件 ↔ 截图」配对。
+
+        frame 必须是**本拍识别用的那一帧**（run() 里在 handler 之前取好）。
+        不传才退回 self.frame —— 那时 handler 已经点过，可能已经是下一页，
+        这就是 2026-10-30 用户反馈「截图没截到正确时间点」的原因。
 
         限流：同一秒只存一张；只存 SNAP_HANDLERS 里的 handler。
         """
@@ -246,7 +256,7 @@ class TrainingFlowMixin:
         if now - getattr(self, "_last_snap_at", 0.0) < 1.0:
             return
         self._last_snap_at = now
-        frame = self.frame
+        frame = self.frame if frame is None else frame
         if frame is None or not frame.any():
             return
         try:
@@ -255,10 +265,15 @@ class TrainingFlowMixin:
             base = os.path.join(EVENT_DIR, f"{stamp}_{handler_name}")
             cv2.imwrite(base + ".jpg", frame, JPEG_PARAMS)
             names = [t.name.strip() for t in texts if t.name.strip()][:30]
+            # 本拍的点击（handler 在这一拍里实际点了哪里）：报告「内容」列直接用它，
+            # 不用再去日志里猜。
+            clicks = list(getattr(self, "_tick_clicks", []))
             with open(base + ".json", "w", encoding="utf-8") as f:
                 json.dump({"at": time.strftime("%Y-%m-%d %H:%M:%S",
                                                time.localtime(now)),
-                           "handler": handler_name, "texts": names},
+                           "handler": handler_name,
+                           "texts": names,
+                           "clicks": clicks},
                           f, ensure_ascii=False)
         except Exception as e:                   # noqa: BLE001
             self.log_debug(f"事件截图失败: {type(e).__name__}: {e}")
@@ -306,6 +321,10 @@ class TrainingFlowMixin:
             # click 里面暂停几秒，用开始时刻计时会让看门狗把这段让路误判成卡死。
             self._last_click_at = time.time()
             self._journal_click(record)
+            # 记进本拍点击列表，snap_event 会把它写进事件 json（报告「内容」列）
+            tick_clicks = getattr(self, "_tick_clicks", None)
+            if tick_clicks is not None:
+                tick_clicks.append({"name": record["name"], "x": px, "y": py})
 
     @staticmethod
     def _click_point(x, y):
@@ -335,18 +354,19 @@ class TrainingFlowMixin:
         except Exception:                            # noqa: BLE001
             pass
 
-    def dump_debug(self, texts, tag):
+    def dump_debug(self, texts, tag, frame=None):
         """点不动的时候存一份「调试包」：截图 + OCR + 最近动作 + 线程。
 
         用户口径（2026-10-26）：连续点 3 次界面没变化就要开始 debug。
         产物在 logs/debug/<时间>_<tag>/，logs 已被 .gitignore 忽略。
+        frame 同样要传**本拍识别那一帧**，否则存的是点击后的画面。
         """
         try:
             root = os.path.join(PROJECT_ROOT, "logs", "debug")
             folder = os.path.join(root, f"{time.strftime('%m%d-%H%M%S')}_{tag}")
             os.makedirs(folder, exist_ok=True)
 
-            frame = self.frame
+            frame = self.frame if frame is None else frame
             if frame is not None:
                 # 存 JPEG 不存 PNG：同一帧 PNG 约 2.4 MB、JPEG 约 0.36 MB，读图更快。
                 # JPEG_PARAMS 是 q95 + 4:4:4（见文件顶部），保证颜色可复核。
@@ -366,7 +386,7 @@ class TrainingFlowMixin:
         except Exception as e:                       # noqa: BLE001
             self.log_debug(f"调试包保存失败: {type(e).__name__}: {e}")
 
-    def _handle_any(self, texts):
+    def _handle_any(self, texts, frame=None):
         # 大厅子菜单（强化/招募/卡池…）：玩家自己点进去的，任务一律不动，
         # 也不要走「不认识的界面 → 点屏幕中央」兜底（2026-10-28 用户反馈：
         # 强化页被当成三选一点升级卡、招募页被 story_arrow 点了一下）。
@@ -376,7 +396,7 @@ class TrainingFlowMixin:
             try:
                 if handler(self, texts):
                     self._last_state = handler.__name__
-                    self.snap_event(handler.__name__, texts)
+                    self.snap_event(handler.__name__, texts, frame)
                     self._recent_actions.append(f"step{self._steps} {handler.__name__}")
                     # 记录「点击之后应该看到的那一帧」的指纹，下一拍对比是否变化
                     self._sig_after_click = self._signature(texts)
