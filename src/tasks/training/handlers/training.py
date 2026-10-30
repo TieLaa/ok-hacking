@@ -374,27 +374,29 @@ class TrainingHandlers:
         用户 2026-10-29 口径：周一比赛之前还能买一次商品再进比赛；
         周日首页的「先逛店」逻辑已删除，改成这里。
 
-        判据（2026-10-30 修正）：训练日主界面（有「星期」）+ 满足下面**任一**：
-        - 顶栏星期是**周一**（用户口径就是周一比赛前买）；或者
-        - 右下主按钮 OCR 到「比赛 / VS」。
-        旧版只认第二条，但比赛按钮是图标 + VS，OCR 经常读不出文字，
-        结果整局一次店都没进（见 docs/RUN_REPORT_2026-10-30.md 第四节）。
+        判据（2026-10-30）：训练日主界面（有「星期」）+ 右下主按钮区出现「比赛/VS」。
+        **不能按「周一」判断**：训练日也可能是周一，实测训练日 main_action 区域为空。
         """
         if self.style not in ("训练流", "商店流"):
             return False
         # 2026-10-29：比赛日主界面不一定有「休息」（当天只剩比赛），所以不要求它
         if self.match_text(texts, "星期") is None:
             return False
-        state = self.top_bar()
-        day = state.get("day")
+        # 判据：右下主按钮区出现「比赛」**且**画面上有 VS/跳过比赛。
+        # 只用「比赛」不够：训练日主界面的 main_action 区域也会出现「比赛」
+        # （fixture 2026-10-25-hover-tooltip：比赛 @(0.89,0.86)，但那是训练日）。
+        # 比赛日实测多一个 VS（对话区 @(0.38,0.11)）或「跳过比赛」按钮。
         main_text = self.match_text(self.texts_in_region(texts, "main_action"),
                                     ("比赛", "VS")) is not None
-        is_match_day = (day == "一") or main_text
-        if not is_match_day:
+        if not main_text:
+            return False
+        if self.match_text(texts, ("VS", "跳过比赛")) is None:
             return False
         if self.match_text(texts, ("点击屏幕继续", "目标达成", "获得奖励")) is not None:
             return False
 
+        state = self.top_bar()
+        day = state.get("day")
         shop = self.find_shop_button(texts)
         key = (state.get("week"), day)
         if shop is None:
@@ -432,14 +434,15 @@ class TrainingHandlers:
         """
         from ok.feature.Box import Box
         area = self.texts_in_region(texts, "top_right")
-        for name in ("商店", "商品", "商品手册", "手册"):
+        for name in ("商店", "商品", "商品手册", "手册", "新品", "新品上市"):
             btn = self.exact_text(area, (name,))
             if btn is not None:
+                self.log_debug(f"商店按钮：整词命中「{name}」")
                 return btn
         # 包含匹配兜底（OCR 拼接/多字）：长度限制住，别把正文当按钮
         for t in area:
             name = t.name.strip()
-            if ("商店" in name or "商品" in name) and len(name) <= 6:
+            if ("商店" in name or "商品" in name or "新品" in name) and len(name) <= 6:
                 return t
         singles = [t for t in area if t.name.strip() in ("商", "店")]
         left = next((t for t in singles if t.name.strip() == "商"), None)
