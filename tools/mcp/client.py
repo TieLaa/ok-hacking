@@ -123,12 +123,17 @@ async def main(args):
 
         if args.task:
             path = str(Path(args.task).resolve())
-            result = await session.call_tool("run_task", {"file_path": path})
-            run_id = json.loads(result.content[0].text)["run_id"]
-            print(f"提交 {path} -> {run_id}")
-            record = await _poll(session, run_id, timeout=args.timeout)
-            print("结果:", json.dumps(record, ensure_ascii=False)[:1500])
-            return 0 if record.get("state") == "succeeded" else 1
+            for round_index in range(args.repeat):
+                if args.repeat > 1:
+                    print(f"===== 第 {round_index + 1}/{args.repeat} 轮 =====")
+                result = await session.call_tool("run_task", {"file_path": path})
+                run_id = json.loads(result.content[0].text)["run_id"]
+                print(f"提交 {path} -> {run_id}")
+                record = await _poll(session, run_id, timeout=args.timeout)
+                print("结果:", json.dumps(record, ensure_ascii=False)[:1500])
+                if record.get("state") != "succeeded":
+                    return 1
+            return 0
         return 0
 
 
@@ -137,6 +142,8 @@ def cli():
     parser.add_argument("task", nargs="?", help="要提交的任务文件（绝对路径或相对仓库）")
     parser.add_argument("--reload", action="store_true", help="热重载所有任务")
     parser.add_argument("--timeout", type=float, default=600.0, help="等待终态的秒数")
+    parser.add_argument("--repeat", type=int, default=1,
+                        help="连续提交同一任务几轮（跑完一轮再起下一轮）")
     args = parser.parse_args()
     sys.exit(asyncio.run(main(args)))
 
