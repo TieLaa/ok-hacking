@@ -842,15 +842,47 @@ class WeekendHandlers:
         self.log_info("周末：点「出行」进地图")
         return True
 
+    def venue_on_discount(self, texts, label_box):
+        """地点名字**左边**有没有红色大号「打折」字样。
+
+        用户 2026-10-30：打折标记是地点名左侧的红色大号文字「打折」。
+        用 OCR 文本判（游戏里这两个字够大，OCR 能读到——2026-10-30 01:32 的
+        handle_weekend 事件里就出现了「打折」）；位置要求在同一行、且在名字左边，
+        避免把别处的「打折」算进来。
+        """
+        if label_box is None:
+            return False
+        cx = label_box.x + label_box.width / 2
+        cy = label_box.y + label_box.height / 2
+        for t in texts or []:
+            name = t.name.strip()
+            if "打折" not in name:
+                continue
+            tcx = t.x + t.width / 2
+            tcy = t.y + t.height / 2
+            if tcx < cx and abs(tcy - cy) <= self.height * 0.12:
+                return True
+        return False
+
+    def _venue_box(self, texts, place):
+        """地点名对应的文本框（整词优先，其次 ≤4 字的短框）。"""
+        box = self.exact_text(texts, (place,))
+        if box is not None:
+            return box
+        return next((t for t in texts
+                     if place in t.name and len(t.name.strip()) <= 4), None)
+
     def prefer_mate_venue(self, texts, places, day=None):
-        """训练流周六：步行街 / 游戏厅，优先进「名字上方有队友气泡」的那个。
+        """训练流周六：步行街 / 游戏厅 二选一（买扭蛋/玩小游戏当天就结束）。
 
-        用户 2026-10-30 口径：
-        - 只在「训练流 + 周六」这两个地点之间比较；
-        - 一边有一个没有 → 先进有队友的；
-        - 两个都有 / 两个都没有 → 保持原顺序（步行街 → 游戏厅 → 公园）。
+        用户 2026-10-30 口径，优先级：
+        1. **只有一个有队友** → 去有队友的；
+        2. **都有队友** → 再比**打折**（地点名左边红色大字），只有一个打折就去那个；
+        3. 其他情况（都没有队友 / 都有队友且都没打折）→ 保持原顺序
+           （步行街 → 游戏厅 → 公园）。
 
-        队友气泡判据见 BaseGirlsTask.venue_has_mate（按深藏青色块，不是 OCR 文字）。
+        队友气泡判据见 BaseGirlsTask.venue_has_mate（深藏青色块）；
+        打折判据见 venue_on_discount（OCR 文本 + 名字左侧）。
         """
         if day != "六" or self.style != "训练流":
             return places
@@ -858,21 +890,27 @@ class WeekendHandlers:
         if len(pair) < 2:
             return places
 
-        mates = {}
+        info = {}
         for place in pair:
-            box = self.exact_text(texts, (place,))
-            if box is None:
-                box = next((t for t in texts
-                            if place in t.name and len(t.name.strip()) <= 4), None)
-            mates[place] = bool(box) and self.venue_has_mate(box)
+            box = self._venue_box(texts, place)
+            info[place] = {"mate": bool(box) and self.venue_has_mate(box),
+                           "discount": bool(box) and self.venue_on_discount(texts, box)}
 
-        chosen = [p for p in pair if mates[p]]
-        if len(chosen) != 1:
-            self.log_info(f"周末队友：{mates} → 不唯一，按原顺序 {pair}")
+        mates = [p for p in pair if info[p]["mate"]]
+        chosen = None
+        if len(mates) == 1:
+            chosen = mates[0]
+            reason = "只有一个有队友"
+        elif len(mates) == 2:
+            discounted = [p for p in mates if info[p]["discount"]]
+            if len(discounted) == 1:
+                chosen = discounted[0]
+                reason = "都有队友，这个在打折"
+        if chosen is None:
+            self.log_info(f"周末地点：{info} → 没法分出高下，按原顺序 {pair}")
             return places
-        first = chosen[0]
-        self.log_info(f"周末队友：{mates} → 优先进「{first}」")
-        return [first] + [p for p in places if p != first]
+        self.log_info(f"周末地点：{info} → {reason}，先进「{chosen}」")
+        return [chosen] + [p for p in places if p != chosen]
 
     def handle_weekend(self, texts):
         """周末地图：按「星期 + 流派」去地点。
