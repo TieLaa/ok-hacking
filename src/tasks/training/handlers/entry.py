@@ -206,6 +206,11 @@ class EntryHandlers:
         但 OCR 的个别框会抖动，指纹照样变 → 旧版因此从不触发兜底。
         现在改成**比较整屏 4 张卡的名字**，完全相同就再加力拖一次。
         """
+        # 2026-10-30 用户实机：接手的局，队长列表**停在最下面**，
+        # 只往下翻会从底部继续到底，上面的角色全漏掉（这一轮就漏了近江奏）。
+        # 所以先往上翻到顶，再逐屏往下找。
+        self._captain_scroll_to_top()
+
         tried = 0
         prev_names = None
         for page in range(pages):
@@ -232,6 +237,25 @@ class EntryHandlers:
                 self._captain_scroll_page(big=False)
             prev_names = page_names
         return False
+
+    def _captain_scroll_to_top(self, max_tries=6):
+        """把队长列表翻回**顶部**（接手时可能停在最下面）。
+
+        判据用整屏文字集合：往上拖一屏后集合不再变化，说明到顶。
+        不点卡（点卡每屏要多花 3 秒）。
+        """
+        x = int(self.width * 0.82)
+        prev = frozenset(t.name.strip() for t in self._ocr_region())
+        for i in range(max_tries):
+            # 手指从上往下拖 = 内容向下滚 = 显示更上面的角色
+            self.swipe(x, int(self.height * 0.30), x, int(self.height * 0.62),
+                       duration=0.30, after_sleep=0.7)
+            cur = frozenset(t.name.strip() for t in self._ocr_region())
+            if cur == prev:
+                self.log_info(f"队长列表已翻到顶（往上翻 {i} 次）")
+                return
+            prev = cur
+        self.log_warning(f"往上翻了 {max_tries} 次还没到顶，按当前位置继续")
 
     def _captain_scroll_page(self, big=False):
         """选队长列表往下翻一页：拖动为主，滚轮兜底。
