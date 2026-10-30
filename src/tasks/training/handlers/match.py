@@ -568,7 +568,10 @@ class MatchHandlers:
                                            | (hue <= 8) | (hue >= 170))
         gold_ratio, gem_ratio = float(gold.mean()), float(gem.mean())
         self._gem_ratio = max(gold_ratio, gem_ratio)
-        return gold_ratio > 0.05 or gem_ratio > 0.02
+        # 2026-10-30 实测装备图标的金橙占比：0.074 / 0.106 / 0.131 / 0.161 / 0.532，
+        # 书/纸图标三帧都是 0.0000。阈值从 0.05 降到 0.03，留 2.5 倍余量，
+        # 免得带彩色翅膀徽章那种金色面积小的图标（0.074）哪天掉到线下漏判。
+        return gold_ratio > 0.03 or gem_ratio > 0.02
 
     def skill_card_marks(self, cx, cy):
         """这张技能卡上/角上挂了几个「队友」橙色小头像（只做诊断，不参与打分）。
