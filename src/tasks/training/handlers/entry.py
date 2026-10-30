@@ -238,7 +238,11 @@ class EntryHandlers:
 
         big=True 时拖得更远（上一屏和这一屏完全相同，说明普通幅度不够）。
         """
-        x = int(self.width * 0.5)
+        # 2026-10-30 实机：拖拽的起点必须落在**右侧卡片区**（x≈0.82w），
+        # 屏幕中央是角色立绘，列表不响应。实测同一组参数：
+        #   x=0.5w  → 文字 y 位移 0（完全没动）
+        #   x=0.82w → 按住拖动时列表就跟手，松手不回弹（像素差 6.7/8.7，卡名换人）
+        x = int(self.width * 0.82)
         if big:
             self.swipe(x, int(self.height * 0.72), x, int(self.height * 0.20),
                        duration=0.35, after_sleep=0.8)
