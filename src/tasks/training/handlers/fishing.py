@@ -17,6 +17,8 @@
 任务卡死（logs/debug/1030-152608_nochange3）。
 """
 
+import time
+
 
 class FishingHandlers:
     """钓鱼天赋的两个界面（mixin，方法通过 self 访问任务状态）。"""
@@ -71,10 +73,18 @@ class FishingHandlers:
         btn = self.exact_text(texts, ("转一转",))
         if btn is None and self.match_text(texts, ("钓鱼啦",)) is None:
             return False
+        # 一次钓鱼实测要点 **4 次**「转一转」（每次转一圈，转完出结果，第 4 次后
+        # 才跳「点击屏幕继续」）。旧版把计数器当整局共享，第二次钓鱼就从第 9 次
+        # 开始 → 直接被上限挡住，卡在转盘页（2026-10-30 15:41 实跑）。
+        # 所以按「两次点击间隔 > 15 秒」判断这是新的一次钓鱼，重置计数。
+        now = time.monotonic()
+        if now - getattr(self, "_fishing_last_at", 0.0) > 15:
+            self._fishing_spins = 0
+        self._fishing_last_at = now
         spins = getattr(self, "_fishing_spins", 0) + 1
         self._fishing_spins = spins
         if spins > self.MAX_SPINS:
-            self.log_warning(f"钓鱼转盘点了 {spins} 次还没结束 → 不再点，等下一拍")
+            self.log_warning(f"钓鱼转盘连续点了 {spins} 次还没结束 → 不再点，等下一拍")
             return False
         if btn is not None:
             self.click_box(btn, after_sleep=0.6)

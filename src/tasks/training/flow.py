@@ -257,6 +257,7 @@ class TrainingFlowMixin:
         self._note_next_tries = 0
         # 钓鱼转盘的点击计数（佐久间雨乃天赋，防止认错界面时死循环）
         self._fishing_spins = 0
+        self._fishing_last_at = 0.0
 
     def snap_event(self, handler_name, texts, frame=None):
         """事件命中时存一帧 + 一份 OCR 摘要，供报告页「事件 ↔ 截图」配对。
