@@ -32,13 +32,6 @@ python -m pip install --index-url $PypiIndex --no-deps --upgrade -r requirements
 python main_debug.py
 ```
 
-Web 界面：
-
-```powershell
-python -m pip install --index-url $PypiIndex --no-deps --upgrade -r requirements-web.txt
-python web_main_debug.py
-```
-
 锁定文件用于可重复安装，是日常开发的推荐方式。如果需要直接从
 `pyproject.toml` 解析最新的兼容依赖，可以分别使用：
 

@@ -10,12 +10,7 @@ dependencies = []
 # --no-deps, so remove generated pyside6 and pyside6-addons entries after
 # recompiling while retaining pyside6-essentials.
 qt = [
-    "ok-script[adb,default,ocr,qt]==2.0.0b7",
-    "openvino",
-    "opencv-python",
-]
-web = [
-    "ok-script[adb,default,ocr,web]==2.0.0b7",
+    "ok-script[adb,default,ocr,qt]==2.0.20",
     "openvino",
     "opencv-python",
 ]

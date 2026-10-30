@@ -4,8 +4,8 @@
 
 - `.github/workflows/build.yml`：监听 `v*` tag，运行测试、同步更新文件、打包并创建 GitHub Release。
 - `pyappify.yml`：定义应用名称、入口、图标、Python 版本和更新仓库。
-- `pyproject.toml`：定义 Qt、Web 和文档依赖 profile。
-- `requirements.txt`、`requirements-web.txt`：由 TOML profile 编译的安装锁定文件。
+- `pyproject.toml`：定义 Qt 和文档依赖 profile。
+- `requirements.txt`：由 TOML profile 编译的安装锁定文件。
 - `deploy.txt`：定义同步到独立更新仓库的文件。
 - `.github/workflows/mirrorchyan_*.yml`：可选的 Mirror酱上传和更新日志工作流。
 
@@ -52,7 +52,6 @@ GitHub Actions 会运行测试、打包 EXE，并创建对应的 GitHub Release�
 
 ```powershell
 python -m piptools compile --extra qt --strip-extras --no-header --output-file requirements.txt pyproject.toml
-python -m piptools compile --extra web --strip-extras --no-header --output-file requirements-web.txt pyproject.toml
 python -m piptools compile --extra docs --strip-extras --no-header --output-file requirements-docs.txt pyproject.toml
 ```
 

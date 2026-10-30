@@ -41,8 +41,8 @@ Uncomment the `browser` example and set:
 ```
 
 Browser targets also require `playwright`. Add it to each applicable profile in
-`pyproject.toml`, then recompile the corresponding `requirements.txt` or
-`requirements-web.txt` so local and GitHub build environments install it.
+`pyproject.toml`, then recompile the corresponding `requirements.txt`
+so local and GitHub build environments install it.
 
 ## Replace Icons
 

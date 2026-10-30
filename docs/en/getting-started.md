@@ -32,13 +32,6 @@ python -m pip install --index-url $PypiIndex --no-deps --upgrade -r requirements
 python main_debug.py
 ```
 
-For the web UI:
-
-```powershell
-python -m pip install --index-url $PypiIndex --no-deps --upgrade -r requirements-web.txt
-python web_main_debug.py
-```
-
 The lock files provide reproducible installations and are recommended for daily
 development. To resolve the latest compatible dependencies directly from
 `pyproject.toml`, use the applicable command instead:

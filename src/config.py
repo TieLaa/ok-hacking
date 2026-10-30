@@ -8,9 +8,8 @@ from src.interaction.GirlsInteraction import GirlsInteraction
 version = "dev"
 #不需要修改version, Github Action打包会自动修改
 
-app_profile = os.environ.get("PYAPPIFY_APP_PROFILE", "")
 gui_config = {
-    'type': 'web' if app_profile.casefold() == 'web' else 'qt',
+    'type': 'qt',
     'window_size': {
         'width': 1200,
         'height': 800,
@@ -18,8 +17,6 @@ gui_config = {
         'min_height': 450,
     },
 }
-if gui_config['type'] == 'web':
-    gui_config['launch_mode'] = 'pywebview'
 
 key_config_option = ConfigOption('Game Hotkey Config', { #全局配置示例
     'Echo Key': 'q',
@@ -66,6 +63,7 @@ config = {
     'custom_tasks':True, # enable creating and editing custom tasks
     'debug': False,  # Optional, default: False
     'gui': gui_config,
+    'mcp': {'enabled': False, 'port': 8765, 'artifact_directory': 'logs/mcp'}, # MCP 开发服务器, GUI 内默认关闭, 用 python -m ok mcp 单独起
     'config_folder': 'configs', #最好不要修改
     'global_configs': [key_config_option],
     # 'screenshot_processor': make_bottom_right_black, # 可选：截图时修改 frame（本游戏暂不需要）

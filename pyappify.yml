@@ -18,10 +18,3 @@ profiles:
     main_script: "main.py"
     requirements: "requirements.txt"
     pip_args: "--no-deps"
-
-  - name: "Web"
-    main_script: "web_main.py"
-    requires_python: "3.12"
-    requirements: "requirements-web.txt"
-    pip_args: "--no-deps"
-    use_pythonw: true

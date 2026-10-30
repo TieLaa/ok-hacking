@@ -41,7 +41,7 @@
 ```
 
 浏览器目标还需要 `playwright`。将它加入 `pyproject.toml` 中需要浏览器目标的
-profile，然后重新编译对应的 `requirements.txt` 或 `requirements-web.txt`，
+profile，然后重新编译对应的 `requirements.txt`，
 确保本地环境和 GitHub 打包环境都会安装该依赖。
 
 ## 替换图标

@@ -4,8 +4,8 @@
 
 - `.github/workflows/build.yml`: watches `v*` tags, tests, syncs updates, packages, and creates a GitHub Release.
 - `pyappify.yml`: defines the app name, entry point, icon, Python version, and update repositories.
-- `pyproject.toml`: defines the Qt, web, and documentation dependency profiles.
-- `requirements.txt` and `requirements-web.txt`: compiled installation locks for the TOML profiles.
+- `pyproject.toml`: defines the Qt and documentation dependency profiles.
+- `requirements.txt`: compiled installation lock for the TOML profiles.
 - `deploy.txt`: lists files copied to a dedicated update repository.
 - `.github/workflows/mirrorchyan_*.yml`: optional MirrorChyan upload and release-note workflows.
 
@@ -52,7 +52,6 @@ After changing dependencies, recompile the locks with the project virtual enviro
 
 ```powershell
 python -m piptools compile --extra qt --strip-extras --no-header --output-file requirements.txt pyproject.toml
-python -m piptools compile --extra web --strip-extras --no-header --output-file requirements-web.txt pyproject.toml
 python -m piptools compile --extra docs --strip-extras --no-header --output-file requirements-docs.txt pyproject.toml
 ```
 
