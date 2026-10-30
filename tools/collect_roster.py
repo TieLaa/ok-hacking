@@ -24,8 +24,19 @@ from tools.abs_mouse import find_game_hwnd  # noqa: E402
 from tools.collect_ssr import Screen, joined  # noqa: E402
 
 POSITIONS = ("控卫", "分卫", "中锋", "大前", "小前")
-STEP = 0.20          # 每次滚动 ~20% 屏高（实测一行卡约 0.29，留重叠避免跳过）
+STEP = 0.20          # （旧参数，仅 scroll() 的默认步长，采集改用 ROW_DY）
 MAX_SCROLLS = 14
+
+# ---- 实测几何（2026-10-30，tools/measure_pool_grid.py 量出来的）----
+# 5 列：cx = 0.228 / 0.366 / 0.505 / 0.643 / 0.783（列间距 0.139 屏宽 = 216px）
+COL_X = (0.228, 0.366, 0.505, 0.643, 0.783)
+COL_DX = 0.139
+CARD_H = 0.245       # 卡片高（轮廓检测：y 518~744 / 871）
+ROW_DY = 0.300       # 行距（同屏两行 0.428 与 0.728 的差）
+CLICK_DY = 0.095     # 点击点 = 位置标签中心 + 0.095 屏高（卡片视觉中心）
+ROWS_SSR = 4         # 18 张 / 5
+ROWS_SR = 2          # 10 张 / 5
+ROWS_R = 1           # 3 张
 
 
 def read(screen):
@@ -145,15 +156,42 @@ def section_of(headers):
     return None
 
 
+def drag_rows(screen, w, h, rows=1):
+    """按实测行距 0.30 屏高精确滚动 rows 行（不做「拖动后猜测」）。"""
+    screen.swipe(w * 0.5, h * 0.80, w * 0.5, h * (0.80 - ROW_DY * rows),
+                 steps=30, hold=0.02)
+
+
+def goto_row(screen, w, h, row_offset):
+    """回到顶部，再精确下滚 row_offset 行（详情页返回后列表会重置到顶，必须重定位）。"""
+    scroll_to_top(screen, w, h, limit=16)
+    for _ in range(row_offset):
+        drag_rows(screen, w, h, 1)
+
+
+def find_section_row(screen, w, h, rarity, limit=8):
+    """从顶部开始逐行下滚，返回目标分区首次出现时的行偏移。"""
+    scroll_to_top(screen, w, h, limit=16)
+    for k in range(limit):
+        boxes, _, _ = read(screen)
+        head = section_of(section_headers(boxes))
+        if head and head.startswith(rarity):
+            return k
+        drag_rows(screen, w, h, 1)
+    return None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--rarity", default="SR", choices=("SSR", "SR", "R"))
+    ap.add_argument("--rows", type=int, default=None, help="该分区的行数（默认按实测）")
     ap.add_argument("--out", default=None)
     ap.add_argument("--max-minutes", type=float, default=8.0)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
     out_path = args.out or os.path.join(
         ROOT, "docs", "roster", f"{args.rarity.lower()}_roster.json")
+    rows_wanted = args.rows or {"SSR": ROWS_SSR, "SR": ROWS_SR, "R": ROWS_R}[args.rarity]
 
     hwnd = find_game_hwnd()
     if not hwnd:
@@ -161,35 +199,46 @@ def main(argv=None):
         return 1
     screen = Screen(hwnd)
     deadline = time.time() + args.max_minutes * 60
-    seen, clicked, rows = set(), set(), []
-    target = f"{args.rarity}角色一览"
+    seen, rows = set(), []
     try:
         boxes, w, h = read(screen)
-        print("当前分区:", section_headers(boxes))
         if args.dry_run:
+            print("分区:", section_headers(boxes))
             for c in cards_in_view(boxes, w, h):
                 print("  卡:", c)
             return 0
 
-        print("先滚到顶…")
-        scroll_to_top(screen, w, h)
+        k = find_section_row(screen, w, h, args.rarity)
+        if k is None:
+            print(f"找不到 {args.rarity}角色一览 分区")
+            return 1
+        print(f"{args.rarity}角色一览 在上滚 {k} 行的位置；共 {rows_wanted} 行 x 5 列")
 
-        current = None
-        passed_target = False
-        no_move = 0
-        scrolls = 0
-        guard = 0
-        while guard < 300 and scrolls <= MAX_SCROLLS and time.time() < deadline:
-            guard += 1
+        for r in range(rows_wanted):
+            goto_row(screen, w, h, k + r)
             boxes, w, h = read(screen)
-            t = joined(boxes)
-
-            # 1) 详情页：解析 + 返回（列表会重置滚动位置，所以返回后重新读屏）
-            if "升星" in t and "天赋" in t:
-                info = parse_detail(boxes, w, h)
-                if info["rarity"] != args.rarity:
-                    print(f"    （{info['rarity']} {info['name']}，不是 {args.rarity}）")
-                elif info["name"] in seen or info["name"] == "?":
+            labels = cards_in_view(boxes, w, h)
+            if not labels:
+                print(f"  第 {r} 行没有标签，跳过")
+                continue
+            cy = max(c["cy"] for c in labels)      # 最下面那行 = 本行
+            print(f"  第 {r} 行 label_cy={cy:.3f}")
+            for col, cx in enumerate(COL_X):
+                if time.time() > deadline:
+                    print("  ！超时收工")
+                    return _save(rows, out_path)
+                # 每张卡点击前都重新定位（返回会重置列表）
+                goto_row(screen, w, h, k + r)
+                screen.click(w * cx, h * (cy + CLICK_DY), after=0.9)
+                b2, w2, h2 = read(screen)
+                if not ("升星" in joined(b2) and "天赋" in joined(b2)):
+                    screen.click(w * cx, h * (cy + CLICK_DY + 0.02), after=0.9)
+                    b2, w2, h2 = read(screen)
+                if not ("升星" in joined(b2) and "天赋" in joined(b2)):
+                    print(f"    ！第{r}行第{col+1}列 点不开")
+                    continue
+                info = parse_detail(b2, w2, h2)
+                if info["name"] in seen or info["name"] == "?":
                     print(f"    （{info['name']} 已采/未识别）")
                 else:
                     seen.add(info["name"])
@@ -200,63 +249,15 @@ def main(argv=None):
                     screen.click(72, 58, after=0.8)
                     if "升星" not in joined(read(screen)[0]):
                         break
-                continue
-
-            # 2) 分区判定：只有标题**以目标开头**才算（"SSR…".startswith("SR…") 为 False）
-            head = section_of(section_headers(boxes))
-            if head:
-                current = head
-                if current.startswith(args.rarity):
-                    passed_target = True
-                elif passed_target:
-                    print(f"已经越过 {target}（到 {current}），收工")
-                    break
-
-            if not (current and current.startswith(args.rarity)):
-                scrolls += 1
-                if not scroll(screen, w, h, +1):
-                    no_move += 1
-                    if no_move >= 2:
-                        print("连续两次没动 → 到底，且没找到目标分区")
-                        break
-                else:
-                    no_move = 0
-                continue
-
-            # 3) 目标分区：找一张没点过的卡，按几何点（标签中心 + 0.13 屏高）
-            cards = cards_in_view(boxes, w, h)
-            slot = None
-            for card in cards:
-                key = (current, card["pos"], round(card["cx"], 2))
-                if key not in clicked:
-                    slot = (key, card)
-                    break
-            if slot is None:
-                scrolls += 1
-                if not scroll(screen, w, h, +1):
-                    no_move += 1
-                    print(f"  滚动没动（{no_move}/2），本区已采完")
-                    if no_move >= 2:
-                        break
-                else:
-                    no_move = 0
-                continue
-
-            key, card = slot
-            clicked.add(key)
-            for dy in (0.13, 0.17):
-                screen.click(w * card["cx"], h * (card["cy"] + dy), after=0.8)
-                if "升星" in joined(read(screen)[0]):
-                    break
-            else:
-                print(f"    ！{key[1]} 点不开（{key[2]}）")
     finally:
         screen.close()
+    return _save(rows, out_path)
 
+
+def _save(rows, out_path):
     print(f"\n采到 {len(rows)} 个：")
     for r in rows:
         print("  ", r)
-
     if not rows:
         return 1
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
