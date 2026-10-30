@@ -169,8 +169,19 @@ class EntryHandlers:
             self._captain_matched_config = True
             return True
         if want:
+            # 2026-10-30 用户口径：**指定队长找不到就停，不许回落**。
+            # 旧版回落成「点当前光标位置」，翻页 4 屏后光标停在最后一张卡上，
+            # 实际选到了佐久间雨乃（日志：16 张卡里没有近江奏 → 选了佐久间），
+            # 用户明确反对这种自作主张。
             self._captain_matched_config = False
-            self.log_warning(f"四张队长卡里没找到「{want}」，退回第一张")
+            self._abort_reason = f"队长池里没有「{want}」"
+            self.log_error(f"队长池里没有「{want}」→ 停止任务，不自动选别人",
+                           notify=True)
+            self.alert("没找到指定的队长",
+                       f"队长列表（4 屏共 16 张）里没有「{want}」。\n\n"
+                       "任务已停止，不会自动改选其他角色。\n"
+                       "请刷新卡池或换一个队长后重跑。")
+            return True
 
         self.flow_click("captain_card", after_sleep=0.5)
         self.log_info("选第一位队长（列表按等级降序，第一张最强）")

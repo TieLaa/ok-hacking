@@ -92,6 +92,10 @@ class TrainingFlowMixin:
         self._last_dump = 0.0
 
         while self._steps < max_steps:
+            # 业务侧主动喊停（例如指定队长不在池子里）：下一拍就退出，不再往下点。
+            if getattr(self, "_abort_reason", None):
+                self.log_error(f"主动停止：{self._abort_reason}", notify=True)
+                return False
             if STOP.consume():
                 self.log_warning(f"按下紧急停止键（{STOP.last_press or STOP.label}）→ 立即中断，鼠标已释放",
                                  notify=True)
@@ -233,6 +237,7 @@ class TrainingFlowMixin:
         """
         self._register_stage = None
         self._reg_ticks = 0
+        self._abort_reason = None
         self._force_rest = False
         self._shop_day = None
         self._shop_try_key = None

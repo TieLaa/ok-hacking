@@ -53,6 +53,22 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
 
     # ---------- MCP / 基线 ----------
 
+    def alert(self, title, text):
+        """桌面弹窗：必须人工介入时用（例如指定队长不在池子里）。
+
+        `MessageBoxW` 是**模态阻塞**的 —— 用户不点掉，任务线程就停在这里。
+        这正是想要的效果：这种错误不许自己往下走。带上 MB_SYSTEMMODAL
+        让它盖在游戏窗口上面，否则会被全屏游戏挡住。
+        """
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0, str(text), str(title),
+                0x00000040 | 0x00001000 | 0x00040000)   # 图标i / 系统模态 / 置顶
+        except Exception as e:                       # noqa: BLE001
+            self.log_warning(f"弹窗失败（{type(e).__name__}: {e}），只留日志")
+
+
     def is_lobby(self, texts=None):
         """当前画面是不是大厅主界面。
 
