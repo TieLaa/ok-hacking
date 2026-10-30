@@ -34,6 +34,22 @@ class FishingHandlers:
             cards.sort(key=lambda t: t.x)
             target = cards[-1]
             label = target.name.strip()
+            # 价格数字偶尔能读到（2026-10-30 15:31 那帧读到「20」@(1152,584)）。
+            # 能读到两个以上就按**价格**挑最贵的，读不到退回「最右」（价格左→右递增）。
+            prices = []
+            for t in texts:
+                s = t.name.strip()
+                if not s.isdigit():
+                    continue
+                cy = (t.y + t.height / 2) / self.height
+                if 0.55 <= cy <= 0.76:
+                    prices.append((int(s), t))
+            if len(prices) >= 2:
+                price, pbox = max(prices, key=lambda p: p[0])
+                pcx = pbox.x + pbox.width / 2
+                target = min(cards, key=lambda c: abs(
+                    (c.x + c.width / 2) - pcx))
+                label = f"{target.name.strip()}（{price} 币）"
             x = int(target.x + target.width / 2)
             # 点卡片中部而不是标题：标题贴着卡片上沿，点在边缘可能选不中
             y = int(target.y + target.height / 2 + self.height * 0.12)
@@ -43,7 +59,7 @@ class FishingHandlers:
 
         self.click(x, y, after_sleep=0.45)
         self.log_info(f"钓鱼场：选最贵的「{label}」"
-                      "（价格数字 OCR 读不到，按左→右递增取最右）")
+                      "（价格读不到时按左→右递增取最右）")
         if not self.click_text(("确定",), after_sleep=0.9, must=False):
             self.click(int(self.width * 0.5), int(self.height * 0.885),
                        after_sleep=0.9)
