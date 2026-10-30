@@ -930,16 +930,28 @@ class WeekendHandlers:
         discounted = [p for p in pair if info[p]["discount"]]
         chosen = None
         if mode == "扭蛋流":
-            # 用户 2026-10-30：扭蛋流的五/六/日只进「扭蛋（步行街）」或「餐厅」；
-            # 两边都有队友时**优先进步行街**，只有餐厅有队友才去餐厅。
-            if "餐厅" in mates and "步行街" not in mates:
+            # 用户 2026-10-30 完整口径（扭蛋流的周五/周六/周日）：
+            #   1. 两边都有队友 → 先进步行街；
+            #   2. 只有一边有队友 → 去有队友的那边；
+            #   3. 都没队友 → 周五/周六去餐厅赚钱，周日去步行街消费。
+            if len(mates) == 2:
+                chosen = "步行街"
+                reason = "两边都有队友，先进步行街"
+            elif mates:
+                chosen = mates[0]
+                reason = f"只有「{mates[0]}」有队友"
+            elif day in ("五", "六"):
                 chosen = "餐厅"
-                reason = "只有餐厅有队友"
+                reason = "都没队友，周五/周六去餐厅赚钱"
             else:
                 chosen = "步行街"
-                reason = ("两边都有队友，先进步行街" if len(mates) == 2
-                          else "扭蛋流先进步行街")
-        elif len(mates) == 1:
+                reason = "都没队友，周日去步行街消费"
+            if chosen == "餐厅":
+                # 直接去打工：不再绕步行街，今天不用抽扭蛋
+                self.log_info(f"周末地点：{info} → {reason}，只去「餐厅」")
+                return ["餐厅"]
+            return [chosen] + [p for p in places if p != chosen]
+        if len(mates) == 1:
             chosen = mates[0]
             reason = "只有一个有队友"
         elif len(mates) == 2:
