@@ -86,15 +86,23 @@ ESC → 放弃并存证 `recover_failed`。遇到比赛/小游戏标记（`VS`/`
 
 ## Harness
 
-| 文件 | 用途 | 会改游戏状态 |
-|---|---|---|
-| `tools/mcp/probe.py` | 回大厅 + 报顶栏/OCR，改完代码的第一只探针 | 只点返回箭头 |
-| `tools/mcp/training_smoke.py` | 借 TrainingTask 跑 30 拍 | 会 |
-| `tools/mcp/quickmatch_tick.py` | 借 QuickMatchTask 跑 10 拍 | 会 |
+每个**已注册任务**都有一个 MCP 入口文件，业务逻辑一律不复制：
 
-`tools/mcp/_harness.py` 的 `borrow()` 负责借出已注册实例并临时设置
-`_enabled / running / current_task / artifact_directory`，退出时还原——不复制业务代码。
-步数可用 `OK_MCP_SMOKE_STEPS` / `OK_MCP_QUICK_TICKS` 调。
+| 文件 | 对应任务 | 说明 |
+|---|---|---|
+| `tools/mcp/training.py` | TrainingTask | 跑完整一轮；`OK_MCP_STEPS` 可限步；默认强制「新一局删档=False」 |
+| `tools/mcp/quickmatch.py` | QuickMatchTask | 跑 N 拍（`OK_MCP_TICKS`，默认 10），不回大厅 |
+| `tools/mcp/autobattle.py` | AutoBattleTask | 骨架任务跑 N 拍，只读画面 |
+| `tools/mcp/input_test.py` | InputTestTask | 点一次并断言界面变化 |
+| `tools/mcp/my_onetime.py` | MyOneTimeTask | 配置演示，冒烟用 |
+| `tools/mcp/probe.py` | — | 回大厅 + 报顶栏/OCR，改代码后的第一只探针 |
+| `tools/mcp/postmessage_probe.py` | — | PostMessage 有效性探测（默认不动真实鼠标） |
+
+`_harness.borrow()` 借出已注册实例并临时设置 `_enabled / running / current_task /
+artifact_directory`；`run_registered()` 额外支持本次运行的 config 覆盖（跑完还原）。
+
+⚠️ **危险开关**：`新一局删档=True` 时，遇到「训练确认」会点删档清存档。MCP 入口
+默认把它强制关掉，只有显式 `OK_MCP_ALLOW_DELETE=1` 才放行。
 
 ## 适配后要遵守的约束
 

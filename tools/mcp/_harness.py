@@ -73,3 +73,22 @@ def borrow(harness, cls, artifact_directory=None):
         raise RuntimeError(
             f"{cls.__name__} 没有注册：检查 src/config.py 的 onetime_tasks/trigger_tasks")
     return BorrowedTask(harness, task, artifact_directory)
+
+
+def run_registered(harness, cls, config_overrides=None):
+    """借已注册任务跑一次，返回 (task, run_result)。
+
+    - 临时覆盖 config（跑完还原），用于「限制步数/关闭危险开关」这类本次运行参数；
+    - 业务逻辑全在任务类里，这里不复制任何判据。
+    """
+    with borrow(harness, cls, harness.artifact_directory) as task:
+        saved = {}
+        for key, value in (config_overrides or {}).items():
+            saved[key] = task.config.get(key)
+            task.config[key] = value
+        try:
+            result = task.run()
+        finally:
+            for key, value in saved.items():
+                task.config[key] = value
+        return task, result
