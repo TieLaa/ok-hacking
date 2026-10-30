@@ -63,6 +63,19 @@ def read_log():
     return io.open(LOG, encoding="utf-8", errors="replace").read()
 
 
+def resolve_log(run_id=None, log_path=None):
+    """日志来源：GUI 入口写 logs/ok-script.log；MCP 入口写 logs/mcp/<run_id>/run.log。
+
+    两者的行首格式不同（GUI 带日期、MCP 只有 HH:MM:SS），下面 window_start /
+    log_lines 都要兼容这两种。
+    """
+    if log_path:
+        return log_path if os.path.isabs(log_path) else os.path.join(ROOT, log_path)
+    if run_id:
+        return os.path.join(ROOT, "logs", "mcp", run_id, "run.log")
+    return os.path.join(ROOT, "logs", "ok-script.log")
+
+
 def last_window(text):
     idx = text.rfind("parsers:")
     if idx < 0:
@@ -72,19 +85,25 @@ def last_window(text):
 
 def window_start(window):
     first = next((l for l in window.splitlines() if l.strip()), "")
-    return first[:19] or "-"
+    if re.match(r"^\d{4}-\d\d-\d\d", first):
+        return first[:19]
+    m = re.match(r"^(\d\d:\d\d:\d\d)", first)
+    if m:
+        return time.strftime("%Y-%m-%d ") + m.group(1)
+    return "-"
 
 
 def log_lines(window):
-    """[(hh:mm:ss, 文本)]，只留 TrainingTask 的业务行。"""
+    """[(hh:mm:ss, 文本)]，只留 TrainingTask 的业务行（兼容带/不带日期前缀）。"""
     out = []
     for line in window.splitlines():
-        if len(line) < 19:
+        m = re.match(r"^(?:\d{4}-\d\d-\d\d\s+)?(\d\d:\d\d:\d\d)", line)
+        if not m:
             continue
         if "TrainingTask" not in line or "info_set" in line:
             continue
         msg = line.split("TrainingTask:", 1)[-1].strip()
-        out.append((line[11:19], msg))
+        out.append((m.group(1), msg))
     return out
 
 
@@ -226,13 +245,19 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    global LOG
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--open", action="store_true")
+    ap.add_argument("--run-id", help="读 logs/mcp/<run_id>/run.log（MCP 入口跑的那一轮）")
+    ap.add_argument("--log", help="直接指定日志文件（相对仓库或绝对路径）")
     args = ap.parse_args()
+    LOG = resolve_log(args.run_id, args.log)
+    if not os.path.exists(LOG):
+        raise SystemExit(f"日志不存在：{LOG}")
     os.makedirs(REPORTS, exist_ok=True)
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"报告服务已启动：http://127.0.0.1:{args.port}/")
+    print(f"报告服务已启动：http://127.0.0.1:{args.port}/　日志：{LOG}")
     if args.open:
         webbrowser.open(f"http://127.0.0.1:{args.port}/")
     srv.serve_forever()
