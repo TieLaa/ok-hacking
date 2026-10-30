@@ -36,16 +36,24 @@ def main():
     args = ap.parse_args()
 
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
-    for i in range(1, args.rounds + 1):
-        write_captain(args.captain)
-        print(f"\n===== ROUND {i}/{args.rounds} {time.strftime('%H:%M:%S')} =====", flush=True)
-        code = subprocess.call(
-            [sys.executable, "tools/mcp/client.py", "tools/mcp/training.py",
-             "--timeout", str(args.timeout)],
-            cwd=ROOT, env=env)
-        print(f"[runner] round {i} exit={code} {time.strftime('%H:%M:%S')}", flush=True)
-        if i < args.rounds:
-            time.sleep(8)
+    log_path = os.path.join(ROOT, "logs", "mcp", "run_rounds.log")
+    with open(log_path, "a", encoding="utf-8") as log:
+        for i in range(1, args.rounds + 1):
+            write_captain(args.captain)
+            head = f"\n===== ROUND {i}/{args.rounds} {time.strftime('%m-%d %H:%M:%S')} =====\n"
+            print(head.strip(), flush=True)
+            log.write(head)
+            log.flush()
+            code = subprocess.call(
+                [sys.executable, "tools/mcp/client.py", "tools/mcp/training.py",
+                 "--timeout", str(args.timeout)],
+                cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+            tail = f"[runner] round {i} exit={code} {time.strftime('%H:%M:%S')}\n"
+            print(tail.strip(), flush=True)
+            log.write(tail)
+            log.flush()
+            if i < args.rounds:
+                time.sleep(8)
 
 
 if __name__ == "__main__":

@@ -115,6 +115,17 @@ async def main(args):
             print(f"  {item.get('task_id')}\t{item.get('kind')}\t"
                   f"enabled={item.get('enabled')}\t{item.get('name')}")
 
+        if args.stop:
+            r = await session.call_tool("stop_task", {"run_id": args.stop})
+            text = r.content[0].text if r.content else ""
+            print("停止请求:", str(text)[:400])
+            return 0
+
+        if args.exit_runtime:
+            await session.call_tool("exit_process", {})
+            print("已请求 runtime 退出")
+            return 0
+
         if args.reload:
             result = await session.call_tool("reload_tasks", {})
             text = result.content[0].text if result.content else ""
@@ -140,6 +151,9 @@ def cli():
     parser = argparse.ArgumentParser(description="ok-script MCP 命令行客户端")
     parser.add_argument("task", nargs="?", help="要提交的任务文件（绝对路径或相对仓库）")
     parser.add_argument("--reload", action="store_true", help="热重载所有任务")
+    parser.add_argument("--exit", dest="exit_runtime", action="store_true",
+                        help="要求 MCP runtime 自行退出（管理员进程用普通 kill 杀不掉）")
+    parser.add_argument("--stop", metavar="RUN_ID", help="停止指定 run")
     parser.add_argument("--timeout", type=float, default=600.0, help="等待终态的秒数")
     parser.add_argument("--repeat", type=int, default=1,
                         help="连续提交同一任务几轮（跑完一轮再起下一轮）")

@@ -9,6 +9,9 @@ import random
 import re
 import time
 
+import cv2
+import numpy as np
+
 from ok import BaseTask, og
 
 from src.tasks.attempt import AttemptSupport
@@ -539,8 +542,14 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
     # logs/debug/1026-184525_nochange3/frame.jpg 标定：
     #   游戏厅 0.0751 / 餐厅 0.0524 / 步行街 0.0963（有气泡）
     #   公园   0.0010（没有气泡，上方是「划船比赛!」红banner）
-    # 0.02 落在两者中间，留足余量。
     MATE_BUBBLE_MIN_FRACTION = 0.02
+    # 只比总占比会误判（2026-10-30 15:12 实跑：游戏厅确实有气泡，但步行街
+    # 建筑阴影也过了 0.02 → 日志判成「两个都有队友」，按原顺序选了步行街）。
+    # 气泡是**一整块**，阴影是零散点，所以再要求最大连通块占 ROI 的比例。
+    # 同一帧实测（1549x871，g<=b 过滤掉绿色树影）：
+    #   游戏厅 0.1196 / 餐厅 0.1457（有气泡）
+    #   步行街 0.0178 / 公园 0.0000（没有）
+    MATE_BUBBLE_BLOCK_MIN_FRACTION = 0.05
     MATE_REGION_DX = 0.07      # 标签中心左右各 7% 宽
     MATE_REGION_UP_TOP = 0.35  # 从标签中心往上 35% 高
     MATE_REGION_UP_BOTTOM = 0.10
@@ -570,8 +579,17 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         b = crop[:, :, 0].astype(int)
         g = crop[:, :, 1].astype(int)
         r = crop[:, :, 2].astype(int)
-        mask = (r < 95) & (g < 95) & (b < 140) & (b >= r)
-        return float(mask.mean()) >= self.MATE_BUBBLE_MIN_FRACTION
+        # 蓝紫调深色（气泡底色）：蓝色分量最高、绿色不超过蓝色 —— 绿色树影被排除
+        mask = (r < 95) & (g < 95) & (b < 140) & (b >= r) & (g <= b)
+        if float(mask.mean()) < self.MATE_BUBBLE_MIN_FRACTION:
+            return False
+        mask_u8 = mask.astype(np.uint8)
+        mask_u8 = cv2.morphologyEx(mask_u8, cv2.MORPH_CLOSE,
+                                   np.ones((5, 5), np.uint8))
+        n, _lab, stats, _ = cv2.connectedComponentsWithStats(mask_u8, 8)
+        biggest = max((int(stats[i, cv2.CC_STAT_AREA]) for i in range(1, n)),
+                      default=0)
+        return biggest / float(mask.size) >= self.MATE_BUBBLE_BLOCK_MIN_FRACTION
 
     def is_loading(self, texts=None):
         """加载/过场：出现「加载」字样，或**整屏只剩一个百分比**（加载进度）。
