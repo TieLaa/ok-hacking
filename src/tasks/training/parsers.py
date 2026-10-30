@@ -354,8 +354,24 @@ class TrainingParsersMixin:
         g = roi[:, :, 1].astype(int)
         r = roi[:, :, 2].astype(int)
         orange = (r > 200) & (g > 90) & (g < 200) & (b < 90)
-        deep = (b > 100) & (b > r + 25) & (r < 120) & (g < 130)
-        return int(orange.sum()) > 200 or float(deep.mean()) > 0.10
+        # 2026-10-30：队友标记也可能是「深蓝底 + 头像」的圆（BGR 约 82/60/55），
+        # 蓝色分量高于红色。用 b > r+20 就能抓住，同时不会命中金色/橙色横幅。
+        deep = (b > r + 20) & (r < 130) & (g < 130) & (b < 170)
+        mask = (orange | deep).astype(np.uint8)
+        if not mask.any():
+            return False
+        # 必须按**形状 + 相对面积**过滤：左侧第一张卡会被左上角「再买一次！」
+        # 橙色横幅覆盖（189x77，占 ROI 33%），只按像素个数会把它当队友标记
+        # （2026-10-30 16:46 日志里左卡被误记成「蓝+队友」）。
+        # 实测：横幅 frac=0.33 被排除；扭蛋标记 0.164、餐厅标记 0.062 都命中。
+        n, _lab, stats, _cent = cv2.connectedComponentsWithStats(mask, 8)
+        roi_area = float(mask.size)
+        for i in range(1, n):
+            ww, hh, area = int(stats[i, 2]), int(stats[i, 3]), int(stats[i, 4])
+            frac = area / roi_area
+            if 0.03 <= frac <= 0.28 and 0.5 <= ww / max(hh, 1) <= 2.8:
+                return True
+        return False
 
     def weekend_state(self):
         """按「第N周 + 星期X」维护周末状态：去过哪些地点、商店看没看、公园选什么。
@@ -503,7 +519,31 @@ class TrainingParsersMixin:
         cx = box.x + box.width / 2
         x1, x2 = cx - box.width * 1.4, cx + box.width * 0.1
         y1, y2 = box.y - box.height * 2.5, box.y + box.height * 0.3
-        return sum(1 for ix, iy in icons if x1 <= ix <= x2 and y1 <= iy <= y2)
+        n = sum(1 for ix, iy in icons if x1 <= ix <= x2 and y1 <= iy <= y2)
+        if n:
+            return n
+        # 2026-10-30 用户实机（餐厅，报告 #12 / #84）：队友标记换成了
+        # **深蓝底 + 头像的圆**，不是橙色小人 —— 橙色判据必然返回 0，
+        # 于是两张卡都记成「0 人」，最后按「右边优先」选错。
+        # 这里按位置兜底：文字框上方 2.4~4.6 个字高、横向 ±0.55 个字宽那一条带，
+        # 深蓝像素占比 > 0.08 记 1 个队友。
+        # 实测（1030-163846 / 1030-164421 两帧）：有标记 0.2226，没有 0.0123。
+        frame = self.frame
+        if frame is None:
+            return 0
+        fh, fw = frame.shape[:2]
+        bx1 = int(max(0, cx - box.width * 0.55))
+        bx2 = int(min(fw, cx + box.width * 0.55))
+        by1 = int(max(0, box.y - box.height * 4.6))
+        by2 = int(max(0, box.y - box.height * 2.4))
+        roi = frame[by1:by2, bx1:bx2]
+        if roi.size == 0:
+            return 0
+        b = roi[:, :, 0].astype(int)
+        g = roi[:, :, 1].astype(int)
+        r = roi[:, :, 2].astype(int)
+        deep = (b > r) & (r < 120) & (g < 120) & (b < 160)
+        return 1 if float(deep.mean()) > 0.08 else 0
 
     def is_training_plan(self, texts):
         """是不是训练计划（日历）页。
