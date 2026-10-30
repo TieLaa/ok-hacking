@@ -1,7 +1,9 @@
 from ok import TriggerTask
 
+from src.tasks.attempt import AttemptSupport
 
-class AutoBattleTask(TriggerTask):
+
+class AutoBattleTask(AttemptSupport, TriggerTask):
     """后台自动战斗骨架。
 
     这是 TriggerTask：执行器会按 trigger_interval 反复调用 run()，
@@ -25,7 +27,18 @@ class AutoBattleTask(TriggerTask):
             "检查间隔(秒)": 0.2,
         })
 
+    def reset_to_start(self):
+        """骨架任务只读画面、不改游戏状态：重置就是确认能取帧。"""
+        self.begin_attempt()
+        return self.next_frame() is not None
+
+    def verify_start_state(self):
+        """没有可断言的业务基线，只要求采集链路可用。"""
+        assert self.next_frame() is not None, "起始校验失败：拿不到画面"
+        return True
+
     def run(self):
+        self.begin_attempt()
         # 每次 run 都取一帧最新画面，避免用旧帧做判断
         frame = self.next_frame()
         if frame is None:

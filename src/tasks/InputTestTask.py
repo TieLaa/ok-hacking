@@ -37,6 +37,7 @@ class InputTestTask(BaseGirlsTask):
         })
 
     def run(self):
+        self.begin_attempt()
         text = str(self.config.get("目标文字", "")).strip()
         wait = float(self.config.get("点击后等待(秒)", 1.5))
         threshold = float(self.config.get("差异阈值(%)", 1.0))

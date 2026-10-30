@@ -11,10 +11,11 @@ import time
 
 from ok import BaseTask, og
 
+from src.tasks.attempt import AttemptSupport
 from src.tasks.ui import Defs
 
 
-class BaseGirlsTask(BaseTask):
+class BaseGirlsTask(AttemptSupport, BaseTask):
 
     def apply_user_idle_wait(self, seconds):
         """把「空闲等待(秒)」传给输入后端（GirlsInteraction），0 = 不等（一直抢）。
@@ -46,6 +47,132 @@ class BaseGirlsTask(BaseTask):
             else:
                 self.log_info(f"空闲等待：你停手 {value:.1f} 秒后脚本才继续挂机")
         return interaction
+
+    # ---------- MCP / 基线 ----------
+
+    # 比赛/小游戏里点返回箭头是危险的（可能误触暂停菜单或技能），
+    # 所以「回大厅」遇到这些界面直接放弃，交给人工。
+    MATCH_MARKS = ("VS", "暂停", "比分", "战术板")
+
+    def is_lobby(self, texts=None):
+        """当前画面是不是大厅主界面：同时有「赛事」和「训练」两个大按钮。"""
+        if texts is None:
+            texts = self._ocr_region()
+        names = "".join(t.name for t in texts or [])
+        return "赛事" in names and "训练" in names
+
+    def looks_like_match(self, texts=None):
+        """当前画面像比赛/小游戏吗（这类界面不能盲点返回）。"""
+        if texts is None:
+            texts = self._ocr_region()
+        names = "".join(t.name for t in texts or [])
+        return any(k in names for k in self.MATCH_MARKS)
+
+    def exit_page(self, after_sleep=0.45):
+        """点右上角的返回箭头退出当前页面。
+
+        坐标来自 2026-10-26 实测帧（2418x1360）：返回箭头是顶栏最右边那个
+        「↩」按钮，按钮中心约 (0.945w, 0.040h)。旧值 (0.958, 0.060) 落在按钮
+        右下角的圆角外，点十几次都不关页面（扭蛋页实测）。
+        坑：左上角 (70,55) 那个按钮在训练日会打开「训练计划」日历，不是返回。
+
+        2026-10-30 从 TrainingFlowMixin 挪到基类：MCP 的 reset_to_start 需要它，
+        而 QuickMatchTask 不继承 TrainingFlowMixin。
+        """
+        self.click(int(self.width * 0.945), int(self.height * 0.040), after_sleep=after_sleep)
+
+    # 退出当前页面可控的控件文案（OCR 精确匹配，且必须落在屏幕顶部）。
+    # 后半截是箭头图标被 OCR 认错的结果：2026-10-30 实测「选择队友」页左上角的
+    # 返回图标识别成「《」，只写「×」永远匹配不上。
+    EXIT_TEXTS = ("关闭", "返回", "返回大厅", "×", "✕", "X", "x",
+                  "《", "く", "<", "〈", "‹", "‹")
+
+    def find_exit_control(self, texts):
+        """找当前页面顶部的退出控件（×/关闭/返回）。
+
+        为什么不能只点右上角返回箭头：2026-10-30 实测「选队长」页的退出控件是
+        **左上角 (52,40) 的 ×**，右上角那个位置点了 6 次画面纹丝不动，
+        连点判定触发后 MCP 的 reset_to_start 直接失败。
+        限制在屏幕顶部 20% 内，避免把正文里的 × 当按钮。
+        """
+        limit = self.height * 0.2
+        for name in self.EXIT_TEXTS:
+            for t in texts:
+                if t.name.strip() == name and (t.y + t.height / 2) <= limit:
+                    return t
+        return None
+
+    def recover_to_lobby(self, max_rounds=8):
+        """把游戏带回大厅主界面（MCP 的 reset_to_start 基线）。
+
+        规则：
+        - 加载中 → 等，不算失败；
+        - 弹窗 → 先关弹窗；
+        - 比赛/小游戏内部 → **不盲点返回**，直接返回 False（点进暂停菜单更糟）；
+        - 其它页面 → 点右上角返回箭头；连点两次画面不变就改试 ESC（Unity 常见返回键）；
+        - 仍然不动就放弃并存证，别无限点（2026-10-30 从「选队长」页实测：
+          返回箭头对该页无效，需要 ESC 兜底）。
+
+        返回 True 表示已经在大厅；False 表示没恢复成功（调用方决定是中止还是继续）。
+        """
+        last_sig, frozen = None, 0
+        texts = []
+        for _ in range(max_rounds):
+            texts = self._ocr_region()
+            if not texts:
+                self.sleep(0.4)
+                continue
+            if self.is_lobby(texts):
+                return True
+            if self.is_loading(texts):
+                self.sleep(0.6)
+                continue
+            if self.looks_like_match(texts):
+                self.log_warning(
+                    "回大厅中止：当前在比赛/小游戏界面，盲点返回有风险，请人工退到大厅")
+                self.attempt_dump("recover_blocked", texts)
+                return False
+            if self.dismiss_popup():
+                self.sleep(0.4)
+                continue
+
+            sig = hash("|".join(sorted(t.name for t in texts)))
+            frozen = frozen + 1 if sig == last_sig else 0
+            last_sig = sig
+            if frozen >= 2:
+                self.log_warning("返回箭头连点两次画面没变，改试 ESC")
+                self.send_key("esc")
+                self.sleep(0.8)
+                if frozen >= 3:
+                    break
+                continue
+            exit_control = self.find_exit_control(texts)
+            if exit_control is not None:
+                self.log_info(f"点退出控件「{exit_control.name}」"
+                              f"@({exit_control.x},{exit_control.y})")
+                self.click_box(exit_control, after_sleep=0.6)
+            else:
+                self.exit_page(after_sleep=0.6)
+
+        ok = self.is_lobby()
+        if not ok:
+            names = "/".join(t.name for t in texts[:10])
+            self.log_warning(f"回大厅失败，当前界面：{names}")
+            self.attempt_dump("recover_failed", texts)
+        return ok
+
+    def reset_to_start(self):
+        """MCP 契约：回到大厅。GUI 路径由各任务自行决定是否调用。"""
+        self.begin_attempt()
+        return self.recover_to_lobby()
+
+    def verify_start_state(self):
+        """MCP 契约：断言「确实在大厅」。校验失败必须抛异常，不能返回 False。"""
+        texts = self._ocr_region()
+        assert texts, "起始校验失败：这一帧没有识别到任何文字（窗口被遮挡？）"
+        names = "/".join(t.name for t in texts[:10])
+        assert self.is_lobby(texts), f"起始校验失败：不在大厅主界面（识别到：{names}）"
+        return True
 
     # ---------- 文字 ----------
 

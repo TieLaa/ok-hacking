@@ -48,6 +48,15 @@ class TrainingFlowMixin:
 
     def run(self):
         self._steps = 0
+        # MCP / GUI 双入口：定产物目录。MCP 的 runner 已经 reset+verify 过，
+        # GUI/CLI 走这里自己恢复基线（失败只告警，不打断用户手动起的任务）。
+        self.begin_attempt()
+        if not self.mcp_driven:
+            if not self.recover_to_lobby():
+                self.log_warning("GUI 运行：自动回大厅失败，按当前界面继续"
+                                 "（MCP 运行遇到同样情况会直接判失败）")
+            else:
+                self.log_info("GUI 运行：已回到大厅，开始跑流程")
         STOP.ensure_started()
         self.log_info(f"紧急停止热键：{STOP.label or '（注册失败，F8/F12 轮询兜底已启用）'}")
         # 代码版本戳：确认跑的是哪份 parsers.py（圈识别调效果时排查过「改了不生效」）
@@ -399,16 +408,6 @@ class TrainingFlowMixin:
             return False
         names = "".join(t.name for t in texts)
         return not any(k in names for k in ARCADE_WAIT_MARKS)
-
-    def exit_page(self, after_sleep=0.45):
-        """点右上角的返回箭头退出当前页面。
-
-        坐标来自 2026-10-26 实测帧（2418x1360）：返回箭头是顶栏最右边那个
-        「↩」按钮，按钮中心约 (0.945w, 0.040h)。旧值 (0.958, 0.060) 落在按钮
-        右下角的圆角外，点十几次都不关页面（扭蛋页实测）。
-        坑：左上角 (70,55) 那个按钮在训练日会打开「训练计划」日历，不是返回。
-        """
-        self.click(int(self.width * 0.945), int(self.height * 0.040), after_sleep=after_sleep)
 
     @property
     def style(self):

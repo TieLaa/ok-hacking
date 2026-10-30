@@ -106,7 +106,29 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
             self.dump_unknown(texts, "repeat")
             self._mute_sig, self._mute_ticks = sig, 0
 
+    # ---------- MCP 契约 ----------
+    # 常驻任务**不能**回大厅：比赛打到一半把界面点回大厅等于毁掉这一局。
+    # 所以 reset 只确认画面可用，verify 只断言当前界面是「认识的」场景之一。
+
+    def reset_to_start(self):
+        self.begin_attempt()
+        frame = self.next_frame()
+        return frame is not None
+
+    def verify_start_state(self):
+        texts = self._ocr_region()
+        assert texts, "起始校验失败：这一帧没有识别到任何文字（窗口被遮挡？）"
+        joined = "".join(t.name for t in texts)
+        known = (self.is_lobby(texts)
+                 or self._has_match_hud(texts)
+                 or any(k in joined for k in ("训练", "比赛", "商店", "公园",
+                                              "出行", "跳过", "下一步", "失败率")))
+        assert known, ("起始校验失败：画面既不是大厅也不是比赛/训练界面"
+                       f"（识别到：{'/'.join(t.name for t in texts[:10])}）")
+        return True
+
     def run(self):
+        self.begin_attempt()
         self.apply_user_idle_wait(self.config.get("空闲等待(秒)", 3))
         texts = self._ocr_region()
         if not texts or self.is_loading(texts):
