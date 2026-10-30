@@ -308,8 +308,11 @@ class GirlsInteraction(BaseInteraction):
         return (m(SM_XVIRTUALSCREEN), m(SM_YVIRTUALSCREEN),
                 m(SM_CXVIRTUALSCREEN), m(SM_CYVIRTUALSCREEN))
 
-    def _move_to(self, x, y):
+    def _move_to(self, x, y, settle=None):
         """把光标一步移动到客户区 (x, y)。
+
+        settle：移动后停留秒数，None = 用 CURSOR_SETTLE。拖动时内部传 0，
+        由 swipe 自己按总时长分配间隔（见 swipe 的单位说明）。
 
         三种做法实测对比（2026-10-25，《篮球少女》）：
         1. `SetCursorPos`：游戏**完全感知不到**——它读 raw input，这个 API 不产生 raw 事件；
@@ -327,7 +330,7 @@ class GirlsInteraction(BaseInteraction):
         ny = int(round((sy - vy) * 65535 / max(vh - 1, 1)))
         win32api.mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
                              nx, ny, 0, 0)
-        time.sleep(CURSOR_SETTLE)
+        time.sleep(CURSOR_SETTLE if settle is None else max(settle, 0))
         return sx, sy
 
     def _move_cursor(self, x, y):
@@ -413,18 +416,36 @@ class GirlsInteraction(BaseInteraction):
         self.mark_script_input()
 
     def swipe(self, x1, y1, x2, y2, duration=0.3, settle_time=0):
-        """按住拖动（真实鼠标），用于列表/视角。"""
+        """按住拖动（真实鼠标），用于列表/视角。
+
+        duration 的单位是**毫秒**，不是秒：ok 框架的 `task.swipe(duration=0.4)`
+        会先算 `ms = int(duration * 1000)` 再传进来（task.py:280）。2026-10-30
+        实测：把 400 当秒用，12 步每步 33 秒 → 翻一页 6 分 42 秒。这里按毫秒
+        解析，并兼容直接传秒的老调用（<5 视为秒）。
+
+        节奏对齐实测正常的 `tools/collect_ssr.py:Screen.swipe`：按住后停 0.10s
+        让游戏判定成拖动，然后匀速走 24 步（每步不额外 settle），松手前停 0.05s。
+        """
+        total = float(duration)
+        if total > 5:                       # 框架传的是毫秒
+            total /= 1000.0
+        total = max(total, 0.05)
+
         self.wait_for_user_idle()
         self.ensure_foreground()
         self._move_to(x1, y1)
+        time.sleep(0.05)
         win32api.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        steps = 12
+        steps = 24
+        step_delay = max(total / steps, 0.006)
         try:
+            time.sleep(0.10)
             for i in range(1, steps + 1):
                 nx = int(x1 + (x2 - x1) * i / steps)
                 ny = int(y1 + (y2 - y1) * i / steps)
-                self._move_to(nx, ny)
-                time.sleep(max(duration, 0.05) / steps)
+                self._move_to(nx, ny, settle=0)
+                time.sleep(step_delay)
+            time.sleep(0.05)
         finally:
             win32api.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             self.mark_script_input()

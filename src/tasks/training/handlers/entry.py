@@ -202,13 +202,15 @@ class EntryHandlers:
                     return True
             if page < pages - 1:
                 self.log_info(f"第{page + 1}屏没有「{want}」→ 列表往下翻")
-                # 先用滚轮：一次事件就完成。实测按住拖动翻一页要 **6 分钟**
-                # （_move_to 逐像素走 + 每步等用户空闲），所以滚轮优先。
+                # 先用滚轮：一次事件搞定，也不用担心拖动被游戏当成点击。
+                # （2026-10-30：拖动慢到 6 分半的真因是 duration 单位 bug ——
+                #  框架传毫秒、实现按秒用，已在 GirlsInteraction.swipe 修正，
+                #  现在一次拖动约 0.3 秒。）
                 before = self._signature(self._ocr_region())
                 self.scroll(int(self.width * 0.85), int(self.height * 0.45), -3)
                 self.sleep(0.8)
                 if self._signature(self._ocr_region()) == before:
-                    self.log_warning("滚轮没翻动 → 退回按住拖动（较慢）")
+                    self.log_warning("滚轮没翻动 → 退回按住拖动")
                     self.swipe(int(self.width * 0.85), int(self.height * 0.62),
                                int(self.width * 0.85), int(self.height * 0.32),
                                duration=0.25, after_sleep=0.6)
