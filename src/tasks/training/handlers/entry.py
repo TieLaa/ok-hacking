@@ -196,14 +196,26 @@ class EntryHandlers:
 
         2026-10-30 用户提醒：选队长列表能往下翻，春澄永远不在第一屏的 4 张里；
         旧版只读 4 张，找不到就回落第一张，等于永远选不到她。
+
+        翻页方式（2026-10-30 第二次修正，用户实机反馈「几乎只移动了几个像素」）：
+        **拖动优先**，用卡池脚本 tools/collect_ssr.py 验证过的参数
+        （屏幕中央竖拖、拖 0.32 屏高、按住 0.1s 先让游戏进入 drag 状态）。
+        滚轮在选队长页实测几乎不动，只留作兜底。
+
+        判「有没有真的翻」不能看 OCR 指纹（_signature）：滚几像素时文字内容不变，
+        但 OCR 的个别框会抖动，指纹照样变 → 旧版因此从不触发兜底。
+        现在改成**比较整屏 4 张卡的名字**，完全相同就再加力拖一次。
         """
         tried = 0
+        prev_names = None
         for page in range(pages):
+            page_names = []
             for idx in (1, 2, 3, 4):
                 rx, ry = Defs.CAPTAIN_CARD[idx]
                 self.click(int(self.width_of_screen(rx)), int(self.height_of_screen(ry)),
                            after_sleep=0.7)
                 name = self.read_captain_name()
+                page_names.append(name or "")
                 tried += 1
                 self.log_info(f"队长卡 {tried}（第{page + 1}屏）：{name or '（没认出名字）'}")
                 if name and want in name:
@@ -211,21 +223,29 @@ class EntryHandlers:
                         self._ocr_region(), "下一步", ("选择队友",), timeout=8)
                     self.log_info(f"选定队长「{name}」" + ("" if ok else "（点下一步没反应）"))
                     return True
-            if page < pages - 1:
+            if prev_names is not None and page_names == prev_names:
+                self.log_warning(
+                    f"第{page + 1}屏和上一屏读到的 4 张卡完全相同 → 上次翻页没动，加大幅度重拖")
+                self._captain_scroll_page(big=True)
+            elif page < pages - 1:
                 self.log_info(f"第{page + 1}屏没有「{want}」→ 列表往下翻")
-                # 先用滚轮：一次事件搞定，也不用担心拖动被游戏当成点击。
-                # （2026-10-30：拖动慢到 6 分半的真因是 duration 单位 bug ——
-                #  框架传毫秒、实现按秒用，已在 GirlsInteraction.swipe 修正，
-                #  现在一次拖动约 0.3 秒。）
-                before = self._signature(self._ocr_region())
-                self.scroll(int(self.width * 0.85), int(self.height * 0.45), -3)
-                self.sleep(0.8)
-                if self._signature(self._ocr_region()) == before:
-                    self.log_warning("滚轮没翻动 → 退回按住拖动")
-                    self.swipe(int(self.width * 0.85), int(self.height * 0.62),
-                               int(self.width * 0.85), int(self.height * 0.32),
-                               duration=0.25, after_sleep=0.6)
+                self._captain_scroll_page(big=False)
+            prev_names = page_names
         return False
+
+    def _captain_scroll_page(self, big=False):
+        """选队长列表往下翻一页：拖动为主，滚轮兜底。
+
+        big=True 时拖得更远（上一屏和这一屏完全相同，说明普通幅度不够）。
+        """
+        x = int(self.width * 0.5)
+        if big:
+            self.swipe(x, int(self.height * 0.72), x, int(self.height * 0.20),
+                       duration=0.35, after_sleep=0.8)
+        else:
+            self.swipe(x, int(self.height * 0.62), x, int(self.height * 0.30),
+                       duration=0.30, after_sleep=0.7)
+
 
     def handle_team(self, texts):
         if self.match_text(texts, "选择队友") is None:
