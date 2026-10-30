@@ -227,13 +227,16 @@ class EntryHandlers:
         # 必须重新 OCR「下一步」，不能复用点击前的坐标（实训 2026-10-26）。
         # 2026-10-29：再等 0.8 秒让面板动画走完，否则新帧读到的还是旧位置，
         # 于是每次都要等 8 秒超时、白打一条 stall5s。
+        # 2026-10-30 实测新流程：队长 → 队友 → 选择笔记 → 器材 → 确认编队。
+        # 这里原来只等「选择器材」，而下一屏其实是「选择笔记」→ 每次白等 8 秒
+        # 超时 + 5 秒兜底（用户感受到的「发呆十几秒」）。两个都算成功。
         self.sleep(0.8)
         ok = self.click_text_and_expect(
-            self._ocr_region(), "下一步", ("选择器材",), timeout=8)
+            self._ocr_region(), "下一步", ("选择笔记", "选择器材"), timeout=8)
         if not ok:
             x, y = self.flow_point("next_step")
-            ok = self.click_and_expect(x, y, ("选择器材",), timeout=5)
-        self.log_info("进入选择器材" if ok else "点「下一步」没反应")
+            ok = self.click_and_expect(x, y, ("选择笔记", "选择器材"), timeout=5)
+        self.log_info("进入选择笔记/器材" if ok else "点「下一步」没反应")
         return True
 
     def handle_note_select(self, texts):

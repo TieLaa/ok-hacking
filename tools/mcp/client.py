@@ -117,9 +117,8 @@ async def main(args):
 
         if args.reload:
             result = await session.call_tool("reload_tasks", {})
-            run_id = json.loads(result.content[0].text)["run_id"]
-            record = await _poll(session, run_id)
-            print("重载结果:", json.dumps(record, ensure_ascii=False)[:500])
+            text = result.content[0].text if result.content else ""
+            print("重载结果:", str(text)[:800])
 
         if args.task:
             path = str(Path(args.task).resolve())
