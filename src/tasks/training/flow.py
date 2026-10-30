@@ -100,6 +100,7 @@ class TrainingFlowMixin:
             # handler 返回后读 self.frame，那时采集线程已经给出**点击之后**的新帧，
             # 存下来的是「已经翻页」的画面，报告里自然对不上事件。
             frame = self.frame
+            self._tick_frame = frame
             self._tick_clicks = []
             texts = self._ocr_region(frame=frame)
             if not texts:

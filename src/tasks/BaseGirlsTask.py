@@ -499,6 +499,46 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
 
     # ---------- 通用 ----------
 
+    # ---------- 周末地图：队友气泡 ----------
+
+    # 气泡是深藏青（约 #2e3350，带白边）。2026-10-30 用
+    # logs/debug/1026-184525_nochange3/frame.jpg 标定：
+    #   游戏厅 0.0751 / 餐厅 0.0524 / 步行街 0.0963（有气泡）
+    #   公园   0.0010（没有气泡，上方是「划船比赛!」红banner）
+    # 0.02 落在两者中间，留足余量。
+    MATE_BUBBLE_MIN_FRACTION = 0.02
+    MATE_REGION_DX = 0.07      # 标签中心左右各 7% 宽
+    MATE_REGION_UP_TOP = 0.35  # 从标签中心往上 35% 高
+    MATE_REGION_UP_BOTTOM = 0.10
+
+    def venue_has_mate(self, label_box, frame=None):
+        """周末地图上，这个地点名字**上方有没有队友对话气泡**。
+
+        判据只看颜色，不认头像：气泡是深藏青实心块，地图背景是浅蓝，
+        两者占比差 50 倍以上（见上面的标定值）。frame 默认用本拍识别那一帧
+        （run() 里存的 _tick_frame），保证和 OCR 框同一时刻。
+        """
+        frame = frame if frame is not None else getattr(self, "_tick_frame", None)
+        if frame is None:
+            frame = self.frame
+        if frame is None or label_box is None:
+            return False
+        height, width = frame.shape[:2]
+        cx = label_box.x + label_box.width / 2
+        cy = label_box.y + label_box.height / 2
+        x1 = int(max(0.0, (cx / width) - self.MATE_REGION_DX) * width)
+        x2 = int(min(1.0, (cx / width) + self.MATE_REGION_DX) * width)
+        y1 = int(max(0.0, (cy / height) - self.MATE_REGION_UP_TOP) * height)
+        y2 = int(max(0.0, (cy / height) - self.MATE_REGION_UP_BOTTOM) * height)
+        if x2 <= x1 or y2 <= y1:
+            return False
+        crop = frame[y1:y2, x1:x2]
+        b = crop[:, :, 0].astype(int)
+        g = crop[:, :, 1].astype(int)
+        r = crop[:, :, 2].astype(int)
+        mask = (r < 95) & (g < 95) & (b < 140) & (b >= r)
+        return float(mask.mean()) >= self.MATE_BUBBLE_MIN_FRACTION
+
     def is_loading(self, texts=None):
         """加载/过场：出现「加载」字样，或**整屏只剩一个百分比**（加载进度）。
 

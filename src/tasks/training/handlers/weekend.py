@@ -842,6 +842,38 @@ class WeekendHandlers:
         self.log_info("周末：点「出行」进地图")
         return True
 
+    def prefer_mate_venue(self, texts, places, day=None):
+        """训练流周六：步行街 / 游戏厅，优先进「名字上方有队友气泡」的那个。
+
+        用户 2026-10-30 口径：
+        - 只在「训练流 + 周六」这两个地点之间比较；
+        - 一边有一个没有 → 先进有队友的；
+        - 两个都有 / 两个都没有 → 保持原顺序（步行街 → 游戏厅 → 公园）。
+
+        队友气泡判据见 BaseGirlsTask.venue_has_mate（按深藏青色块，不是 OCR 文字）。
+        """
+        if day != "六" or self.style != "训练流":
+            return places
+        pair = [p for p in places if p in ("步行街", "游戏厅")]
+        if len(pair) < 2:
+            return places
+
+        mates = {}
+        for place in pair:
+            box = self.exact_text(texts, (place,))
+            if box is None:
+                box = next((t for t in texts
+                            if place in t.name and len(t.name.strip()) <= 4), None)
+            mates[place] = bool(box) and self.venue_has_mate(box)
+
+        chosen = [p for p in pair if mates[p]]
+        if len(chosen) != 1:
+            self.log_info(f"周末队友：{mates} → 不唯一，按原顺序 {pair}")
+            return places
+        first = chosen[0]
+        self.log_info(f"周末队友：{mates} → 优先进「{first}」")
+        return [first] + [p for p in places if p != first]
+
     def handle_weekend(self, texts):
         """周末地图：按「星期 + 流派」去地点。
 
@@ -877,6 +909,7 @@ class WeekendHandlers:
             return True
 
         self.log_info(f"周末{'日' if day == '日' else '六'}：待去 {todo}（已去 {sorted(visited)}）")
+        todo = self.prefer_mate_venue(texts, todo, day)
         for place in todo:
             # 只认「公园」「餐厅」这种**整框就是地点名**的按钮。
             # 2026-10-27 事故：地图页有对白「告诉她公园的草坪是假的」「要去野餐」，
