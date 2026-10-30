@@ -70,6 +70,22 @@ def card_signature(frame, w, h, cx, cy):
     return small.tobytes()
 
 
+def bring_row_into_view(screen, w, h, boxes):
+    """把「半截露在弹窗外」的行往上挪，让整张卡都可见再点。
+
+    2026-10-30 实探：第二行的位置标签在 cy≈0.82，卡身在标签**下方**，
+    而弹窗底边约 0.86 —— 点标签下方必然落在空白处，表现为「点不开」。
+    正确做法是先把这一行整体上移（内容下移），让标签落到 0.68 以上。
+    """
+    for _ in range(4):
+        cards = cards_in_view(boxes, w, h)
+        if not cards or max(c["cy"] for c in cards) <= 0.68:
+            return boxes
+        screen.swipe(w * 0.5, h * 0.40, w * 0.5, h * 0.50, steps=24, hold=0.02)
+        boxes, _, _ = read(screen)
+    return boxes
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-minutes", type=float, default=12.0)
@@ -111,6 +127,7 @@ def main(argv=None):
                 print("！超时收工")
                 break
             boxes, w, h = read(screen)
+            boxes = bring_row_into_view(screen, w, h, boxes)
             frame = screen.frame()
             cards = cards_in_view(boxes, w, h)
             print(f"\n第 {step} 屏：{len(cards)} 张卡")
