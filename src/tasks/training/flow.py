@@ -243,6 +243,9 @@ class TrainingFlowMixin:
         self._subject_dumps = 0
         self._skill_dumps = 0
         self._stock_dumps = 0
+        # 选择笔记页的限流标记（2026-10-30：同一页重复点击）
+        self._note_auto_done = False
+        self._note_next_tries = 0
 
     def snap_event(self, handler_name, texts, frame=None):
         """事件命中时存一帧 + 一份 OCR 摘要，供报告页「事件 ↔ 截图」配对。

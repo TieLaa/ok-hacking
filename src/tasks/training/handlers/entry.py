@@ -228,22 +228,35 @@ class EntryHandlers:
         if self.match_text(texts, "确认编队") is not None:
             return False
 
-        auto = self.exact_text(texts, ("自动选择",))
-        if auto is not None:
-            self.click_box(auto, after_sleep=0.8)
-            self.log_info("选择笔记：自动选择")
-            # 自动选择后卡片会刷新，重新取一帧再找「下一步」
-            texts = self._ocr_region()
-        else:
-            self.log_info("选择笔记：没找到「自动选择」，直接下一步")
+        # 2026-10-30 用户反馈「选择笔记页一直有多余点击」：
+        # 页面切换有动画，handler 每拍都会重新命中同一页 → 自动选择被反复点、
+        # 下一步连点好几次。用两个运行期标记限流（reset_run_state 会清零）：
+        #   * 自动选择：整局只点 1 次（点完卡片高亮会变，指纹去重不可靠）；
+        #   * 下一步：连续最多 2 次，之后只等切页。
+        if not getattr(self, "_note_auto_done", False):
+            auto = self.exact_text(texts, ("自动选择",))
+            if auto is not None:
+                self.click_box(auto, after_sleep=0.5)
+                self._note_auto_done = True
+                self.log_info("选择笔记：自动选择")
+                texts = self._ocr_region()
+            else:
+                self.log_info("选择笔记：没找到「自动选择」，直接下一步")
+
+        tries = getattr(self, "_note_next_tries", 0)
+        if tries >= 2:
+            self.log_debug("选择笔记：本页已点过下一步，等切页（不再点）")
+            return True
 
         target = self.exact_text(texts, ("下一步",))
         if target is not None:
-            self.click_box(target, after_sleep=0.8)
+            x = int(target.x + target.width / 2)
+            y = int(target.y + target.height / 2)
         else:
             x, y = self.flow_point("next_step")
-            self.click(x, y, after_sleep=0.8)
-        self.log_info("选择笔记：下一步")
+        self._note_next_tries = tries + 1
+        ok = self.click_and_expect(x, y, ("确认编队", "选择器材"), timeout=6)
+        self.log_info("选择笔记：下一步" + ("（已切页）" if ok else "（等切页）"))
         return True
 
     def handle_equipment(self, texts):
@@ -281,6 +294,9 @@ class EntryHandlers:
             self.flow_click("confirm_start", after_sleep=0.8)
         # 新的一局：队长可能换了 —— 配置里填了队长就按它写流派，否则等日历解析
         self.reset_style()
+        # 选择笔记页的限流标记清零，否则下一轮不会自动选择
+        self._note_auto_done = False
+        self._note_next_tries = 0
         self.log_info("开始训练（已扣体力，不可退）｜流派：" + self.style
                       + ("" if self.style_known else "（待日历识别队长）"))
         return True
