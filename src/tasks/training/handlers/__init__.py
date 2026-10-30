@@ -38,6 +38,12 @@ HANDLERS = (
     # 「跳过比赛/前往比赛」，否则没机会点商店（2026-10-29 第 5/6 周漏进）
     TrainingHandlers.handle_pre_match_shop,
     MatchHandlers.handle_prepare,
+    # 炒股页（天赋「股神!」）：必须在 handle_dialog_continue 之前。
+    # 2026-10-30 事故：股票走势面板右上角有「跳过」（快进图标），
+    # handle_dialog_continue 先命中就反复点它，什么都推进不了，
+    # 3 轮「点不动」后任务直接停。炒股页自己的「卖出/下一步」永远轮不到。
+    WeekendHandlers.handle_stock_pick,
+    WeekendHandlers.handle_stock_result,
     EntryHandlers.handle_dialog_continue,
     EntryHandlers.handle_lobby,
     EntryHandlers.handle_training_entry,
@@ -51,10 +57,6 @@ HANDLERS = (
     TrainingHandlers.handle_style_probe,
     TrainingHandlers.handle_training_day,
     TrainingHandlers.handle_training_hub,
-    # 天赋「股神!」的模拟炒股页（2026-10-29）：必须排在事件选择之前，
-    # 否则三张投资卡会被当成普通事件卡
-    WeekendHandlers.handle_stock_pick,
-    WeekendHandlers.handle_stock_result,
     WeekendHandlers.handle_activity_go,
     WeekendHandlers.handle_restaurant,
     WeekendHandlers.handle_park,
