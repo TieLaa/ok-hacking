@@ -536,18 +536,21 @@ class MatchHandlers:
         return True
 
     def skill_card_item_gem(self, cx, cy):
-        """卡片**左上角**那个小图标里有没有「道具宝石」（紫/粉色）。
+        """卡片**左上角**是不是「装备/道具」图标（橙色卡包）。
 
-        用户 2026-10-29 截图（docs/shots/2026-10-29-skill-item.png）：
-        - 左卡左上角是**书/纸**图标（黄白）→ 不是道具；
-        - 中卡左上角是道具小卡 + **紫色宝石**；
-        - 右卡左上角是道具小卡 + **粉红宝石**。
-        所以判据取「左上角那一小块里的紫/粉高饱和像素占比」，书图标没有这两种色。
-        区域按技能卡中心算：x 左移 0.14~0.06 屏宽，y 上移 0.34~0.24 屏高
-        （三个卡片位置都一样，实测图标中心落在 (cx-0.11w, cy-0.30h)）。
+        2026-10-30 用户口径：三选一优先拿左上角带装备图标的那张。
+        实测帧 logs/events/1030-151056_handle_skill_select.jpg（1549x871）：
+        - 第 1/2 张左上角是**书/纸**图标（浅黄白、低饱和）→ 金橙像素占比 0.0000；
+        - 第 3 张左上角是**橙色卡包 + 绿色小人徽章** → 金橙像素占比 0.1608。
+        另两帧（150859 / 151057）也是 0.0000 / 0.0000 / 0.1060。
+
+        旧版判据找的是紫/粉宝石（hue 125~165 / <=8 / >=170），而这套装备图标
+        是橙色 —— 占比只有 0.0065，永远判 0，于是每次都退回按品质选第一张。
+        现在改成「金橙色占比 > 0.05」，紫/粉宝石作为旧版图标兼容保留。
         """
         frame = self.frame
         if frame is None:
+            self._gem_ratio = 0.0
             return False
         h, w = frame.shape[:2]
         x1 = int(w * (cx - 0.14))
@@ -556,14 +559,16 @@ class MatchHandlers:
         y2 = int(h * (cy - 0.24))
         roi = frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
         if roi.size == 0:
+            self._gem_ratio = 0.0
             return False
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         hue, sat, val = cv2.split(hsv)
+        gold = (sat > 120) & (val > 140) & (hue >= 10) & (hue <= 40)
         gem = (sat > 110) & (val > 110) & (((hue >= 125) & (hue <= 165))
                                            | (hue <= 8) | (hue >= 170))
-        ratio = float(gem.mean())
-        self._gem_ratio = ratio
-        return ratio > 0.02
+        gold_ratio, gem_ratio = float(gold.mean()), float(gem.mean())
+        self._gem_ratio = max(gold_ratio, gem_ratio)
+        return gold_ratio > 0.05 or gem_ratio > 0.02
 
     def skill_card_marks(self, cx, cy):
         """这张技能卡上/角上挂了几个「队友」橙色小头像（只做诊断，不参与打分）。
