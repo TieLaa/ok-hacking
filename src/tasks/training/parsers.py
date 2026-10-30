@@ -874,7 +874,7 @@ class TrainingParsersMixin:
                 return False
             cy = decide.y + decide.height / 2
 
-        x1, x2 = int(w * 0.66), int(w * 0.93)
+        x1, x2 = int(w * 0.74), int(w * 0.98)
         y1 = max(0, int(cy - h * 0.06))
         y2 = min(h, int(cy + h * 0.06))
         roi = frame[y1:y2, x1:x2]
@@ -886,10 +886,15 @@ class TrainingParsersMixin:
         green = (sat > 90) & (val > 120) & (hue >= 35) & (hue <= 90)
         ring = np.zeros(roi.shape[:2], dtype=bool)
         t = max(4, int(h * 0.008))
+        # 2026-10-30 修：原先取整圈 + x 只到 0.93w。
+        # 实测（logs/debug/1030-154728_subject07.jpg，第 1 行「投射」明显有彩框）
+        # 整圈 0.66~0.93w = 0.197，差 0.003 没过 0.20 门限 → 判「无彩框」，
+        # 于是把第一位带彩框的科目录成了 0 分，选了别的。
+        # 原因：左右两条环带一条落在按钮外背景、一条落在按钮内部渐变，纯噪声。
+        # 改成只采**上下两条边**、x 覆盖到按钮真实右边缘（0.74~0.98w）后：
+        #   彩框帧 0.24~0.49，非彩框（选中高亮/鞋图标绿）0~0.158，门限 0.20 分得开。
         ring[:t, :] = True
         ring[-t:, :] = True
-        ring[:, :t] = True
-        ring[:, -t:] = True
         hit = (magenta | green) & ring
         ratio = float(hit.sum()) / max(int(ring.sum()), 1)
         # 2026-10-29：彩框在度假页漏识别，把占比一直打出来（quiet 只管提示级别），
