@@ -235,6 +235,9 @@ class TrainingFlowMixin:
         self._reg_ticks = 0
         self._force_rest = False
         self._shop_day = None
+        self._shop_try_key = None
+        self._shop_try_count = 0
+        self._prematch_noshop_key = None
         self._shop_spend_all = False
         self._shop_seen = False
         self._arcade_wait_since = 0.0

@@ -410,13 +410,23 @@ class TrainingHandlers:
             return False
         if key[1] is not None:
             if key == getattr(self, "_shop_day", None):
-                return False
+                return False            # 今天已经真进过店
+            if key == getattr(self, "_shop_try_key", None) and \
+                    getattr(self, "_shop_try_count", 0) >= 2:
+                return False            # 今天点了两次都没打开，别再空点
         else:
             # 星期读不到：退化成「至少隔 60 秒再进一次」，不要整天都不进
             if time.monotonic() - getattr(self, "_shop_at", 0.0) < 60:
                 return False
-            self._shop_at = time.monotonic()
-        self._shop_day = key
+        # 这里**不能**直接写 _shop_day：点完不等于进店。2026-10-30 15:04:04 那下
+        # 点在顶栏「新品上市」上、店面没开，但 _shop_day 已经记账 → 当天再也没进店。
+        # 记账改到 handle_shop 确认商店页真的出现之后。
+        self._shop_at = time.monotonic()
+        if key == getattr(self, "_shop_try_key", None):
+            self._shop_try_count = getattr(self, "_shop_try_count", 0) + 1
+        else:
+            self._shop_try_key = key
+            self._shop_try_count = 1
         # 赛前清空：比赛当天把零用钱花光（配置开关）
         self._shop_spend_all = bool(self.config.get("赛前清空余额", False))
         self.click_box(shop, after_sleep=0.9)
@@ -425,25 +435,19 @@ class TrainingHandlers:
         return True
 
     def find_shop_button(self, texts):
-        """训练日右上角的商店入口按钮。
+        """比赛日右上角的商店入口按钮。
 
-        2026-10-30 实测：**比赛日**那张图右上角 OCR 读到的是「商品手册」
-        （1367,88），不是整词「商店」；旧版只认「商店」，于是整局不进店
-        （证据帧 logs/debug/1030-105329_prematch_noshop_一/）。
-        现在接受 商店 / 商品 / 手册 这几种读音，并要求落在右上角区域内。
+        2026-10-30 两次实跑的教训：
+        * logs/debug/1030-150147_prematch_noshop_一/ocr.txt：OCR 把「商店」拆成
+          「商」(1396,178)「店」(1426,178) 两个单字，中心 y=0.216 —— 旧版用
+          top_right（y<0.20）去筛，两个字被切在区域外，整局不进店。
+        * 同一块区域里还有顶栏的「新品上市」(1421,101)，旧版把「新品/新品上市」
+          当候选，结果点在 y=0.10 的导航条上，店面根本没打开（15:04:04 那次）。
+        所以：区域换成 shop_entry（放宽到 y<0.32），去掉「新品」类候选，
+        「商」+「店」单字合并排最前 —— 那才是入口按钮本身。
         """
         from ok.feature.Box import Box
-        area = self.texts_in_region(texts, "top_right")
-        for name in ("商店", "商品", "商品手册", "手册", "新品", "新品上市"):
-            btn = self.exact_text(area, (name,))
-            if btn is not None:
-                self.log_debug(f"商店按钮：整词命中「{name}」")
-                return btn
-        # 包含匹配兜底（OCR 拼接/多字）：长度限制住，别把正文当按钮
-        for t in area:
-            name = t.name.strip()
-            if ("商店" in name or "商品" in name or "新品" in name) and len(name) <= 6:
-                return t
+        area = self.texts_in_region(texts, "shop_entry")
         singles = [t for t in area if t.name.strip() in ("商", "店")]
         left = next((t for t in singles if t.name.strip() == "商"), None)
         right = next((t for t in singles if t.name.strip() == "店"), None)
@@ -454,6 +458,21 @@ class TrainingHandlers:
                 w = max(left.x + left.width, right.x + right.width) - x
                 h = max(left.y + left.height, right.y + right.height) - y
                 return Box(name="商店", x=x, y=y, width=w, height=h)
+        for name in ("商店", "商品", "商品手册", "手册"):
+            btn = self.exact_text(area, (name,))
+            if btn is not None:
+                self.log_debug(f"商店按钮：整词命中「{name}」")
+                return btn
+        # 包含匹配兜底（OCR 拼接/多字）：长度限制住，别把正文当按钮
+        for t in area:
+            name = t.name.strip()
+            if ("商店" in name or "商品" in name) and len(name) <= 6:
+                return t
+        # 只剩一个单字（另一个字没识别出来）：点这个字，总比整局不进店强
+        single = left or right
+        if single is not None:
+            return Box(name="商店", x=single.x, y=single.y,
+                       width=single.width, height=single.height)
         return self.exact_text(texts, ("商店",))
 
     def handle_boost_training(self, texts):

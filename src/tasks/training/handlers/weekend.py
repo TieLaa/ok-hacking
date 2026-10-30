@@ -438,6 +438,10 @@ class WeekendHandlers:
         if self.match_text(texts, ("上新时间", "剩余", "能力详情")) is None:
             return False
 
+        # 确认真的进到商店页了才记「今天逛过」。比赛日点入口可能点空
+        # （2026-10-30 15:04:04 点在顶栏「新品上市」上），那样当天该允许再试一次。
+        self._shop_day = getattr(self, "_shop_try_key", None)
+
         policy = self.config.get("购买策略", "只买金和紫")
         money = self.read_money(texts)
         items = self.read_shop_items(texts)
