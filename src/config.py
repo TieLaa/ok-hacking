@@ -63,6 +63,9 @@ config = {
     'custom_tasks':True, # enable creating and editing custom tasks
     'debug': False,  # Optional, default: False
     'gui': gui_config,
+    # 「监控」页：自定义 Tab，布局在 configs/monitor_layout.json，
+    # 样式在 assets/ui/monitor.*.qss，两者改完存盘即生效（不用重启）。
+    'custom_tabs': [["src.ui.MonitorTab", "MonitorTab"]],
     'mcp': {'enabled': False, 'port': 8765, 'artifact_directory': 'logs/mcp'}, # MCP 开发服务器, GUI 内默认关闭, 用 python -m ok mcp 单独起
     'config_folder': 'configs', #最好不要修改
     'global_configs': [key_config_option],

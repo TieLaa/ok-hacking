@@ -43,6 +43,20 @@ ARCADE_WAIT_MARKS = ("出行", "公园", "步行街", "游戏厅", "失败率", 
                      "训练", "商店", "获得奖励", "点击屏幕继续", "跳过", "下一步",
                      "战术板", "赛程")
 
+# 监控页（src/ui/MonitorTab.py）只认「域」这一级，不逐个 handler 维护文案。
+# 新增 handler 只要模块不变就自动归类，不会因为漏配而显示成技术名。
+UI_AREAS = {
+    "popup": "弹窗",
+    "training": "训练",
+    "weekend": "周末",
+    "match": "比赛",
+    "entry": "入口",
+    "fishing": "钓鱼",
+}
+
+# 监控页时间线保留的条数（UI 那边最多显示 8 条）。
+UI_EVENT_LIMIT = 12
+
 
 class TrainingFlowMixin:
 
@@ -113,6 +127,11 @@ class TrainingFlowMixin:
             self._tick_frame = frame
             self._tick_clicks = []
             texts = self._ocr_region(frame=frame)
+            # 本拍 OCR 结果留给 top_bar()：**裁剪顶栏再 OCR 会把体力条的「/」吃掉**
+            # （`0/130` → `301130`），STAMINA_RE 要求有斜杠 → stamina 恒为 None，
+            # 「精力不够就改选不耗精力那张」的规则全部失效（2026-10-31 餐厅实跑）。
+            # 整帧这份是免费的，直接复用。
+            self._tick_texts = texts
             if not texts:
                 self.log_debug("本帧没有识别到文字，等待")
                 self.sleep(0.3)
@@ -418,6 +437,7 @@ class TrainingFlowMixin:
             try:
                 if handler(self, texts):
                     self._last_state = handler.__name__
+                    self._ui_event(handler)
                     self.snap_event(handler.__name__, texts, frame)
                     self._recent_actions.append(f"step{self._steps} {handler.__name__}")
                     # 记录「点击之后应该看到的那一帧」的指纹，下一拍对比是否变化
@@ -438,6 +458,59 @@ class TrainingFlowMixin:
                 self.log_error(f"{handler.__name__} 异常: {type(e).__name__}: {e}")
                 return True  # 吞掉这一拍，避免同一异常反复刷屏
         return False
+
+    @property
+    def no_captain_mode(self):
+        """无队长模式：`指定队长` 为空且开关打开。
+
+        用户 2026-10-31 口径：取消勾选队长 = 不接开局，只跑已经手动开好的局。
+        开关 `无队长不接开局` 默认 True；回归桩（tools/check_handlers.py）关掉它，
+        这样测试仍然按旧的「自动选第一个」流程跑。
+        """
+        if not self.config.get("无队长不接开局", True):
+            return False
+        return not (self.config.get("指定队长", "") or "").strip()
+
+    def stop_for_no_captain(self, stage):
+        """无队长模式下遇到开局页面：不动作，直接让 run() 停下。"""
+        self._abort_reason = f"无队长模式：不接开局（遇到「{stage}」）"
+        self.log_warning(
+            f"无队长模式：只跑已有局，当前在「{stage}」→ 停止任务。"
+            "勾选队长后才会自动开局（启程/选人/笔记/器材）。",
+            notify=True)
+        return True
+
+    def _ui_event(self, handler):
+        """把本拍命中的 handler 写进 info，供「监控」页显示。
+
+        只写三个键：action（当前动作）、style（流派）、timeline（最近动作）。
+        不参与业务逻辑，写失败也不影响流程。
+        """
+        try:
+            info = getattr(self, "info", None)
+            if not isinstance(info, dict):
+                return
+            module = handler.__module__.rsplit(".", 1)[-1]
+            area = UI_AREAS.get(module, "流程")
+            name = handler.__name__.removeprefix("handle_")
+            info["action"] = f"{area} · {name}"
+            # 用 self.style：没识别队长时它自己会兜底成「训练流」，
+            # 这才是脚本实际在跑的流派（旧版写「未定」，监控页就看不到真实值）
+            info["style"] = self.style
+            info["style_known"] = self.style_known
+            events = info.get("timeline")
+            if not isinstance(events, list):
+                events = []
+            events.insert(0, {
+                "time": time.strftime("%H:%M:%S"),
+                "event": area,
+                "detail": f"第 {self._steps} 步 · {name}",
+                "result": "成功",
+            })
+            del events[UI_EVENT_LIMIT:]
+            info["timeline"] = events
+        except Exception as e:                       # noqa: BLE001
+            self.log_debug(f"写入监控信息失败: {type(e).__name__}: {e}")
 
     def arcade_still_playing(self, texts):
         """游戏厅小游戏还在播动画吗？

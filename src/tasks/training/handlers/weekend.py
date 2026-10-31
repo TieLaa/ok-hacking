@@ -31,12 +31,76 @@ class WeekendHandlers:
         坑（2026-10-26）：公园点「划船」只弹出详情（推荐属性 / 随机属性+10 /
         前往划船），必须再点「前往划船」。旧流程没有这个二级确认，
         于是停在详情页、每拍点屏幕中央都没反应，最后被卡死检测停掉。
+
+        坑（2026-10-31 12:13 实跑，餐厅）：精力只剩 23/130，右卡「当服务员」
+        的详情弹窗写着「精力不足 ⚡25」，「前往当服务员」是**灰的**。旧代码把它
+        当普通按钮连点 4 分钟（每拍 OCR 有细抖动，`_no_change` 计数被复位，
+        连「3 轮点不动就停任务」都没触发）。现在两级判据：弹窗自己说不足、
+        或同一个「前往」点过一次画面没变 → **不点**，退出弹窗并把这张卡记成
+        今天不可选；下一拍回到卡片页会自动改选另一张（桌游GM 不耗精力）。
         """
         target = self.match_text(texts, self.ACTIVITY_GO)
         if target is None:
+            self._activity_go_key = None
             return False
+        reason = self.activity_go_blocked(target, texts)
+        if reason:
+            name = self.block_activity(target.name)
+            self.log_warning(
+                f"「{target.name.strip()}」点不动（{reason}）→ 退出详情，改选「{name}」以外的卡",
+                notify=True)
+            self.close_activity_detail()
+            return True
         self.click_box(target, after_sleep=0.9)
         self.log_info(f"地点确认：{target.name.strip()}")
+        return True
+
+    # 详情弹窗里「这个按钮现在点不动」的文字证据（2026-10-31 餐厅实测「精力不足」）。
+    BLOCKED_HINTS = ("精力不足", "体力不足", "条件不足", "无法选择", "无法前往",
+                     "不可选择", "尚未满足")
+
+    def activity_go_blocked(self, target, texts):
+        """这个「前往XXX」现在点不点得动：点得动返回 None，否则返回原因。"""
+        for t in texts:
+            s = t.name.replace(" ", "")
+            if not any(k in s for k in self.BLOCKED_HINTS):
+                continue
+            dy = abs((t.y + t.height / 2) - (target.y + target.height / 2))
+            if dy < self.height * 0.25:
+                return s
+        # 上一拍点过**同一个**按钮、画面文字却一模一样 → 这个按钮对本页无效。
+        # 比 flow 的 `_no_change` 靠谱：后者按整页指纹算，OCR 抖一下就被复位。
+        key = (target.name.strip(), self._signature(texts))
+        if getattr(self, "_activity_go_key", None) == key:
+            return "上一下点了没反应"
+        self._activity_go_key = key
+        return None
+
+    def block_activity(self, go_text):
+        """「前往当服务员」→ 把选项名「当服务员」记成今天不可选。"""
+        option = re.sub(r"^前往", "", go_text.strip())
+        self.blocked_activities().add(option)
+        return option
+
+    def blocked_activities(self):
+        """今天已经证实点不动的打工选项。
+
+        挂在 `_weekend` 上：跟着「第N周 + 星期X」一起重置（`weekend_state()`），
+        不落盘、不跨天。
+        """
+        return self._weekend.setdefault("blocked", set())
+
+    # 地点详情弹窗右上角的 ×：2026-10-31 实测（餐厅 / 1549x871）在 (0.87w, 0.19h)。
+    # 图上就是一个叉，OCR 读不到，所以先试文字、再按坐标兜底。
+    ACTIVITY_CLOSE = (0.870, 0.195)
+
+    def close_activity_detail(self, after_sleep=0.6):
+        """关掉地点详情弹窗、退回卡片页 —— 别直接退出地点，那样就没法改选另一张。"""
+        if self.click_text(("关闭", "取消", "返回"), after_sleep=after_sleep, must=False):
+            return True
+        self.click(int(self.width * self.ACTIVITY_CLOSE[0]),
+                   int(self.height * self.ACTIVITY_CLOSE[1]), after_sleep=after_sleep)
+        self.log_info("地点详情：没认出关闭按钮 → 点弹窗右上角 × 兜底")
         return True
 
     def choose_option(self, texts, names, after_sleep=0.4):
@@ -130,7 +194,13 @@ class WeekendHandlers:
         if self.match_text(texts, Defs.RESTAURANT_TITLE) is None:
             return False
         self.mark_visited("餐厅")
-        return self.choose_option(texts, self.restaurant_order(texts))
+        order = self.restaurant_order(texts)
+        if not order:
+            self.log_warning("餐厅：两张卡今天都点不动（都提示精力不足）→ 退出餐厅",
+                             notify=True)
+            self.exit_page()
+            return True
+        return self.choose_option(texts, order)
 
     def restaurant_order(self, texts):
         """打工两张卡的点击顺序：**能选的优先** → 队友多 → 右边（耗精力）。
@@ -142,7 +212,12 @@ class WeekendHandlers:
         - 都不可选就按「右边优先」原样返回，让游戏自己拦（下一拍会重判）。
         右边那张默认按 `WORK_STAMINA_COST`（25）算消耗、左边按 0（不消耗），
         卡片上写明消耗时以卡片为准。
-        ⚠ 餐厅内页没有实测帧，第一次实跑要看日志里两张卡的队友数/可选性。
+
+        2026-10-31 补两条：
+        - 精力取**整帧 OCR**（`top_bar(texts)`）。裁剪顶栏重 OCR 会丢斜杠，
+          stamina 恒为 None，这条规则等于没实现（餐厅实跑：23/130 仍去点 25 的卡）；
+        - `blocked_activities()`：详情弹窗说过「精力不足」或「前往」点不动的卡，
+          今天不再选（`logs` 里会打出来）。
         """
         opts = self.texts_in_region(texts, "weekend_options")
         found = []
@@ -153,21 +228,27 @@ class WeekendHandlers:
         if not found:
             return Defs.RESTAURANT_OPTIONS
 
-        stamina = self.top_bar().get("stamina")
+        stamina = self.top_bar(texts).get("stamina")
+        blocked = self.blocked_activities()
         icons = self.find_teammate_icons(0.0, 1.0)
         scored = [(self.mates_on_card(b, icons), b) for b in found]
         scored.sort(key=lambda pair: (-pair[0], -pair[1].x))   # 队友多 → 右边
         ranked = [b for _n, b in scored]
+        left = [b for b in ranked if b.name.strip() not in blocked]
+        if not left:
+            self.log_warning(f"餐厅：{sorted(blocked)} 今天都点不动，没有可选的卡")
+            return ()
         right = max(found, key=lambda b: b.x)
-        usable = [b for b in ranked
+        usable = [b for b in left
                   if self.option_selectable(
                       b, texts, stamina,
                       WORK_STAMINA_COST if b is right else 0)]
         detail = "、".join(
             f"{b.name}={n}人{'' if b in usable else '（不可选）'}" for n, b in scored)
-        self.log_info(f"餐厅：{detail}｜精力 {stamina} → "
+        self.log_info(f"餐厅：{detail}｜精力 {stamina}"
+                      f"｜今天点不动的 {sorted(blocked) or '无'} → "
                       + ("按可选/队友多/右边选" if usable else "都不可选，按右边优先试"))
-        return tuple(b.name for b in (usable or ranked))
+        return tuple(b.name for b in (usable or left))
 
     def option_selectable(self, box, texts, stamina=None, default_cost=0):
         """这张打工卡现在能不能选。
@@ -396,7 +477,7 @@ class WeekendHandlers:
         day = st["date"][1] if st["date"] else None
         if st.get("park_choice") is None:
             if day == "日":
-                stamina = self.top_bar().get("stamina")
+                stamina = self.top_bar(texts).get("stamina")
                 threshold = int(self.config.get("周末野餐阈值", 60))
                 if stamina is not None and stamina < threshold:
                     st["park_choice"] = "野餐"
@@ -613,7 +694,7 @@ class WeekendHandlers:
             self.leave_street()
             return True
 
-        bar = self.top_bar()
+        bar = self.top_bar(texts)
         stamina = bar.get("stamina")
         stamina_max = bar.get("stamina_max") or 130
         money = self.read_money(texts)

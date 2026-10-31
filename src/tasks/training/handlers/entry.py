@@ -131,6 +131,8 @@ class EntryHandlers:
         # 新版大厅的「社团GO」有时 OCR 不到，只靠它会在主界面空转（实训 2026-10-26）。
         if self.match_text(texts, ("赛事", "社团GO", "新人抽奖", "转一转", "冠军之路")) is None:
             return False
+        if self.no_captain_mode:
+            return self.stop_for_no_captain("大厅")
         action = self.texts_in_region(texts, "main_action")
         target = self.match_text(action, "训练")
         if target is not None:
@@ -146,6 +148,8 @@ class EntryHandlers:
     def handle_training_entry(self, texts):
         if self.match_text(texts, "训练剧本") is None:
             return False
+        if self.no_captain_mode:
+            return self.stop_for_no_captain("训练剧本")
         ok = self.click_text_and_expect(texts, "启程", ("训练核心",), timeout=10)
         if not ok:
             # 兜底：万一 OCR 没认出「启程」，再用实测固定坐标
@@ -164,6 +168,9 @@ class EntryHandlers:
         if self.match_text(texts, "训练核心") is None:
             return False
 
+        if self.no_captain_mode:
+            return self.stop_for_no_captain("训练核心（选队长）")
+
         want = (self.config.get("指定队长", "") or "").strip()
         if want and self.pick_captain_by_name(want):
             self._captain_matched_config = True
@@ -175,10 +182,12 @@ class EntryHandlers:
             # 用户明确反对这种自作主张。
             self._captain_matched_config = False
             self._abort_reason = f"队长池里没有「{want}」"
-            self.log_error(f"队长池里没有「{want}」→ 停止任务，不自动选别人",
-                           notify=True)
+            seen = "、".join(getattr(self, "_captain_seen", []) or []) or "（一个都没认出）"
+            self.log_error(f"队长池里没有「{want}」→ 停止任务，不自动选别人。"
+                           f"这一轮读到的卡：{seen}", notify=True)
             self.alert("没找到指定的队长",
                        f"队长列表（4 屏共 16 张）里没有「{want}」。\n\n"
+                       f"读到过的卡：{seen}\n\n"
                        "任务已停止，不会自动改选其他角色。\n"
                        "请刷新卡池或换一个队长后重跑。")
             return True
@@ -205,6 +214,12 @@ class EntryHandlers:
         判「有没有真的翻」不能看 OCR 指纹（_signature）：滚几像素时文字内容不变，
         但 OCR 的个别框会抖动，指纹照样变 → 旧版因此从不触发兜底。
         现在改成**比较整屏 4 张卡的名字**，完全相同就再加力拖一次。
+
+        2026-10-31 修「匹配不上」：`read_captain_name` 读到的是
+        「SR-亚理纱贾斯敏」（带稀有度前缀、间隔点被 OCR 吃掉），
+        而配置/列表里写的是「亚理纱·贾斯敏」；旧判据 `want in name` 直接比字符串，
+        于是 16 张卡全被当成「不是她」→ 报「队长池里没有」并停任务
+        （logs/mcp/sento_summary.txt 就是这一条）。现在统一走 `Defs.name_matches`。
         """
         # 2026-10-30 用户实机：接手的局，队长列表**停在最下面**，
         # 只往下翻会从底部继续到底，上面的角色全漏掉（这一轮就漏了近江奏）。
@@ -213,6 +228,7 @@ class EntryHandlers:
 
         tried = 0
         prev_names = None
+        seen = []
         for page in range(pages):
             page_names = []
             for idx in (1, 2, 3, 4):
@@ -223,10 +239,11 @@ class EntryHandlers:
                 page_names.append(name or "")
                 tried += 1
                 self.log_info(f"队长卡 {tried}（第{page + 1}屏）：{name or '（没认出名字）'}")
-                if name and want in name:
+                if name and Defs.name_matches(want, name):
                     ok = self.click_text_and_expect(
                         self._ocr_region(), "下一步", ("选择队友",), timeout=8)
-                    self.log_info(f"选定队长「{name}」" + ("" if ok else "（点下一步没反应）"))
+                    self.log_info(f"选定队长「{name}」"
+                                  f"（匹配「{want}」）" + ("" if ok else "（点下一步没反应）"))
                     return True
             if prev_names is not None and page_names == prev_names:
                 self.log_warning(
@@ -236,6 +253,8 @@ class EntryHandlers:
                 self.log_info(f"第{page + 1}屏没有「{want}」→ 列表往下翻")
                 self._captain_scroll_page(big=False)
             prev_names = page_names
+            seen.extend(page_names)
+        self._captain_seen = [n for n in seen if n]
         return False
 
     def _captain_scroll_to_top(self, max_tries=6):
@@ -278,6 +297,8 @@ class EntryHandlers:
     def handle_team(self, texts):
         if self.match_text(texts, "选择队友") is None:
             return False
+        if self.no_captain_mode:
+            return self.stop_for_no_captain("选择队友")
         auto = self.match_text(texts, "自动选择")
         if auto is not None:
             self.click_box(auto, after_sleep=0.7)
@@ -312,6 +333,8 @@ class EntryHandlers:
             return False
         if self.match_text(texts, "确认编队") is not None:
             return False
+        if self.no_captain_mode:
+            return self.stop_for_no_captain("选择笔记")
 
         # 2026-10-30 用户反馈「选择笔记页一直有多余点击」：
         # 页面切换有动画，handler 每拍都会重新命中同一页 → 自动选择被反复点、
@@ -347,6 +370,8 @@ class EntryHandlers:
     def handle_equipment(self, texts):
         if self.match_text(texts, "选择器材") is None:
             return False
+        if self.no_captain_mode:
+            return self.stop_for_no_captain("选择器材")
         auto = self.match_text(texts, "自动选择")
         if auto is not None:
             self.click_box(auto, after_sleep=0.7)
@@ -367,6 +392,8 @@ class EntryHandlers:
         """确认编队：开始训练会扣体力且中途取消不返还，默认要用户先允许。"""
         if self.match_text(texts, "确认编队") is None:
             return False
+        if self.no_captain_mode:
+            return self.stop_for_no_captain("确认编队（开始训练）")
         if not self.config.get("允许开始训练", True):
             self.log_info("已禁用自动开始训练，停在这里等你确认")
             return True

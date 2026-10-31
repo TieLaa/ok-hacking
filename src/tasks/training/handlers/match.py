@@ -21,13 +21,78 @@ from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 
 class MatchHandlers:
 
+    # --- 左下角 ▶▶ 快进按钮的像素判据（见 Defs.MATCH_FF_ROI）---
+    # 标定：历史 4895 帧（docs/shots + logs/unknown）只有 18 帧过，
+    # 全是「准备跳球 / 对位 / 比赛内二选一」这些比赛画面，无一误判（2026-10-31）。
+    # 药丸=深藏青实心块（灰度<80），双三角=白；信箱黑边/整块黑会被
+    # 「贴边」「面积上限」「横长条」三条挡掉。
+    FF_DARK = 80             # 药丸底色上限（灰度）
+    FF_BRIGHT = 150          # 双三角白色下限（灰度）
+    FF_MIN_DARK = 0.20       # 药丸面积 / ROI 面积
+    FF_MAX_DARK = 0.75       # 整块黑（信箱黑边）会到 0.9 以上
+    FF_ASPECT = (2.0, 6.0)   # 药丸是横长条
+    FF_BRIGHT_RANGE = (0.03, 0.45)   # 双三角在药丸内的占比（实拍 0.089~0.136）
+
+    def match_ff_visible(self, frame=None):
+        """左下角 ▶▶ 快进按钮在不在（像素判定，不依赖 OCR）。
+
+        为什么必须看像素：比赛开场（跳球前）整屏只有球场/「准备跳球」，
+        OCR 一个可点控件都读不出来（实拍 logs/unknown/1026-155558：只有
+        「坚行」「一心一意」两条噪声），而按钮本身是无文字图标
+        （偶尔读成 "I"，位置也不稳）。所以不能用文字判「在比赛里」。
+
+        2026-10-31 事故：`_match_intro_at` 只在「前往比赛」分支置位，
+        但实战里点完「跳过比赛」游戏会直接进场 → 时间戳没置上 →
+        整段开场一次没点，等跳球后 HUD 出来才开始点快进（用户现场复现）。
+        """
+        frame = frame if frame is not None else getattr(self, "_tick_frame", None)
+        if frame is None:
+            frame = getattr(self, "frame", None)
+        if frame is None or not hasattr(frame, "shape"):
+            return False
+        height, width = frame.shape[:2]
+        x1, y1, x2, y2 = Defs.MATCH_FF_ROI
+        roi = frame[int(height * y1):int(height * y2), int(width * x1):int(width * x2)]
+        if roi.size == 0:
+            return False
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        rh, rw = gray.shape[:2]
+        dark = (gray < self.FF_DARK).astype(np.uint8)
+        if float(dark.mean()) < self.FF_MIN_DARK:
+            return False
+        _, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+        lo, hi = self.FF_ASPECT
+        best = None
+        for i in range(1, len(stats)):
+            bx, by, bw, bh, area = (int(v) for v in stats[i])
+            if not (self.FF_MIN_DARK * dark.size <= area <= self.FF_MAX_DARK * dark.size):
+                continue
+            if not (lo <= bw / max(bh, 1) <= hi):
+                continue
+            # 贴边 = 整块黑边/背景，不是按钮
+            if bx <= 1 or by <= 1 or bx + bw >= rw - 1 or by + bh >= rh - 1:
+                continue
+            if best is None or area > best[4]:
+                best = (bx, by, bw, bh, area)
+        if best is None:
+            return False
+        bx, by, bw, bh = best[:4]
+        pill = gray[by:by + bh, bx:bx + bw]
+        bright = float((pill > self.FF_BRIGHT).mean())
+        bright_lo, bright_hi = self.FF_BRIGHT_RANGE
+        return bright_lo <= bright <= bright_hi
+
     def handle_match_intro(self, texts):
         """NBA 转场：**跳过比赛 / 赛后结算之后**一闪而过的 NBA logo，没有可点的控件。
 
         2026-10-26 复盘：这个页面从不出现在比赛开场，只在「跳过比赛」成功和结算
         返回之后出现，约 1 秒自己走完。点左下角（比赛内快进的位置）不会有任何反应，
         所以这里只等，不点。
+        2026-10-31：左下角要是有 ▶▶（VS/开场页 OCR 有时会读成 VS），
+        让给 handle_in_match 去点，别在这里干等 0.4 秒。
         """
+        if self.match_ff_visible():
+            return False
         names = {t.name.strip() for t in texts}
         if not (names & {"NBA", "VS"}):
             return False
@@ -43,12 +108,16 @@ class MatchHandlers:
 
         开场阶段（跳球前）左下角**只有一个 ▶▶ 快进按钮**，没有「自动/手动」，
         旧代码因为找不到这两个词直接 return False，整段开场一次都不点
-        （用户 2026-10-26 现场截图确认）。现在用 `_match_intro_at` 标记这个窗口，
-        窗口内也点快进；跳球后 HUD 齐全，再走「手动 → 自动」的正常流程。
+        （用户 2026-10-26 现场截图确认）。现在用两条判据认这个窗口：
+        ① `_match_intro_at`（还留着：给「前往比赛 / 总是进比赛」分支用）；
+        ② `match_ff_visible()` 直接看左下角有没有 ▶▶ —— 比赛进场路径太多
+        （跳过比赛后游戏自己进场、用户手动点进场、外部战斗脚本接管），
+        只靠时间戳会漏（2026-10-31 用户现场复现：整段开场没点）。
         """
         hud = self.texts_in_region(texts, "match_hud")
         intro = bool(self._match_intro_at) and time.monotonic() - self._match_intro_at < 90
-        if not hud and not intro:
+        ff = self.match_ff_visible()
+        if not hud and not intro and not ff:
             return False
         # 赛前准备页还没点掉：交给 handle_prepare 继续点「跳过/前往比赛」
         if self.match_text(texts, ("跳过比赛", "前往比赛")) is not None:
@@ -62,7 +131,7 @@ class MatchHandlers:
             self.click_box(manual, after_sleep=0.35)
             self.log_info("比赛：手动 → 自动")
             return True
-        if auto is None and not intro:
+        if auto is None and not intro and not ff:
             return False
 
         x = int(self.width_of_screen(Defs.MATCH_FAST_FORWARD[0]))
@@ -495,6 +564,18 @@ class MatchHandlers:
         """
         if self.match_text(texts, "请选择1个技能") is None:
             return False
+        # 2026-10-31 用户核对「监控页 7240 vs 注册球员页 7376」：本局白技能记成 6 个
+        # （注册球员页真值 2 个），金 4 个是对的。存证帧
+        # logs/events/1031-162657 / _162658_handle_skill_select.jpg 对比可见：
+        # 点完卡后游戏把选中的那张飞出、剩下两张左移变暗，但「请选择1个技能」还在 →
+        # handler 又跑一拍，空槽位读成「道具0(0.000)」、变暗的卡全判白，
+        # 于是白送一个「技能+1（白）」。一局 5 次三选一 = 多 5 个白（+125 分）。
+        # 判据：名字行三张都在才算真·三选一；退场帧直接放行，不选也不计数。
+        slots = self.skill_card_slots(texts)
+        if len(slots) < 3:
+            self.log_info(f"技能卡位只剩 {sorted(i + 1 for i in slots)} 有名字"
+                          "（选中后的退场帧），本拍不选也不计数")
+            return True
         if os.environ.get("OK_DUMP_CHOICES"):
             self.dump_unknown(texts, "choice_skill")
 
@@ -508,7 +589,7 @@ class MatchHandlers:
         def cy_of(i):
             return Defs.SKILL_CARDS[i][1]
 
-        best_idx, best_score = 0, -1
+        best_idx, best_score, best_quality = 0, -1, 1
         detail = []
         for i in range(3):
             card_texts = self._card_texts(texts, i)
@@ -523,7 +604,7 @@ class MatchHandlers:
             detail.append(f"{i + 1}:{Defs.QUALITY_LABEL[quality]}/标签{has_pref}"
                           f"/道具{gem}({getattr(self, '_gem_ratio', 0):.3f})")
             if score > best_score:
-                best_idx, best_score = i, score
+                best_idx, best_score, best_quality = i, score, quality
         self.log_info("技能评分 " + " ".join(detail) + f" → 选第 {best_idx + 1} 张")
         self.dump_skill_frame(texts)
 
@@ -533,6 +614,20 @@ class MatchHandlers:
         if confirm is not None:
             self.click_box(confirm, after_sleep=0.5)
             self.log_info("技能：确定")
+
+        # 本局新拿到的技能：按品质记进 info，监控页「分数预测」会实时累加。
+        # info 在每次 enable 时清空（= 本局统计），配置里的「技能-彩色/金色/白色」
+        # 是开局已有数量，两者相加就是当前总数。
+        key = {3: "color", 2: "gold", 1: "white"}.get(best_quality, "white")
+        gained = self.info.get("skill_gained")
+        if not isinstance(gained, dict):
+            gained = {"color": 0, "gold": 0, "white": 0}
+        gained[key] = int(gained.get(key, 0)) + 1
+        self.info["skill_gained"] = gained
+        self.info["skill_last"] = Defs.QUALITY_LABEL.get(best_quality, "白")
+        self.log_info(
+            f"技能+1（{self.info['skill_last']}）本局累计："
+            f"彩{gained['color']} 金{gained['gold']} 白{gained['white']}")
         return True
 
     def skill_card_item_gem(self, cx, cy):

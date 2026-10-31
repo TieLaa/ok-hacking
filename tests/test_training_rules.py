@@ -40,7 +40,10 @@ class FakeTask(DryRunTask):
     def __init__(self, texts, qualities=None, mates=None, config=None):
         frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
         super().__init__(frame, texts)
-        self.config = config or {}
+        # 和 DryRunTask 一样默认关掉「无队长不接开局」：测试测的是各 handler 的
+        # 判据/顺序，不是「无队长模式」这道闸门；不关掉的话所有开局页 handler
+        # 都会在 FakeTask（config 为空）里直接停手，测什么都没动作。
+        self.config = {"无队长不接开局": False, **(config or {})}
         self._qualities = list(qualities or [])
         self._mates = list(mates or [])
         self.ocr_calls = 0
@@ -1727,6 +1730,59 @@ class MatchIntroFastForward(unittest.TestCase):
         self.assertTrue(task.handle_match_intro(texts))
         self.assertEqual(task.actions, [])
 
+    # --- 左下角 ▶▶ 的像素判据 ---
+    # 2026-10-31 事故：`_match_intro_at` 只在「前往比赛」分支置位，
+    # 实战里点完「跳过比赛」游戏会自己进场 → 整段开场一次没点，
+    # 跳球后 HUD 出来才开始点。所以「在比赛里」必须能直接看按钮。
+
+    @staticmethod
+    def frame_with_pill(w=1920, h=1080):
+        """造一帧「左下角有 ▶▶」：深藏青药丸 + 白双三角 + 浅灰描边。"""
+        frame = np.full((h, w, 3), 200, dtype=np.uint8)          # 亮球场
+        x1, y1 = int(w * 0.020), int(h * 0.911)
+        x2, y2 = int(w * 0.094), int(h * 0.969)
+        frame[y1:y2, x1:x2] = (36, 30, 26)
+        cv2.rectangle(frame, (x1, y1), (x2 - 1, y2 - 1), (150, 150, 150), 2)
+        for k in (0.30, 0.56):                                   # 两个 ▶
+            cx = x1 + int((x2 - x1) * k)
+            cy = (y1 + y2) // 2
+            r = int((y2 - y1) * 0.22)
+            cv2.fillPoly(frame, [np.array([(cx, cy - r), (cx, cy + r),
+                                           (cx + int(r * 1.5), cy)])], (255, 255, 255))
+        return frame
+
+    def test_ff_pill_detected_on_intro_frame(self):
+        task = FakeTask(list(self.LINEUP))
+        self.assertTrue(task.match_ff_visible(self.frame_with_pill()))
+
+    def test_intro_fast_forward_without_timestamp(self):
+        """没有 `_match_intro_at`（游戏自己进场）也要点 ▶▶。"""
+        task = FakeTask(list(self.LINEUP))
+        self.assertFalse(task.handle_in_match(task._texts))      # 黑帧：认不出按钮
+        task._tick_frame = self.frame_with_pill()
+        self.assertTrue(task.handle_in_match(task._texts))
+        self.assertEqual(task.actions[-1], ("click", 119, 1002))
+
+    def test_letterbox_bar_is_not_pill(self):
+        """信箱黑边（整条贴边黑）不是按钮。"""
+        frame = np.full((1080, 1920, 3), 200, dtype=np.uint8)
+        frame[int(1080 * 0.90):, :] = 10
+        task = FakeTask(list(self.LINEUP))
+        self.assertFalse(task.match_ff_visible(frame))
+
+    def test_plain_screen_is_not_pill(self):
+        task = FakeTask(list(self.LINEUP))
+        blank = np.full((1080, 1920, 3), 200, dtype=np.uint8)
+        self.assertFalse(task.match_ff_visible(blank))
+
+    def test_intro_with_pill_is_not_eaten_by_transition(self):
+        """VS/转场页同时写着 VS 又有 ▶▶ 时，让给 handle_in_match，别在这里干等。"""
+        texts = [box(800, 400, "VS", 200, 100)]
+        task = FakeTask(texts)
+        task._tick_frame = self.frame_with_pill()
+        self.assertFalse(task.handle_match_intro(texts))
+        self.assertEqual(task.actions, [])
+
 
 class BoostTrainingClicks(unittest.TestCase):
     """加强训练：按 收益×成功率 的期望值选卡，再点「确定」（2026-10-26 用户口径）。"""
@@ -2164,6 +2220,30 @@ class TalentStockEvent(unittest.TestCase):
                                Defs.SKILL_CARDS[1][0], places=2)
         self.assertIn("道具1", "".join(task.logs))
 
+    def test_skill_select_ignores_flyout_frame(self):
+        """点完卡后的「退场帧」不能再记一个技能。
+
+        2026-10-31 用户核对：监控页「分数预测 7240」vs 注册球员页「7376」，
+        白技能记成 6 个（注册球员页真值 2 个），金 4 个是对的。
+        实拍 logs/events/1031-162657 / _162658_handle_skill_select.jpg：
+        第 1 张被点走后飞出、剩两张左移变暗，但「请选择1个技能」还在 →
+        handler 又认领一拍，空槽位读成「白 0.000」、变暗的两张也判白，
+        于是白送一个「技能+1（白）」。一局 5 次三选一 = 虚增 5 个白（+125 分）。
+        """
+        texts = [box(775, 51, "请选择1个技能", 270, 40),
+                 box(865, 450, "快速盯防", 145, 32),      # 名字行只剩中间/右边两个槽位
+                 box(1483, 450, "后期加持", 143, 32),
+                 box(493, 934, "得分手", 84, 34),          # 底部信息栏：不是技能名
+                 box(497, 985, "控卫", 64, 35),
+                 box(1264, 978, "确定", 82, 47)]
+        task = FakeTask(texts)
+        task._card_quality = lambda frame, i: 1
+        task.skill_card_item_gem = lambda cx, cy: False
+        self.assertTrue(task.handle_skill_select(texts))
+        self.assertEqual(task.actions, [])                 # 不点卡、不点确定
+        self.assertNotIn("skill_gained", task.info)        # 不计数
+        self.assertIn("退场帧", "".join(task.logs))
+
     def test_quick_match_has_is_label(self):
         """2026-10-29 实机：QuickMatchTask 报 AttributeError: 'is_label'。
 
@@ -2296,6 +2376,53 @@ class TalentStockEvent(unittest.TestCase):
         task.try_speed_2x = lambda *a, **k: False
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "训练")
+
+
+class CaptainNameMatch(unittest.TestCase):
+    """队长名字匹配（2026-10-31 用户反馈「列表的亚理纱和游戏的亚理纱没匹配上」）。
+
+    实测差异来自 logs/mcp/sento_summary.txt：
+        「队长卡 1（第1屏）：SR-亚理纱贾斯敏」
+    而角色表 / 监控页列表里写的是「亚理纱·贾斯敏」：
+    间隔点被 OCR 吃掉、底部名字行前面还带稀有度（SR-）。
+    旧判据 `want in name` 直接比字符串，于是 16 张卡全被当成「不是她」。
+    """
+
+    def test_middle_dot_and_rarity_prefix_ignored(self):
+        from src.tasks.ui.Defs import name_matches
+        self.assertTrue(name_matches("亚理纱·贾斯敏", "SR-亚理纱贾斯敏"))
+        self.assertTrue(name_matches("亚理纱·贾斯敏", "亚理纱贾斯敏"))
+        self.assertTrue(name_matches("亚理纱", "SSR 亚理纱·贾斯敏"))
+        self.assertTrue(name_matches("克拉丽丝·波洛", "克拉丽丝波洛"))
+
+    def test_different_people_do_not_match(self):
+        from src.tasks.ui.Defs import name_matches
+        self.assertFalse(name_matches("近江奏", "SR-亚理纱贾斯敏"))
+        self.assertFalse(name_matches("", "亚理纱"))
+        self.assertFalse(name_matches("亚理纱", ""))
+
+    def test_style_lookup_accepts_game_spelling(self):
+        task = FakeTask([])
+        self.assertEqual(task.style_for_name("亚理纱贾斯敏"), "训练流")
+        self.assertEqual(task.style_for_name("SR-亚理纱贾斯敏"), "训练流")
+        self.assertEqual(task.style_for_name("亚理纱·贾斯敏"), "训练流")
+        self.assertEqual(task.style_for_name("克拉丽丝波洛"), "训练流")
+        self.assertEqual(task.style_for_name("毒岛黛也"), "小游戏流")
+
+    def test_pick_captain_matches_without_middle_dot(self):
+        """选队长页：配置「亚理纱·贾斯敏」，游戏卡上读到「SR-亚理纱贾斯敏」也要选中。"""
+        task = FakeTask([box(30, 20, "第1周", 120, 40),
+                         box(200, 20, "星期六", 130, 40),
+                         box(380, 16, "130/130", 210, 53),
+                         box(1480, 900, "下一步", 180, 60)])
+        task.config = {"指定队长": "亚理纱·贾斯敏"}
+        task.read_captain_name = lambda: "SR-亚理纱贾斯敏"
+        task._captain_scroll_to_top = lambda *a, **k: None
+        task._captain_scroll_page = lambda *a, **k: None
+        self.assertTrue(task.pick_captain_by_name("亚理纱·贾斯敏"))
+        self.assertTrue(any("选定队长「SR-亚理纱贾斯敏」" in m for m in task.logs))
+        # 选中后要顺着点「下一步」（回归桩里 click_text_and_expect 只记录坐标）
+        self.assertTrue(any(act[0] == "click_and_expect" for act in task.actions))
 
 
 class RegisterWatchdog(unittest.TestCase):

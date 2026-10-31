@@ -323,6 +323,7 @@ class TrainingHandlers:
 
         attr_values = self.read_attribute_values(texts)
         if attr_values:
+            self.info["attrs"] = attr_values   # 监控页「六维 / 分数预测」用
             self.log_debug(f"六维当前值：{attr_values}")
 
         def rank(name):

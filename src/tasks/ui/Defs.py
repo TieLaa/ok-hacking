@@ -23,6 +23,32 @@ NUMBER_RE = re.compile(r"\d+")
 # 靠区域（plan_title）+ 排除「今天」两道防线区分（见 parsers.read_plan_captain）。
 PLAN_TITLE_RE = re.compile(r"^(.{1,8}?)的训练计划$")
 
+# ---------- 角色名归一化 ----------
+# 同一个角色在「角色表 / 配置列表」和「游戏画面 OCR」里的写法常常不一样，
+# 2026-10-31 用户反馈「列表的亚理纱和游戏的亚理纱没匹配上」。
+# 实测两种差异（logs/mcp/sento_summary.txt：「队长卡 1（第1屏）：SR-亚理纱贾斯敏」）：
+#   1. 名字中间的间隔点会丢：亚理纱·贾斯敏 → 亚理纱贾斯敏（克拉丽丝·波洛也一样）；
+#   2. 底部名字行前面会带稀有度：SR- / SSR / R。
+# 所以比较名字一律先过 `norm_name`，不要直接 `want in name`。
+NAME_RARITY_RE = re.compile(r"^(?:SSR|SR|R|N)\s*[-－—–·・._:：]?\s*", re.IGNORECASE)
+NAME_SEPARATORS_RE = re.compile(r"[·・•∙⋅\-－—–_\.\s\u3000「」【】\[\]()（）]")
+
+
+def norm_name(name):
+    """角色名归一化：去稀有度前缀、去间隔点/空格/括号，只留可比对的主体。"""
+    s = (name or "").strip()
+    s = NAME_RARITY_RE.sub("", s)
+    return NAME_SEPARATORS_RE.sub("", s)
+
+
+def name_matches(want, name):
+    """两个角色名是不是同一个（互相包含即算，容忍缺间隔点 / 带稀有度前缀）。"""
+    a, b = norm_name(want), norm_name(name)
+    if not a or not b:
+        return False
+    return a in b or b in a
+
+
 # ---------- 已知文本 ----------
 WEEKEND_PLACES = ("餐厅", "游戏厅", "公园", "步行街")
 # 周末子页面
@@ -152,6 +178,12 @@ FLOW_COORDS = {
 
 # 比赛内「快进」是无文字图标，只能按位置点（实机测量：客户区约 120,1000）
 MATCH_FAST_FORWARD = (0.062, 0.928)
+
+# ▶▶ 按钮本体所在的 ROI（左,上,右,下，归一化）：用来「看像素判断按钮在不在」。
+# 为什么要看像素：开场（跳球前）整屏只有球场/「准备跳球」，OCR 读不到任何可点控件，
+# 按钮本身无文字（OCR 偶尔读成 "I"）。实测按钮归一化框 x[0.020,0.094] y[0.911,0.969]，
+# 三种分辨率（1920x1080 / 1549x871 / 1349x759）位置完全一致，这里四周再放宽一点。
+MATCH_FF_ROI = (0.010, 0.895, 0.110, 0.985)
 
 # 顶栏倍速按钮：1x 时右边那个三角是灰白的，2x 时是实心蓝。
 # 大师赛之后才能切 2x；判据只看「右三角是否实心」，不依赖 OCR 小字。

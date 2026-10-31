@@ -31,6 +31,11 @@ from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,  # noqa: F4
 GOLD_RING_MIN = 0.20
 GOLD_RING_FACTOR = 2.0
 CRIT_RING_MIN = 0.20
+# 技能三选一：卡片名字行在 cy≈0.43（实测帧 logs/events/1031-162657_handle_skill_select.jpg，
+# 1549x871 → 0.431），三张卡名字的 cx≈0.19 / 0.50 / 0.81（= Defs.SKILL_CARDS 的 x）。
+# 名字行下面是 0.49 的「角色/行为卡/通用」标签行，底部 0.88/0.93 是「得分手/控卫/能力详情」。
+SKILL_NAME_CY = 0.43
+SKILL_NAME_CY_TOL = 0.035
 # 代码版本戳（run() 会打到日志里）：排查「改完不生效」时一眼看出跑的是哪份代码
 CODE_VERSION = "2026-10-29b"
 
@@ -640,19 +645,23 @@ class TrainingParsersMixin:
         查表用 STYLE_BY_NAME（抄自 docs/roster/ssr_roster.json）。
         日历标题只显示姓氏，所以按前缀匹配；多个前缀都命中（「羽」→ 羽田 / 羽漱川）
         时取**更长的那个**，长度一样才算歧义（返回 None，宁可不动）。
+
+        2026-10-31：两侧都先过 `Defs.norm_name` —— 游戏里「亚理纱·贾斯敏」可能被 OCR
+        读成「亚理纱贾斯敏」，底部名字行还可能带「SR-」前缀，带间隔点直接比会漏。
         """
         if not name:
             return None
-        s = name.replace(" ", "").replace("・", "·").strip()
+        s = Defs.norm_name(name).replace(" ", "").strip()
         best, best_len, tie = None, 0, False
         for full, style in STYLE_BY_NAME.items():
-            if s == full:
+            f = Defs.norm_name(full)
+            if s == f:
                 return style
-            if not (full.startswith(s) or s.startswith(full)):
+            if not (f.startswith(s) or s.startswith(f)):
                 continue
-            if len(full) > best_len:
-                best, best_len, tie = style, len(full), False
-            elif len(full) == best_len and style != best:
+            if len(f) > best_len:
+                best, best_len, tie = style, len(f), False
+            elif len(f) == best_len and style != best:
                 tie = True
         return None if tie else best
 
@@ -997,6 +1006,32 @@ class TrainingParsersMixin:
         x1 = 0.05 + idx * 0.31
         x2 = x1 + 0.28
         return [t for t in texts if x1 <= (t.x + t.width / 2) / self.width <= x2]
+
+    def skill_card_slots(self, texts):
+        """三张技能卡里**有名字行**的槽位集合（0/1/2）。
+
+        为什么需要它（2026-10-31 用户核对「监控页 7240 vs 注册球员页 7376」）：
+        点完卡之后游戏会把选中的那张飞出、剩下两张左移，但顶上「请选择1个技能」
+        还在，handler 会再认领一拍：空槽位读成「道具0(0.000)」、变暗的两张卡
+        `_card_quality` 一律兜底成白，于是白记一个「技能+1（白）」。
+        一局 5 次三选一就虚增 5 个白（+125 分），而金从来不会虚增
+        （退场帧一律判白）—— 和用户观察到的「金对、白错」完全一致。
+
+        判据只看**名字行**（cy≈0.43，cx 离哪个卡心最近就算哪个槽位），
+        不看底部信息栏（得分手/控卫/能力详情在 cy≈0.88~0.93，天然被 cy 过滤掉）。
+        """
+        slots = set()
+        for t in texts:
+            cy = (t.y + t.height / 2) / self.height
+            if abs(cy - SKILL_NAME_CY) > SKILL_NAME_CY_TOL:
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            if not 0.1 <= cx <= 0.9:
+                continue
+            nearest = min(range(len(Defs.SKILL_CARDS)),
+                          key=lambda i: abs(cx - Defs.SKILL_CARDS[i][0]))
+            slots.add(nearest)
+        return slots
 
     def _card_quality(self, frame, idx):
         """判断技能卡品质，返回 3=彩色 / 2=金色 / 1=白色。

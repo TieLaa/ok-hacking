@@ -481,7 +481,7 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
 
     # ---------- 顶栏状态 ----------
 
-    def top_bar(self):
+    def top_bar(self, texts=None):
         """解析顶栏：周数 / 星期几 / 体力 / 金币。解析不到的字段为 None。
 
         体力**只在含「/」的那个文本框里找**：OCR 常把「第1周」的「1」和体力粘在一起
@@ -490,8 +490,21 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         2026-10-26 补：还会出现 `369/115`（周数 3 粘在 69 前面）。做法是把前面的
         数字逐位去掉，取第一个 `0 < cur <= max` 的组合；多个候选时取最右边那个
         （体力条在周数右边）。
+
+        2026-10-31 改：**优先用整帧 OCR 文本**（调用方传 `texts`，或本拍
+        `flow.run()` 存下的 `_tick_texts`），只按 top_bar 区域过滤一下；
+        确实拿不到整帧文本时才裁剪顶栏重 OCR。
+
+        为什么要改（餐厅实跑踩到）：同一帧里整帧 OCR 读的是 `0/130`，
+        裁剪顶栏再 OCR 却读成 `301130` —— 斜杠被吃掉，`STAMINA_RE` 匹配不上，
+        stamina 恒为 None。于是「精力 23 < 打工 25 → 改选不耗精力那张」这条
+        规则从来没生效过，脚本一路点到灰掉的「前往当服务员」卡死 4 分钟。
+        扭蛋清空精力阈值、公园野餐阈值也是同一条链上的受害者。
         """
-        texts = self._ocr_region("top_bar")
+        pool = texts if texts is not None else getattr(self, "_tick_texts", None)
+        texts = self.texts_in_region(pool, "top_bar") if pool else []
+        if not texts:
+            texts = self._ocr_region("top_bar")
         joined = " ".join(t.name for t in texts)
         state = {"week": None, "day": None, "stamina": None, "stamina_max": None, "coin": None}
 
@@ -522,6 +535,22 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
                     best = (t.x, cur, mx)
         if best is not None:
             state["stamina"], state["stamina_max"] = best[1], best[2]
+
+        # 顶栏状态同时写进 info，供「监控」页（src/ui/MonitorTab.py）读取。
+        # info 是框架给任务用的 UI 数据通道，这里只覆盖 UI 需要的那几个键，
+        # 不参与任何业务判据。用 getattr 是给回归桩（tools/check_handlers.py）
+        # 留的安全垫：它手工初始化、不调 BaseTask.__init__。
+        info = getattr(self, "info", None)
+        if isinstance(info, dict):
+            info.update({
+                "week": state["week"],
+                "day": state["day"],
+                "stamina": state["stamina"],
+                "stamina_max": state["stamina_max"],
+                "coin": state["coin"],
+            })
+            if state["stamina"] is not None and state["stamina_max"]:
+                info["stamina_pct"] = round(state["stamina"] / state["stamina_max"] * 100)
         return state
 
     # ---------- 流程按钮（相对坐标，随窗口缩放） ----------

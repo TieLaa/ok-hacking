@@ -90,10 +90,14 @@ class DryRunTask(TrainingTask):
         self._texts = texts
         # 空配置即可：所有 handler 里都写了 `config.get(key, 默认值)`，
         # 这样回归测的就是**代码里的默认策略**，不依赖 configs/*.json。
-        self.config = {}
+        # 例外：`无队长不接开局` 关掉，否则空队长会触发「只跑已有局」的闸门，
+        # 开局页全部不再执行，回归就测不到启程/选人/笔记/器材。
+        self.config = {"无队长不接开局": False}
         self.actions = []
         self.logs = []
         self.name = "dry-run"
+        # 与 BaseTask 保持一致：handler 会往 info 写监控页数据
+        self.info = {}
         # handler 里会用到的一些状态
         self._steps = 1
         self._skip_tries = 0
