@@ -97,6 +97,7 @@ ESC → 放弃并存证 `recover_failed`。遇到比赛/小游戏标记（`VS`/`
 | `tools/mcp/my_onetime.py` | MyOneTimeTask | 配置演示，冒烟用 |
 | `tools/mcp/probe.py` | — | 回大厅 + 报顶栏/OCR，改代码后的第一只探针 |
 | `tools/mcp/postmessage_probe.py` | — | PostMessage 有效性探测（默认不动真实鼠标） |
+| `tools/mcp/summarize_run.py` | — | 把一次 run 的 `run.log` 数成表（写运行记录用，只读；`-o` 写 UTF-8） |
 
 `_harness.borrow()` 借出已注册实例并临时设置 `_enabled / running / current_task /
 artifact_directory`；`run_registered()` 额外支持本次运行的 config 覆盖（跑完还原）。

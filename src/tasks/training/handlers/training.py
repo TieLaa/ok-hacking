@@ -139,13 +139,26 @@ class TrainingHandlers:
             return True
         # 2026-10-29 用户补充：野上泷周五也能出行 —— 训练日主界面上出现「出行」时，
         # 先把这次外出机会用掉（一天一次），再回来训练/休息；否则练完这天就过去了。
+        # 2026-10-31 修正：只认**按钮**，而且点到了才记「今天用过了」。
+        # 旧版 `click_text("出行")` 会把对话框台词「今天可以出行哦！要不」当按钮点
+        # （官方日志 `left_click 今天可以出行哦！要不 (950, 182)`），按钮一下没点到，
+        # 外出标记却已经置上，下一拍直接进训练（用户：「为什么没有点出行，
+        # 反而默认进了训练」）。
         if self.match_text(texts, "出行") is not None:
             st = self.weekend_state()
             if not st.get("outing_done"):
-                st["outing_done"] = True
-                self.click_text("出行", after_sleep=0.6)
-                self.log_info("训练日有「出行」入口 → 先外出（一天一次）")
-                return True
+                go_out = self.find_go_out_button(texts)
+                if go_out is not None:
+                    self.click_box(go_out, after_sleep=0.6)
+                    st["outing_done"] = True
+                    self.log_info("训练日有「出行」按钮 → 先外出（一天一次）")
+                    return True
+                line = self.match_text(texts, "出行")
+                if line is not None and len(line.name.strip()) > 4:
+                    # 按钮还没出来，这一拍只推进对话（不算用掉当天机会）
+                    self.click_box(line, after_sleep=0.6)
+                    self.log_info("训练日：对话框提到「出行」但还没按钮 → 先推进对话")
+                    return True
         state = self.top_bar()
         cur = state.get("stamina")
         # 周五按流派分档（用户 2026-10-29）：训练流不变，其他流派 55，商店流 80

@@ -27,6 +27,10 @@ logger = Logger.get_logger(__name__)
 
 LAYOUT_PATH = "configs/monitor_layout.json"
 QSS_DIR = os.path.join("assets", "ui")
+# 启动后自动切到「监控」页（想回到「截图方式」页就改成 False）
+START_ON_MONITOR = True
+START_RETRY_MS = 100
+START_RETRY_MAX = 100  # 最多等 10 秒，主窗口还没显示就不抢了
 # 技能品质权重（docs/score-model/README.md：彩 75 / 金 50 / 白 25）
 SKILL_WEIGHTS = {"color": 75, "gold": 50, "white": 25}
 SKILL_KEYS = {"color": "技能-彩色", "gold": "技能-金色", "white": "技能-白色"}
@@ -159,7 +163,7 @@ class MonitorTab(CustomTab):
 
     @property
     def add_after_default_tabs(self):
-        # False = 插在「截图方式」之后、任务/触发之前，进来第二眼就能看到。
+        # False = 插在「截图方式」之后、任务/触发之前；启动时还会自动切过来（见 _select_on_startup）。
         return False
 
     def __init__(self):
@@ -180,6 +184,32 @@ class MonitorTab(CustomTab):
         self._timer.setInterval(500)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
+
+        self._started_selected = False
+        if START_ON_MONITOR:
+            QTimer.singleShot(0, self._select_on_startup)
+
+    # ---------- 启动默认页 ----------
+
+    def _select_on_startup(self, tries: int = 0):
+        """启动后把左侧导航切到「监控」页。
+
+        构造期间主窗口还没赋给 og.main_window、也还没显示，所以轮询等到
+        showEvent 之后（win.shown）再切，避免和导航栏的初始化抢。
+        """
+        if self._started_selected:
+            return
+        win = getattr(og, "main_window", None)
+        if win is None or not getattr(win, "shown", False):
+            if tries < START_RETRY_MAX:
+                QTimer.singleShot(START_RETRY_MS, lambda: self._select_on_startup(tries + 1))
+            return
+        self._started_selected = True
+        try:
+            win.switchTo(self)
+            logger.info("启动默认页：监控")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"切换到监控页失败: {e}")
 
     # ---------- 布局 / 样式文件 ----------
 

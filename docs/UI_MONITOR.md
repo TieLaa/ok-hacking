@@ -1,7 +1,10 @@
 # 监控页（布局可调）
 
-挂机时看的第二页：打开就知道第几周、体力多少、现在在做什么、最近点了什么。
+启动后默认落在这一页（`MonitorTab._select_on_startup` 等主窗口 showEvent 后切过来）：
+打开就知道第几周、体力多少、现在在做什么、最近点了什么。
 **结构和样式都能直接改**：在页面里点「编辑布局」，或者手改 JSON / QSS，存盘即生效。
+
+想改回启动落在「截图方式」页：把 `src/ui/MonitorTab.py` 顶部 `START_ON_MONITOR` 改成 `False`。
 
 - 代码：`src/ui/MonitorTab.py`（取数据、定时刷新、热重载、编辑落盘）
 - 渲染：`src/ui/monitor_view.py`（只认 layout + data，不碰业务）
@@ -33,6 +36,13 @@
 | `hero` | 周目 / 体力 / 文案 / 按钮 | `stats` 数组、`now`、按钮文案 |
 | `cards` | 一行摘要卡 | `items[].title` + `rows`（每行 `["左","右"]`） |
 | `timeline` | 最近动作 | `max_rows` `time_width` `event_width` |
+
+「最近动作」每行 4 列：**时间 / 域（入口·比赛·训练…）/ 本拍识别到的文字 / 结果**。
+
+- 详情列是这一拍 OCR 原文的去重摘要（`src/tasks/training/flow.py` 的 `summary_texts`），
+  最多 8 条、总长 50 字符，超出截断加 `…`；看得到「当时屏幕上有什么」，比只写 handler 名好复盘。
+- 步数和 handler 全名不再占列，作为 `step` / `handler` 键留在事件里，需要时加一列即可。
+- `result` 目前恒为「成功」：handler 抛异常时不会写事件，这列暂时没有区分度。
 
 ## 队长选择
 

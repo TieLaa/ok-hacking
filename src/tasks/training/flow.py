@@ -57,6 +57,33 @@ UI_AREAS = {
 # 监控页时间线保留的条数（UI 那边最多显示 8 条）。
 UI_EVENT_LIMIT = 12
 
+# 监控页「最近动作」详情列 = 本拍识别到的文字。
+# 一帧 OCR 常有 20~40 条（体力、金币、按钮、顶栏都算），单行放不下，
+# 取前几条去重后截断；保留顺序（OCR 的检测顺序），不排序 —— 排序会让
+# 「第 N 周」「训练」这些关键界面词乱序，反而不像原界面。
+UI_TEXT_LIMIT = 8
+UI_TEXT_MAXLEN = 50
+
+
+def summary_texts(texts, limit=UI_TEXT_LIMIT, max_len=UI_TEXT_MAXLEN):
+    """把本拍 OCR 结果压成一行短文案，给监控页时间线用。
+
+    只做展示，不参与业务判断；`texts` 为空或元素没有 name 都容错。
+    """
+    seen, items = set(), []
+    for t in texts or []:
+        name = (getattr(t, "name", "") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        items.append(name)
+        if len(items) >= limit:
+            break
+    text = " / ".join(items)
+    if len(text) > max_len:
+        text = text[:max_len - 1] + "…"
+    return text
+
 
 class TrainingFlowMixin:
 
@@ -437,7 +464,7 @@ class TrainingFlowMixin:
             try:
                 if handler(self, texts):
                     self._last_state = handler.__name__
-                    self._ui_event(handler)
+                    self._ui_event(handler, texts)
                     self.snap_event(handler.__name__, texts, frame)
                     self._recent_actions.append(f"step{self._steps} {handler.__name__}")
                     # 记录「点击之后应该看到的那一帧」的指纹，下一拍对比是否变化
@@ -480,11 +507,15 @@ class TrainingFlowMixin:
             notify=True)
         return True
 
-    def _ui_event(self, handler):
+    def _ui_event(self, handler, texts=None):
         """把本拍命中的 handler 写进 info，供「监控」页显示。
 
         只写三个键：action（当前动作）、style（流派）、timeline（最近动作）。
         不参与业务逻辑，写失败也不影响流程。
+
+        时间线的 `detail` 是**本拍识别到的文字**（`summary_texts`），
+        看得到「当时屏幕上有什么」，比只写 handler 名好复盘；
+        步数/全名另存 `step` / `handler`（UI 暂不显示，排障时用）。
         """
         try:
             info = getattr(self, "info", None)
@@ -504,8 +535,10 @@ class TrainingFlowMixin:
             events.insert(0, {
                 "time": time.strftime("%H:%M:%S"),
                 "event": area,
-                "detail": f"第 {self._steps} 步 · {name}",
+                "detail": summary_texts(texts),
                 "result": "成功",
+                "step": self._steps,
+                "handler": name,
             })
             del events[UI_EVENT_LIMIT:]
             info["timeline"] = events
