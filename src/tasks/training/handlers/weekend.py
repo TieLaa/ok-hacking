@@ -618,10 +618,19 @@ class WeekendHandlers:
 
     @staticmethod
     def _gacha_signature(cards):
-        """一组扭蛋卡的指纹：名字 + 价格。空组返回 None。"""
+        """一组扭蛋卡的指纹：名字 + 价格 + 品质 + 队友标记。空组返回 None。
+
+        2026-10-31 23:41 实跑（用户：「没有识别到中间的卡片有队友，又选择了左边
+        的卡片」）：只比「名字 + 价格」不够 —— 卡片淡入期的半透明画面上，OCR 读
+        出的名字和价格**完全正确**，但品质/队友是从透出来的背景取的：暖色店面被
+        判成金卡、蓝色货架被判成队友标记。于是「两帧一致」立刻通过，左边的
+        「运控增加」以金+队友 321 分和中间的「防守升级包++」打平，max() 按顺序
+        取了左边。把品质和队友也放进指纹，画面没定下来时就会继续等。
+        """
         if not cards:
             return None
-        return tuple(sorted((c["name"], c["price"]) for c in cards))
+        return tuple(sorted((c["name"], c["price"], c["quality"], bool(c["mate"]))
+                            for c in cards))
 
     def settle_gacha_cards(self, texts):
         """读扭蛋三张卡，**等开场动画稳定**后再返回。
@@ -630,7 +639,8 @@ class WeekendHandlers:
         也能返回 3 张卡（中间态），脚本 0.3 秒就点了「确定」，买下中间那张紫卡；
         1.7 秒后重进才看清同价位的金卡（防守增加++/80 币），等于白扔一次机会。
         所以连续两次识别一致才认账；空结果继续等（旧版只处理了"空"这一种）。
-        同一组卡确认过就不再重复等，避免每拍多花 1.6 秒。
+        同一组卡确认过就不再重复等，避免每拍多花 1.6 秒；一直不稳时
+        最后还会多等一拍 1.2 秒（见函数末尾），最多约 3.6 秒定不下来才放弃。
         """
         cards = self.read_gacha_cards(texts)
         sig = self._gacha_signature(cards)
@@ -661,7 +671,21 @@ class WeekendHandlers:
                     self._gacha_sig, self._gacha_at = None, time.monotonic()
                     return []
             cards, sig = nxt, nsig
-        if last_cards:
+        # 3 拍都还在变（打折数字滚动 + 卡片淡入）：再等一拍**慢的**，用画面定下来
+        # 以后的那一帧决定。快速循环里最后那一帧往往正好是淡入中间态
+        # （2026-10-31 23:41 就是这么买错的，见 `_gacha_signature`）。
+        self.sleep(1.2)
+        try:
+            self.next_frame()
+        except Exception:                         # noqa: BLE001
+            pass
+        final = self.read_gacha_cards(self._ocr_region() or [])
+        if final:
+            if self._gacha_signature(final) != self._gacha_signature(last_cards):
+                self.log_info("扭蛋：又等一拍（1.2 秒）画面才定下来（"
+                              + "、".join(c["name"] for c in final) + "）")
+            last_cards = final
+        elif last_cards:
             self.log_warning("扭蛋：卡片一直在变（动画/刷新），按最后一次识别结果处理")
         self._gacha_sig = self._gacha_signature(last_cards)
         self._gacha_at = time.monotonic()
@@ -681,6 +705,16 @@ class WeekendHandlers:
         周日只能划船回 30。现在清空卡在体力够时必须排除。
         """
         if self.match_text(texts, Defs.STREET_TITLE) is None:
+            return False
+        # 2026-10-31 实跑（野上泷额外周末，第3周星期五）：**周末地图**上步行街那条
+        # 奖励提示这次写的是「扭蛋增强」（平时是「零用钱+」），STREET_TITLE 里的
+        # 「扭蛋」用包含匹配把地图判成了扭蛋页 → 三张卡当然读不出来 →
+        # leave_street() 点返回 → 又回到训练日主界面，当天的外出白跑
+        # （用户：「进了出行地图然后就退回来了，又点了训练」）。
+        # 地图上有 ≥2 个地点名，扭蛋页只有一个，用它区分；必须放在 mark_visited 之前，
+        # 否则「步行街已去过」会被误记，回来以后就再也不进步行街了。
+        if len([t for t in texts
+                if t.name.strip() in Defs.WEEKEND_PLACES]) >= 2:
             return False
         self.mark_visited("步行街")
         if not self.config.get("允许进步行街", True):
@@ -750,7 +784,10 @@ class WeekendHandlers:
             self.leave_street()
             return True
 
-        best = max(ok, key=lambda c: c["score"])
+        # 同分时的取舍（2026-10-31）：先「有队友」，再「便宜的」。
+        # 旧代码只按 score 取 max()，同分就等于「按 OCR 顺序取第一张 = 最左边」，
+        # 23:41 那次就是买了左边那张（用户：「又选择了左边的卡片」）。
+        best = max(ok, key=lambda c: (c["score"], c["mate"], -c["price"]))
         self.click(best["x"], best["y"], after_sleep=0.5)
         self.log_info(f"扭蛋：{detail} → 选「{best['name']}」"
                       f"（{best['price']}币，零用钱 {money}，体力 {stamina}）")
@@ -938,17 +975,21 @@ class WeekendHandlers:
         # 2026-10-30 用户截图（野上泷周五额外周末）：对话框里有一句
         # 「今天可以出行哦！要不…」，click_text("出行") 会命中这句**台词**
         # （日志 `left_click 今天可以出行哦！要不 (950, 182)`），不是右侧按钮。
-        # 所以先找右侧（x>0.75w）、整词的「出行」，找不到才退回文字匹配。
-        target = next((t for t in texts if t.name.strip() == "出行"
-                       and (t.x + t.width / 2) / self.width > 0.75), None)
+        # 2026-10-31：判据收进 parsers.find_go_out_button（只认整词「出行」，
+        # 多个候选时优先右下按钮区），训练日那边也用它，别各写一份。
+        target = self.find_go_out_button(texts)
         if target is not None:
             self.click_box(target, after_sleep=0.6)
             self.log_info("周末：点「出行」进地图"
                           f"@({target.x + target.width // 2},"
                           f"{target.y + target.height // 2})")
+        elif self.click_text("出行", region_name="go_out", after_sleep=0.6,
+                             must=False):
+            # 兜底：按钮上除了「出行」还带了箭头之类的字，整词匹配不到
+            self.log_info("周末：点「出行」进地图（按钮区兜底）")
         else:
-            self.click_text("出行", after_sleep=0.6)
-            self.log_info("周末：点「出行」进地图（按文字框兜底）")
+            # 只有台词、没有按钮：这一拍什么都不点，等对话先推进
+            return False
         return True
 
     def venue_on_discount(self, texts, label_box):

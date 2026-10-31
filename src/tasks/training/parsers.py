@@ -30,14 +30,24 @@ from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,  # noqa: F4
 # 所以两者都取 0.20 作下限，金框再加「明显高于其它行中位数」这一条。
 GOLD_RING_MIN = 0.20
 GOLD_RING_FACTOR = 2.0
-CRIT_RING_MIN = 0.20
+# 彩框（2026-10-31 两次重标定，见 has_crit_border 的 docstring）：
+#   ① 采样半窗 0.060h → 0.050h：旧半窗下噪声行（选中态/图标）能到 0.15~0.23，
+#      与门限 0.20 重叠，日志里凭空多出一个彩框；收到 0.050h 后同一批存盘帧是
+#      彩框 0.27~0.39 / 噪声 0.00~0.11。再窄到 0.045h 会把真边框切掉（真彩框掉到 0.09~0.16）。
+#   ② 下限 0.22 → 0.13（用户 2026-10-31 20:31 周四当场指出「有个彩边没认到」）：
+#      那次「投射」占比只有 0.157（满经验 1，真彩边），被 0.22 挡掉。
+#      同一时刻其它行都是 0.000 → 新半窗下噪声其实塌到 0 附近，0.22 定高了。
+#      现在：真彩框下界 0.157、噪声上界 0.109(仅 1 例，其余 0.00~0.003)，取 0.13。
+CRIT_RING_MIN = 0.13
+CRIT_RING_FACTOR = 2.0
+CRIT_RING_HALF_H = 0.050
 # 技能三选一：卡片名字行在 cy≈0.43（实测帧 logs/events/1031-162657_handle_skill_select.jpg，
 # 1549x871 → 0.431），三张卡名字的 cx≈0.19 / 0.50 / 0.81（= Defs.SKILL_CARDS 的 x）。
 # 名字行下面是 0.49 的「角色/行为卡/通用」标签行，底部 0.88/0.93 是「得分手/控卫/能力详情」。
 SKILL_NAME_CY = 0.43
 SKILL_NAME_CY_TOL = 0.035
 # 代码版本戳（run() 会打到日志里）：排查「改完不生效」时一眼看出跑的是哪份代码
-CODE_VERSION = "2026-10-29b"
+CODE_VERSION = "2026-10-31e"
 
 
 def ring_is_border(ratio, baseline=None, floor=GOLD_RING_MIN,
@@ -240,14 +250,22 @@ class TrainingParsersMixin:
             total += int(mm.group(1))
         return total
 
-    def read_gacha_cards(self, texts):
-        """解析扭蛋三选一：卡名 / 品质色 / 是否有队友加成 / 分值 / 点击坐标。
+    # 「打折」卡的价格药丸里有**两个**数字：左边划掉的原价、右边实付价。
+    # 同一张卡的两个数字上下差几像素、左右差约 0.03w；相邻两张卡的药丸相隔约 0.25w。
+    PRICE_ROW_TOL = 0.02
+    PRICE_COL_TOL = 0.075
 
-        坐标靠「价格药丸」定位（每张卡底部一个 60/80 的数字），
-        卡名取价格正上方最近的短文本，品质色取卡头那一条横带的色相。
+    def gacha_price_pills(self, texts):
+        """把价格数字按「药丸」聚成一张卡一份，返回 [(price, cx, cy, top)]。
+
+        2026-10-31 23:41 实跑（用户：「没有识别到中间的卡片有队友，又选择了
+        左边的卡片」）：左侧「运控增加」是张打折蓝卡，药丸里 60/50 两个数字
+        都被 OCR 读到 → 同一张卡被认成两张（日志 `运控增加(…/60币/…)、
+        运控增加(…/50币/…)`，中间那张金卡也一样重复）。卡片一重复，
+        同分时 max() 就退化成「按 OCR 顺序取第一张（最左边）」。
+        所以先按行/列聚合，一张卡只留**最右边**那个数字（实付价）。
         """
-        frame = self.frame
-        cards = []
+        pills = []
         for t in texts:
             s = t.name.strip()
             if not s.isdigit() or not (1 <= int(s) <= 999):
@@ -256,7 +274,27 @@ class TrainingParsersMixin:
             cy = (t.y + t.height / 2) / self.height
             if not (0.15 <= cx <= 0.85 and 0.60 <= cy <= 0.82):
                 continue
+            for p in pills:
+                if (abs(p[2] - cy) <= self.PRICE_ROW_TOL
+                        and abs(p[1] - cx) <= self.PRICE_COL_TOL):
+                    if cx > p[1]:                   # 右边那个才是实付价
+                        p[0], p[1], p[2], p[3] = int(s), cx, cy, t.y
+                    break
+            else:
+                pills.append([int(s), cx, cy, t.y])
+        return [tuple(p) for p in pills]
 
+    def read_gacha_cards(self, texts):
+        """解析扭蛋三选一：卡名 / 品质色 / 是否有队友加成 / 分值 / 点击坐标。
+
+        坐标靠「价格药丸」定位（每张卡底部一个 60/80 的数字），
+        卡名取价格正上方最近的短文本，品质色取卡头那一条横带的色相。
+        「打折」卡药丸里的原价+实付价先用 `gacha_price_pills` 聚成一份，
+        否则一张卡会读出两条记录（见那里的注释）。
+        """
+        frame = self.frame
+        cards = []
+        for price, cx, _cy, price_top in self.gacha_price_pills(texts):
             names = [n for n in texts
                      if 0.28 <= (n.y + n.height / 2) / self.height <= 0.44
                      and abs((n.x + n.width / 2) / self.width - cx) < 0.13
@@ -282,12 +320,12 @@ class TrainingParsersMixin:
             # 2026-10-26 漏读「消耗所有精力」导致 72 体力买了清空扭蛋。
             effect = " ".join(
                 n.name.strip() for n in texts
-                if title.y + title.height <= n.y < t.y
+                if title.y + title.height <= n.y < price_top
                 and abs((n.x + n.width / 2) / self.width - cx) < 0.13)
             score = rank * 10 + (3 if mate else 0) + (1 if "+" in title.name else 0)
             cards.append({
                 "name": title.name.strip(),
-                "price": int(s),
+                "price": int(price),
                 "quality": quality,
                 "mate": mate,
                 "enhanced": enhanced,
@@ -343,7 +381,14 @@ class TrainingParsersMixin:
         2026-10-30 截图（扭蛋增强界面）该标记是**深蓝底 + 浅色头像 + 「!」**，
         不是旧版的橙色「!」气泡，而且位置更靠下（y≈0.29~0.34h，旧 ROI 只到 0.26h）。
         所以 ROI 放宽到 y 0.22~0.36，并同时接受「橙色气泡」和「深蓝紫块」两种样子。
-        金卡背景是亮黄（g 很高）、蓝卡背景是浅蓝（r 很高），都不会命中 deep。
+
+        2026-10-31 20:35 实跑（用户：「三张金卡都记成有队友，选了中间没队友的」）：
+        日志里 `随机加成(金+队友/…)、意识升级包++(金+队友/…)` —— **金卡自己被记满了队友**。
+        原因：金卡的卡头本身就是橙黄渐变（`r>200, 90<g<200, b<90` 全中），
+        卡上的装饰圆/高光在 ROI 里正好是一个 frac≈0.15、长宽比≈1 的块，
+        形状判据拦不住 → `orange` 分支对每张金卡都返回 True，队友加分（+20）等于没有。
+        所以 `orange` 现在**只认浮在卡片上沿之上**的旧版气泡（底部 y < 0.30h），
+        卡片本体的金色不参与；深蓝标记（当前版本的样子）不受这条限制。
         """
         frame = self.frame
         if frame is None:
@@ -359,24 +404,91 @@ class TrainingParsersMixin:
         g = roi[:, :, 1].astype(int)
         r = roi[:, :, 2].astype(int)
         orange = (r > 200) & (g > 90) & (g < 200) & (b < 90)
-        # 2026-10-30：队友标记也可能是「深蓝底 + 头像」的圆（BGR 约 82/60/55），
+        # 队友标记也可能是「深蓝底 + 头像」的圆（BGR 约 82/60/55），
         # 蓝色分量高于红色。用 b > r+20 就能抓住，同时不会命中金色/橙色横幅。
         deep = (b > r + 20) & (r < 130) & (g < 130) & (b < 170)
-        mask = (orange | deep).astype(np.uint8)
-        if not mask.any():
+
+        roi_area = float(orange.size)
+
+        def has_badge_blob(mask, max_bottom=None):
+            """ROI 里有没有「像角标」的连通块（大小/长宽比过滤，可选再限制竖直位置）。"""
+            m = mask.astype(np.uint8)
+            if not m.any():
+                return False
+            n, _lab, stats, _cent = cv2.connectedComponentsWithStats(m, 8)
+            for i in range(1, n):
+                ww, hh, area = int(stats[i, 2]), int(stats[i, 3]), int(stats[i, 4])
+                frac = area / roi_area
+                if not (0.03 <= frac <= 0.28 and 0.5 <= ww / max(hh, 1) <= 2.8):
+                    continue
+                if max_bottom is not None:
+                    bottom = y1 + int(stats[i, 1]) + hh
+                    if bottom > max_bottom:
+                        continue
+                return True
             return False
+
         # 必须按**形状 + 相对面积**过滤：左侧第一张卡会被左上角「再买一次！」
         # 橙色横幅覆盖（189x77，占 ROI 33%），只按像素个数会把它当队友标记
         # （2026-10-30 16:46 日志里左卡被误记成「蓝+队友」）。
-        # 实测：横幅 frac=0.33 被排除；扭蛋标记 0.164、餐厅标记 0.062 都命中。
-        n, _lab, stats, _cent = cv2.connectedComponentsWithStats(mask, 8)
-        roi_area = float(mask.size)
-        for i in range(1, n):
-            ww, hh, area = int(stats[i, 2]), int(stats[i, 3]), int(stats[i, 4])
-            frac = area / roi_area
-            if 0.03 <= frac <= 0.28 and 0.5 <= ww / max(hh, 1) <= 2.8:
-                return True
-        return False
+        if has_badge_blob(deep):
+            return True
+        # 旧版「橙色 ! 气泡」只是兜底：只认浮在卡片上沿之上（y<0.30h）的那一小块
+        return has_badge_blob(orange, max_bottom=int(h * 0.30))
+
+    GO_OUT_WORD = "出行"
+
+    def find_go_out_button(self, texts):
+        """找「出行」**按钮**的文本框，找不到返回 None。
+
+        2026-10-31 实跑（第3周 星期四 训练日，官方日志原文）：
+            18:50:02 体力 130，进入训练科目
+            18:50:03 left_click 今天可以出行哦！要不 (950, 182)
+            18:50:04 点击「今天可以出行哦！要不」→ 训练日有「出行」入口 → 先外出
+            18:50:05 体力 130，进入训练科目
+        旧版 `click_text("出行")` 是**包含匹配**，命中的是对话框里的台词，
+        右侧按钮一下都没点到；而「今天已经出行过」的标记已经置上了，
+        下一拍就掉进 else 去点「训练」（用户：「没有点出行，反而默认进了训练」）。
+
+        所以这里只认**整词**「出行」：台词是长句，永远匹配不上。
+        OCR 把短按钮拆成「出」「行」两个单字框时（商店 商/店 同款坑）再拼一次。
+        """
+        cands = [t for t in texts if t.name.strip() == self.GO_OUT_WORD]
+        if not cands:
+            cands = self._split_go_out(texts)
+        if not cands:
+            return None
+        x1, y1, x2, y2 = Defs.region("go_out")
+
+        def rank(t):
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            in_box = 1 if (x1 <= cx <= x2 and y1 <= cy <= y2) else 0
+            # 按钮区里的优先，其次越靠右下越像按钮
+            return (in_box, cy, cx)
+
+        return max(cands, key=rank)
+
+    @staticmethod
+    def _split_go_out(texts):
+        """「出」「行」被 OCR 拆成两个单字框时，合成一个「出行」框。"""
+        outs = [t for t in texts if t.name.strip() == "出"]
+        ins = [t for t in texts if t.name.strip() == "行"]
+        for a in outs:
+            acx, acy = a.x + a.width / 2, a.y + a.height / 2
+            for b in ins:
+                bcx, bcy = b.x + b.width / 2, b.y + b.height / 2
+                if abs(acy - bcy) > a.height * 0.8:
+                    continue
+                if abs(acx - bcx) > a.width * 2.5:
+                    continue
+                x = min(a.x, b.x)
+                y = min(a.y, b.y)
+                return [Box(x=x, y=y,
+                            width=max(a.x + a.width, b.x + b.width) - x,
+                            height=max(a.y + a.height, b.y + b.height) - y,
+                            name="出行")]
+        return []
 
     def weekend_state(self):
         """按「第N周 + 星期X」维护周末状态：去过哪些地点、商店看没看、公园选什么。
@@ -917,36 +1029,85 @@ class TrainingParsersMixin:
         只采样按钮**边缘一圈**：按钮内部的科目图标（西瓜/鞋）有绿色/红色，
         采样整块会把普通科目误判成彩虹（实训 2026-10-26）。
 
-        门限 0.20：实测真彩虹框 = 0.333，西瓜图标那一行 = 0.100，
-        旧门限 0.06 会把西瓜当彩虹。
+        2026-10-31 重标定（用户：「刚才那轮只有一个彩框，怎么出现了两个」）：
+        实拍帧 `logs/debug/1031-195131_subject04.jpg` 里只有「投射」带彩虹边，
+        日志却同时给「弹跳」记了彩虹 1（占比 0.214，只比旧门限 0.20 高 0.014）。
+        在那三张存盘帧上重算（`logs/_crit_calib.py`）：
+            半窗 ±0.060h（旧）：彩框 0.51~0.56，噪声行 0.15~0.23  ← 与门限重叠
+            半窗 ±0.050h（新）：彩框 0.27~0.39，噪声行 0.00~0.11  ← 分得开
+            半窗 ±0.045h：真彩框掉到 0.09~0.16（把真边框切掉了，会漏）
+        所以半窗收到 0.050h，并补一条**相对判据**（同金框）：目标行还要明显高于
+        其它行里最低的那个 —— 只有整页都带杂色时才挡得住，正常页面上由门限决定。
+
+        2026-10-31 20:31 又调了一次下限（用户：「刚才星期四有个彩边，没认到吗」）：
+        第 5 周星期四「投射」满经验 1、实机有彩边，占比却只有 **0.157**，被 0.22 挡掉。
+        同一时刻其它行全是 0.000 —— 说明噪声在 0.050h 半窗下其实塌到 0 附近，
+        0.22 是拿早期「强彩框」样本（0.27~0.39）定的，偏高。现在下限 **0.13**：
+        真彩框下界 0.157，噪声上界 0.109（唯一一例，其余 0.000~0.003）。
+        **注意彩边会闪**（同一科目不同帧 0.157 / 0.318 / 0.343 都出现过），
+        单帧占比只是下界，别再据此往上抬门限。
         """
         frame = self.frame
         if frame is None:
             return False
         texts = texts if texts is not None else self._ocr_region()
-        h, w = frame.shape[:2]
 
-        cy = None
+        subjects = [t for t in texts
+                    if t.name.strip() in Defs.TRAINING_SUBJECTS
+                    and (t.x + t.width / 2) / max(self.width, 1) > 0.7]
+        target = None
         if subject:
-            row = next((t for t in texts
-                        if t.name.strip() == subject
-                        and (t.x + t.width / 2) / max(self.width, 1) > 0.7), None)
-            if row is None:
-                # 同上：指名了科目却找不到，不能拿别的行顶替
+            target = next((t for t in subjects if t.name.strip() == subject), None)
+            if target is None:
+                # 指名了科目却找不到，不能拿别的行顶替（2026-10-27 事故：把投射的
+                # 金框记到防守头上，两个科目同分，真金框科目被挤掉）
                 return False
-            cy = row.y + row.height / 2
-        if cy is None:
+            cy = target.y + target.height / 2
+        else:
             decide = self.match_text(texts, "决定")
             if decide is None:
                 return False
-            cy = decide.y + decide.height / 2
+            sel_cy = decide.y + decide.height / 2
+            if subjects:
+                target = min(subjects,
+                             key=lambda t: abs((t.y + t.height / 2) - sel_cy))
+                cy = target.y + target.height / 2
+            else:
+                cy = sel_cy
 
+        ratio = self._crit_ring_ratio(frame, cy)
+        others = sorted(self._crit_ring_ratio(frame, t.y + t.height / 2)
+                        for t in subjects if t is not target)
+        b_min = others[0] if others else 0.0
+        b_med = others[len(others) // 2] if others else 0.0
+        # 2026-10-29：彩框在度假页也漏识别，占比一直打出来（校准用）
+        self.log_debug(f"科目彩框：{target.name.strip() if target else '当前行'}"
+                       f" 占比 {ratio:.3f}，其它行最低 {b_min:.3f}"
+                       f"／中位 {b_med:.3f}（门限 {CRIT_RING_MIN}）")
+        return ring_is_border(ratio, b_min,
+                              floor=CRIT_RING_MIN, factor=CRIT_RING_FACTOR)
+
+    def _crit_ring_ratio(self, frame, cy):
+        """量以 cy 这一行为中心的彩虹环带占比。同一帧内缓存：
+        一次选科目要量 6 行（目标 + 其它行做基线），别重复算 HSV。"""
+        cache = getattr(self, "_crit_cache", None)
+        if cache is None or cache.get("frame") is not frame:
+            cache = {"frame": frame, "ratios": {}}
+            self._crit_cache = cache
+        key = int(cy)
+        if key not in cache["ratios"]:
+            cache["ratios"][key] = self._crit_ring_ratio_raw(frame, cy)
+        return cache["ratios"][key]
+
+    @staticmethod
+    def _crit_ring_ratio_raw(frame, cy):
+        h, w = frame.shape[:2]
         x1, x2 = int(w * 0.74), int(w * 0.98)
-        y1 = max(0, int(cy - h * 0.06))
-        y2 = min(h, int(cy + h * 0.06))
+        y1 = max(0, int(cy - h * CRIT_RING_HALF_H))
+        y2 = min(h, int(cy + h * CRIT_RING_HALF_H))
         roi = frame[y1:y2, x1:x2]
         if roi.size == 0:
-            return False
+            return 0.0
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         hue, sat, val = cv2.split(hsv)
         magenta = (sat > 90) & (val > 120) & (hue >= 125) & (hue <= 175)
@@ -955,20 +1116,14 @@ class TrainingParsersMixin:
         t = max(4, int(h * 0.008))
         # 2026-10-30 修：原先取整圈 + x 只到 0.93w。
         # 实测（logs/debug/1030-154728_subject07.jpg，第 1 行「投射」明显有彩框）
-        # 整圈 0.66~0.93w = 0.197，差 0.003 没过 0.20 门限 → 判「无彩框」，
+        # 整圈 0.66~0.93w = 0.197，差 0.003 没过门限 → 判「无彩框」，
         # 于是把第一位带彩框的科目录成了 0 分，选了别的。
         # 原因：左右两条环带一条落在按钮外背景、一条落在按钮内部渐变，纯噪声。
-        # 改成只采**上下两条边**、x 覆盖到按钮真实右边缘（0.74~0.98w）后：
-        #   彩框帧 0.24~0.49，非彩框（选中高亮/鞋图标绿）0~0.158，门限 0.20 分得开。
+        # 改成只采**上下两条边**、x 覆盖到按钮真实右边缘（0.74~0.98w）。
         ring[:t, :] = True
         ring[-t:, :] = True
         hit = (magenta | green) & ring
-        ratio = float(hit.sum()) / max(int(ring.sum()), 1)
-        # 2026-10-29：彩框在度假页漏识别，把占比一直打出来（quiet 只管提示级别），
-        # 方便拿真实数字校准门限（CRIT_RING_MIN）。
-        self.log_debug(f"科目彩框：{subject or '当前行'} 占比 {ratio:.3f}"
-                       f"（门限 {CRIT_RING_MIN}）")
-        return ring_is_border(ratio, floor=CRIT_RING_MIN)
+        return float(hit.sum()) / max(int(ring.sum()), 1)
 
     def scene_names(self, texts):
         """过滤出训练场景里飘在角色头顶的名字。"""

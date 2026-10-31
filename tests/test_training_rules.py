@@ -27,7 +27,7 @@ sys.path.insert(0, ROOT)
 from ok.feature.Box import Box  # noqa: E402
 from tools.check_handlers import DryRunTask  # noqa: E402
 from src.tasks.training.parsers import (  # noqa: E402
-    CRIT_RING_MIN, ring_is_border)
+    CRIT_RING_FACTOR, CRIT_RING_MIN, ring_is_border)
 
 
 def box(x, y, name, w=240, h=60):
@@ -73,7 +73,11 @@ class FakeTask(DryRunTask):
 
 
 def gacha_texts(cards, stamina=None, money=None, price="60"):
-    """cards = [(名字, 效果), ...]，生成扭蛋页的 OCR 框。"""
+    """cards = [(名字, 效果), ...]，生成扭蛋页的 OCR 框。
+
+    某张卡的 price 给 `("原价", "实付价")` 二元组，就生成「打折」卡：
+    价格药丸里两个数字都被 OCR 读到（截图里 100 被划掉、右边 90 才是实付价）。
+    """
     texts = [box(760, 80, "请选择1个扭蛋i", 400, 70)]
     if stamina:
         texts.append(box(380, 16, stamina, 210, 53))
@@ -84,7 +88,11 @@ def gacha_texts(cards, stamina=None, money=None, price="60"):
         texts.append(box(xs[i], 330, name, 280, 60))
         texts.append(box(xs[i], 520, effect, 280, 60))
         p = price[i] if isinstance(price, (list, tuple)) else price
-        texts.append(box(xs[i], 700, p, 80, 55))
+        if isinstance(p, (list, tuple)):
+            texts.append(box(xs[i] - 70, 703, p[0], 60, 22))    # 划掉的原价（小字，左边）
+            texts.append(box(xs[i], 700, p[1], 80, 55))         # 实付价
+        else:
+            texts.append(box(xs[i], 700, p, 80, 55))
     texts.append(box(860, 950, "确定", 200, 60))
     return texts
 
@@ -140,6 +148,88 @@ class GachaRules(unittest.TestCase):
         cards = task.settle_gacha_cards(same)
         self.assertEqual(len(cards), 3)
         self.assertEqual(task.ocr_calls, 1)     # 第 2 帧一致就返回，不跑满 3 轮
+
+    def test_settle_takes_frame_after_slow_wait(self):
+        """3 拍都还在变 → 再等一拍慢的，用**定下来那帧**，不是循环里最后一帧。
+
+        2026-10-31 23:41 实跑就是拿快速循环的最后一帧（淡入中间态）去买的。
+        """
+        def frame(p):
+            return gacha_texts([
+                ("运控增加", "主力运控+30，队友属性小幅提升"),
+                ("防守升级包++", "防守属性+40，防守训练的训练等级+3"),
+                ("弹跳专注", "消耗所有精力，训练主力获得弹跳+48"),
+            ], stamina="25/130", money="359", price=[("60", p[0]), ("100", p[1]), ("60", p[2])])
+
+        task = FakeTask(frame(("50", "90", "50")), qualities=["蓝", "金", "蓝"],
+                        mates=[False, True, False])
+        # 前 3 帧价格一直在滚动（每次都不一样），第 4 帧才定在 50/90/50
+        task.ocr_queue = [frame(("48", "88", "47")),
+                          frame(("49", "87", "49")),
+                          frame(("48", "85", "48")),
+                          frame(("50", "90", "50"))]
+        cards = task.settle_gacha_cards(frame(("100", "100", "100")))
+        self.assertEqual([c["price"] for c in cards], [50, 90, 50])
+        self.assertEqual([c["mate"] for c in cards], [False, True, False])
+
+    def test_gacha_signature_includes_quality_and_mate(self):
+        """名字+价格一致、品质/队友不一致 → 指纹不算一致（画面还没定下来）。"""
+        def sig(quality, mate):
+            return FakeTask._gacha_signature([{
+                "name": "运控增加", "price": 50, "quality": quality, "mate": mate,
+            }])
+
+        self.assertNotEqual(sig("金", True), sig("蓝", False))
+        self.assertNotEqual(sig("金", True), sig("金", False))
+        self.assertEqual(sig("金", True), sig("金", True))
+
+    def test_discount_price_pill_is_one_card(self):
+        """打折卡的价格药丸里两个数字（原价 + 实付价）只算一张卡，取实付价。
+
+        2026-10-31 23:41 实跑：左边那张 运控增加 被读成 60 币和 50 币两张，
+        日志里 5 张卡、两个 321 分打平 → max() 取了第一张（最左边）。
+        """
+        texts = gacha_texts([
+            ("运控增加", "主力运控+30，队友属性小幅提升"),
+            ("防守升级包++", "防守属性+40，防守训练的训练等级+3"),
+            ("弹跳专注", "消耗所有精力，训练主力获得弹跳+48"),
+        ], stamina="25/130", money="359",
+            price=[("60", "50"), ("100", "90"), ("60", "50")])
+        task = FakeTask(texts, qualities=["蓝", "金", "蓝"],
+                        mates=[False, True, False])
+        cards = task.read_gacha_cards(texts)
+        self.assertEqual([c["name"] for c in cards],
+                         ["运控增加", "防守升级包++", "弹跳专注"])
+        self.assertEqual([c["price"] for c in cards], [50, 90, 50])
+
+    def test_discount_page_picks_gold_mate_card(self):
+        """2026-10-31 23:41 用户截图：左蓝(60→50) / 中金+队友(100→90) / 右蓝(60→50)。
+
+        体力 25（低于清空阈值 30），右边那张「消耗所有精力」也是候选，
+        但金+队友那张分最高 → 必须点中间那张。
+        """
+        texts = gacha_texts([
+            ("运控增加", "主力运控+30，队友属性小幅提升"),
+            ("防守升级包++", "防守属性+40，防守训练的训练等级+3"),
+            ("弹跳专注", "消耗所有精力，训练主力获得弹跳+48"),
+        ], stamina="25/130", money="359",
+            price=[("60", "50"), ("100", "90"), ("60", "50")])
+        task = FakeTask(texts, qualities=["蓝", "金", "蓝"],
+                        mates=[False, True, False])
+        self.assertTrue(task.handle_street(texts))
+        self.assertEqual(task.actions[0][0], "click")
+        self.assertEqual(task.actions[0][1], 1100)          # 中间那张卡的卡名中心
+
+    def test_tie_breaks_towards_cheaper_not_leftmost(self):
+        """同分不再「按 OCR 顺序取第一张」：一样有队友时选便宜的那张。"""
+        task = FakeTask(gacha_texts([
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+            ("防守升级包++", "防守属性+72，队友属性大幅提升"),
+            ("弹跳增加", "主力弹跳+20"),
+        ], stamina="25/130", money="359", price=[("100", "90"), ("80", "70"), "50"]),
+            qualities=["金", "金", "蓝"], mates=[True, True, False])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions[0][1], 1100)          # 70 币那张，不是左边的 90 币
 
     def test_gacha_animation_then_cards_appear(self):
         """动画播完后刷出三张卡：要正常选卡，不能退出。"""
@@ -760,6 +850,71 @@ class RingDetection(unittest.TestCase):
         self.assertFalse(task.has_gold_border(texts, subject="防守"))
 
 
+class CritBorderRules(unittest.TestCase):
+    """彩框不该在噪声行上点亮（2026-10-31 用户：「只有一个彩框，怎么出现了两个」）。
+
+    实拍帧 logs/debug/1031-195131_subject04.jpg 里只有「投射」带彩虹边，日志却给
+    「弹跳」也记了彩虹 1（占比 0.214，旧半窗 ±0.06h + 旧门限 0.20）。
+    在存盘帧上重算：半窗 0.050h 后真彩框 0.27~0.39、噪声行 0.00~0.11。
+    """
+
+    SUBJECTS = [("投射", 210), ("弹跳", 340), ("防守", 470),
+                ("体能", 600), ("运控", 730), ("意识", 860)]
+
+    def _frame(self, rainbow_rows=(), noise_rows=()):
+        """1549x871 的科目页：rainbow_rows 画满彩边，noise_rows 画一点杂色。"""
+        frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        h, w = frame.shape[:2]
+        half = int(h * 0.050)
+        x1, x2 = int(w * 0.74), int(w * 0.98)
+        magenta = (255, 0, 255)                    # BGR
+        for name, cy in self.SUBJECTS:
+            if name in rainbow_rows:
+                # 上下两条边各画 6px（真彩框）
+                frame[cy - half + 2:cy - half + 8, x1 + 30:x2 - 30] = magenta
+                frame[cy + half - 8:cy + half - 2, x1 + 30:x2 - 30] = magenta
+            elif name in noise_rows:
+                # 只盖住一小块（≈ 0.09 占比），模拟选中行/图标蹭到的那点杂色
+                frame[cy - half + 2:cy - half + 5, x1 + 30:x1 + 180] = magenta
+        return frame
+
+    def _texts(self):
+        return [box(1500, cy - 24, name, 110, 48) for name, cy in self.SUBJECTS]
+
+    def test_only_real_rainbow_row(self):
+        frame = self._frame(rainbow_rows=("投射",), noise_rows=("弹跳",))
+        texts = self._texts()
+        task = DryRunTask(frame, texts)
+        self.assertTrue(task.has_crit_border(texts, subject="投射"))
+        self.assertFalse(task.has_crit_border(texts, subject="弹跳"))
+        self.assertFalse(task.has_crit_border(texts, subject="体能"))
+
+    def test_weak_rainbow_still_counts(self):
+        """0.157 这种「弱彩边」也要认（2026-10-31 20:31 周四实机：满经验 1、真彩边）。"""
+        self.assertTrue(ring_is_border(0.157, 0.0,
+                                       floor=CRIT_RING_MIN,
+                                       factor=CRIT_RING_FACTOR))
+
+    def test_noise_band_is_below_floor(self):
+        """噪声带上限 0.109 / 选中行旧口径 0.213 那一类，不能被当成彩框。"""
+        self.assertFalse(ring_is_border(0.109, 0.0,
+                                        floor=CRIT_RING_MIN,
+                                        factor=CRIT_RING_FACTOR))
+
+    def test_all_rows_colorful_is_not_all_rainbow(self):
+        """整页都带杂色时，光有绝对门限会把 6 行全判成彩框 —— 相对判据要挡住。"""
+        frame = self._frame(rainbow_rows=[n for n, _ in self.SUBJECTS])
+        texts = self._texts()
+        task = DryRunTask(frame, texts)
+        self.assertFalse(task.has_crit_border(texts, subject="投射"))
+
+    def test_missing_row_is_not_crit(self):
+        frame = self._frame(rainbow_rows=("投射",))
+        texts = self._texts()
+        task = DryRunTask(frame, texts)
+        self.assertFalse(task.has_crit_border(texts, subject="防守流"))
+
+
 class QuickMatchGate(unittest.TestCase):
     """快速比赛：三选一/二选一必须先进比赛才处理（2026-10-28 用户反馈）。"""
 
@@ -1130,6 +1285,36 @@ class WeekendMapRules(unittest.TestCase):
             task = self.styled(style, self._home_texts("星期日"))
             self.assertTrue(task.handle_go_out(task._texts))
             self.assertEqual(task.actions[-1][1], "出行", style)
+
+    def test_dialogue_line_is_not_the_go_out_button(self):
+        """对话框台词「今天可以出行哦！要不…」不是「出行」按钮（2026-10-30 实跑）。"""
+        texts = self._home_texts("星期五") + [
+            box(945, 168, "今天可以出行哦！要不", 330, 40)]
+        task = self.styled("扭蛋流", texts)
+        self.assertTrue(task.handle_go_out(texts))
+        self.assertEqual(task.actions[-1][1], "出行")
+        # 只有台词、右侧按钮还没出来 → 这一拍什么都不点（等对话推进）
+        only_line = [t for t in texts if t.name != "出行"]
+        task2 = self.styled("扭蛋流", only_line)
+        self.assertFalse(task2.handle_go_out(only_line))
+        self.assertEqual(task2.actions, [])
+
+    def test_map_with_gacha_hint_is_not_gacha_page(self):
+        """2026-10-31 实跑（野上泷额外周末 · 第3周星期五）：
+
+        地图上步行街的奖励提示写的是「扭蛋增强」（平时是「零用钱+」），
+        `STREET_TITLE` 里的「扭蛋」包含匹配把**地图**判成扭蛋页 →
+        三张卡读不出来 → 点返回 → 回到训练日主界面，当天的出行白跑。
+        用户反馈：「进了出行地图，然后就退回来了，又点了训练」。
+        """
+        texts = self._map("星期五") + [box(1150, 470, "扭蛋增强", 130, 40)]
+        task = self.styled("扭蛋流", texts)
+        # 地图不是扭蛋页，而且不能留下「步行街已去过」的错误记忆
+        self.assertFalse(task.handle_street(texts))
+        self.assertNotIn("步行街", task.weekend_state().get("visited") or set())
+        # 交给 handle_weekend：扭蛋流周五去步行街
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertEqual(task.actions[-1][1], "步行街")
 
     def test_sunday_place_by_style(self):
         """周日地点：训练流→公园、商店流→餐厅、扭蛋流→步行街、小游戏流→游戏厅。"""
@@ -2055,6 +2240,90 @@ class OutingOnTrainingDay(unittest.TestCase):
         self.assertTrue(task.handle_training_day(task._texts))
         self.assertNotEqual(task.actions[-1][1], "出行")
 
+    def _dialog_texts(self):
+        """同一帧里只有对话框台词、右侧按钮还没出来（2026-10-31 实跑那一拍）。"""
+        return ([t for t in self._texts() if t.name != "出行"]
+                + [box(945, 168, "今天可以出行哦！要不", 330, 40)])
+
+    def test_dialogue_line_is_not_the_button(self):
+        """台词里有「出行」不算入口：只推进对话，不烧掉当天唯一的外出机会。
+
+        2026-10-31 实跑日志：`left_click 今天可以出行哦！要不 (950, 182)` ——
+        旧版 click_text("出行") 是包含匹配，把台词当按钮点了，而 outing_done
+        已经置 True，下一拍就掉进 else 点「训练」。用户：「为什么没有点出行，
+        反而默认进了训练」。
+        """
+        texts = self._dialog_texts()
+        task = FakeTask(texts)
+        task.try_speed_2x = lambda texts: False
+        self.assertTrue(task.handle_training_day(texts))
+        self.assertEqual(task.actions[-1][1], "今天可以出行哦！要不")
+        self.assertFalse(task.weekend_state().get("outing_done"))
+        # 下一拍按钮出来了 → 正常外出
+        self.assertTrue(task.handle_training_day(self._texts()))
+        self.assertEqual(task.actions[-1][1], "出行")
+
+    def test_split_button_still_found(self):
+        """OCR 把按钮拆成「出」「行」两个单字框时也要认出来（商店 商/店 同款坑）。"""
+        texts = ([t for t in self._texts() if t.name != "出行"]
+                 + [box(1380, 750, "出", 52, 40), box(1440, 750, "行", 52, 40)])
+        task = FakeTask(texts)
+        task.try_speed_2x = lambda texts: False
+        self.assertTrue(task.handle_training_day(texts))
+        self.assertEqual(task.actions[-1][1], "出行")
+
+
+class GachaMateBadge(unittest.TestCase):
+    """金卡的橙黄卡头不能当成队友角标（2026-10-31 20:35 实跑）。
+
+    用户现场：三张金卡只有右边那张有队友角标，日志却是
+    `随机加成(金+队友/100币/320)、意识升级包++(金+队友/100币/321)、运控升级包++(金+队友/100币/321)`
+    —— 每张金卡都被加了 20 分队友分，最后按顺序选了中间那张。
+    """
+
+    W, H = 1549, 871
+
+    def _frame(self):
+        return np.zeros((self.H, self.W, 3), dtype=np.uint8)
+
+    def _gold_card(self, frame, cx):
+        x1, x2 = int(self.W * (cx - 0.17)), int(self.W * (cx + 0.17))
+        frame[int(self.H * 0.30):int(self.H * 0.78), x1:x2] = (35, 160, 245)
+
+    def _gold_ornament(self, frame, cx):
+        """卡头装饰圆/高光：橙黄一块，形状和大小都像角标，落在 ROI 内。"""
+        x = int(self.W * (cx - 0.09))
+        frame[int(self.H * 0.305):int(self.H * 0.362), x:x + int(self.W * 0.055)] = (40, 170, 250)
+
+    def _navy_chip(self, frame, cx):
+        """当前版本的队友角标：深蓝底 + 头像。"""
+        x = int(self.W * (cx - 0.10))
+        frame[int(self.H * 0.265):int(self.H * 0.325), x:x + int(self.W * 0.060)] = (82, 60, 55)
+
+    def _old_orange_bubble(self, frame, cx):
+        """旧版橙色「!」气泡：浮在卡片上沿之上（y < 0.30h）。"""
+        x = int(self.W * (cx - 0.09))
+        frame[int(self.H * 0.235):int(self.H * 0.275), x:x + int(self.W * 0.045)] = (40, 170, 250)
+
+    def test_gold_card_head_is_not_mate(self):
+        frame = self._frame()
+        self._gold_card(frame, 0.50)
+        self._gold_ornament(frame, 0.50)
+        self.assertFalse(DryRunTask(frame, []).has_mate_badge(0.50))
+
+    def test_navy_chip_is_mate(self):
+        frame = self._frame()
+        self._gold_card(frame, 0.74)
+        self._gold_ornament(frame, 0.74)
+        self._navy_chip(frame, 0.74)
+        self.assertTrue(DryRunTask(frame, []).has_mate_badge(0.74))
+
+    def test_old_orange_bubble_above_card_still_counts(self):
+        frame = self._frame()
+        self._gold_card(frame, 0.26)
+        self._old_orange_bubble(frame, 0.26)
+        self.assertTrue(DryRunTask(frame, []).has_mate_badge(0.26))
+
 
 class ArcadeAnimationWait(unittest.TestCase):
     """游戏厅小游戏会自己打完，期间只能等（用户 2026-10-29 口径）。"""
@@ -2468,6 +2737,39 @@ class RegisterWatchdog(unittest.TestCase):
             self.assertFalse(task.handle_register_player(texts))
         self.assertEqual(getattr(task, "_reg_ticks", 0), 0)
         self.assertFalse(any("没推进" in m for m in task.logs))
+
+
+class MonitorTimeline(unittest.TestCase):
+    """监控页「最近动作」详情列 = 本拍识别到的文字（2026-11-01 用户口径）。
+
+    旧版详情列写「第 N 步 · handler 名」，只能看出流程走到哪一步，看不出
+    当时屏幕上是什么；步数/全名改成另外两个键存着，不占列。
+    """
+
+    def test_detail_is_recognized_text(self):
+        task = FakeTask([box(30, 20, "第1周", 120, 40),
+                         box(200, 20, "星期六", 130, 40)])
+        task._steps = 7
+        task._ui_event(task.handle_story_arrow, task._texts)
+        ev = task.info["timeline"][0]
+        self.assertEqual(ev["detail"], "第1周 / 星期六")
+        self.assertEqual(ev["step"], 7)
+        self.assertEqual(ev["handler"], "story_arrow")
+
+    def test_summary_texts_dedupes_and_skips_blank(self):
+        from src.tasks.training.flow import summary_texts
+        texts = [box(0, 0, "训练"), box(0, 0, "训练"), box(0, 0, "   "),
+                 box(0, 0, "第 2 周")]
+        self.assertEqual(summary_texts(texts), "训练 / 第 2 周")
+        self.assertEqual(summary_texts([]), "")
+
+    def test_summary_texts_is_bounded(self):
+        """一帧几十条文字也不能把一行撑爆：条数和总长都要限。"""
+        from src.tasks.training.flow import summary_texts
+        texts = [box(0, 0, f"文字{i}") for i in range(30)]
+        out = summary_texts(texts)
+        self.assertLessEqual(len(out), 50)
+        self.assertEqual(len(out.split(" / ")), 8)
 
 
 if __name__ == "__main__":
