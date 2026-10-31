@@ -1154,12 +1154,27 @@ class WeekendMapRules(unittest.TestCase):
             self.assertEqual(task.actions[-1][1], "餐厅", style)     # 接着打工
 
     def test_saturday_non_training_styles_go_to_restaurant(self):
-        """周六除训练流外都去餐厅打工（不进步行街/游戏厅）。"""
-        for style in ("商店流", "扭蛋流", "小游戏流"):
+        """周六：商店流/小游戏流去餐厅打工（不进步行街/游戏厅）。
+
+        扭蛋流单独一条（见下一个用例）：2026-10-30 起扭蛋流周六先去步行街抽扭蛋，
+        没消费才接着去餐厅（constants.WEEKEND_PLAN 的 ("六","扭蛋流")）。
+        """
+        for style in ("商店流", "小游戏流"):
             task = self.styled(style, self._map("星期六"))
             task.weekend_state()
             self.assertTrue(task.handle_weekend(task._texts), style)
             self.assertEqual(task.actions[-1][1], "餐厅", style)
+
+    def test_saturday_gacha_style_goes_street_then_restaurant(self):
+        """周六扭蛋流：先进步行街；走完没消费才去餐厅打工。"""
+        task = self.styled("扭蛋流", self._map("星期六"))
+        task.weekend_state()
+        self.assertTrue(task.handle_weekend(task._texts))
+        self.assertEqual(task.actions[-1][1], "步行街")
+        task.actions.clear()
+        task._weekend["visited"] = {"步行街"}          # 步行街走完，但没买东西
+        self.assertTrue(task.handle_weekend(task._texts))
+        self.assertEqual(task.actions[-1][1], "餐厅")
 
     def test_saturday_training_style_keeps_old_route(self):
         """训练流周六原设定不变：步行街 → 游戏厅 → 公园。"""
@@ -1181,6 +1196,7 @@ class WeekendMapRules(unittest.TestCase):
             texts = [box(30, 20, "第3周", 120, 40),
                      box(200, 20, "星期一", 130, 40),
                      box(380, 16, "120/130", 210, 53),
+                     box(700, 110, "VS", 60, 40),        # 比赛日才有（校验见 handle_pre_match_shop）
                      box(1420, 190, "商店", 70, 38),
                      box(1450, 900, action, 120, 60)]
             if rest:
@@ -1193,7 +1209,14 @@ class WeekendMapRules(unittest.TestCase):
         self.assertTrue(task.handle_pre_match_shop(task._texts))
         self.assertEqual(task.actions[-1][1], "商店")
         task.actions.clear()
-        self.assertFalse(task.handle_pre_match_shop(task._texts))   # 当天只进一次
+        # 2026-10-30：点完不等于进店，`_shop_day` 改由 handle_shop 确认商店页真的出现
+        # 之后才记账。所以这里允许再点一次（第 2 次），第 3 次就停手，别整天空点。
+        self.assertTrue(task.handle_pre_match_shop(task._texts))
+        task.actions.clear()
+        self.assertFalse(task.handle_pre_match_shop(task._texts))
+        # 真进过店（_shop_day 记上）当天就不再点了
+        task._shop_day = (3, "一")
+        self.assertFalse(task.handle_pre_match_shop(task._texts))
 
         # 比赛日主界面没有「休息」也要进（2026-10-29 实机第 5/6 周漏进）
         task = hub("训练流", rest=False)
@@ -1506,10 +1529,14 @@ class StylePlanRules(unittest.TestCase):
         self.assertIsNone(task._style)
         self.assertEqual(task.style, "训练流")      # 还没认出来时的兜底
 
-    # ---------- 周五休息阈值 ----------
+    # ---------- 周四休息阈值 ----------
 
-    def test_friday_rest_threshold_by_style(self):
-        """周五：训练流不变(40)、其他流派 55、商店流 80；别的日子不变。"""
+    def test_thursday_rest_threshold_ignores_style(self):
+        """周四：体力低于 75 就休息（给周五的周末留体力），跟流派无关。
+
+        2026-10-30 口径（constants.THURSDAY_REST_THRESHOLD）：原来的「周五按流派
+        55 / 80」**已取消**，周五回落到配置里的「休息体力阈值」。
+        """
         base = {"休息体力阈值": 40}
 
         def limit(style, day):
@@ -1517,15 +1544,16 @@ class StylePlanRules(unittest.TestCase):
             task._style = style
             return task.rest_threshold(day)
 
-        self.assertEqual(limit("训练流", "五"), 40)
-        self.assertEqual(limit("扭蛋流", "五"), 55)
-        self.assertEqual(limit("小游戏流", "五"), 55)
-        self.assertEqual(limit("商店流", "五"), 80)
-        self.assertEqual(limit("商店流", "四"), 40)
+        for style in ("训练流", "商店流", "扭蛋流", "小游戏流"):
+            self.assertEqual(limit(style, "四"), 75, style)
+            self.assertEqual(limit(style, "五"), 40, style)
+            self.assertEqual(limit(style, "一"), 40, style)
+        # 配置里的阈值更高时以配置为准（取 max，不能因为周四就下调）
+        self.assertEqual(FakeTask([], config={"休息体力阈值": 80}).rest_threshold("四"), 80)
 
-    def test_friday_rest_uses_style_threshold(self):
-        """周五 50 体力：扭蛋流休息（门槛 55），不是训练流的 40。"""
-        texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期五", 130, 40),
+    def test_thursday_low_stamina_rests(self):
+        """周四 50 体力：直接休息（门槛 75），扭蛋流也不例外。"""
+        texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期四", 130, 40),
                  box(380, 16, "50/130", 210, 53),
                  box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
         task = FakeTask(texts)
@@ -1534,16 +1562,17 @@ class StylePlanRules(unittest.TestCase):
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "休息")
 
-    def test_friday_training_style_still_trains(self):
-        """训练流周五 50 体力仍然训练（阈值还是配置里的 40）—— 效果不变。"""
+    def test_friday_low_stamina_trains(self):
+        """周五 50 体力：回落到配置的 40 → 照常训练（周五不再有特殊阈值）。"""
         texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期五", 130, 40),
                  box(380, 16, "50/130", 210, 53),
                  box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
-        task = FakeTask(texts)
-        task._style = "训练流"
-        task.try_speed_2x = lambda *a, **k: False
-        self.assertTrue(task.handle_training_day(texts))
-        self.assertEqual(task.actions[-1][1], "训练")
+        for style in ("训练流", "商店流", "扭蛋流"):
+            task = FakeTask(texts)
+            task._style = style
+            task.try_speed_2x = lambda *a, **k: False
+            self.assertTrue(task.handle_training_day(texts), style)
+            self.assertEqual(task.actions[-1][1], "训练", style)
 
     # ---------- 餐厅：队友多 → 右边（耗精力）→ 精力不够退回左边 ----------
 
@@ -2298,16 +2327,18 @@ class TalentStockEvent(unittest.TestCase):
         self.assertTrue(task.handle_event_choice(texts))
         self.assertEqual(task.actions[-1][1], "精力恢复")
 
-    def test_note_select_clicks_next(self):
-        """新流程「选择笔记」：不选笔记，直接点下一步（2026-10-29 用户口径）。"""
+    def test_note_select_auto_then_next(self):
+        """「选择笔记」：先自动选择，再点下一步（2026-10-30 口径，旧口径是不选直接过）。"""
         texts = [box(150, 80, "选择笔记", 300, 50),
                  box(560, 780, "重置", 160, 50),
                  box(700, 780, "自动选择", 200, 50),
                  box(1150, 900, "下一步", 300, 60)]
         task = FakeTask(texts)
         self.assertTrue(task.handle_note_select(texts))
-        self.assertEqual(task.actions[-1][1], "下一步")
-        self.assertIn("不选", "".join(task.logs))
+        self.assertEqual(task.actions[0][1], "自动选择")
+        # 下一步走 click_and_expect（x, y 在前），坐标 = 按钮中心
+        self.assertEqual(task.actions[-1][:2], ("click_and_expect", 1300))
+        self.assertIn("选择笔记：自动选择", "".join(task.logs))
 
     def test_note_select_ignores_confirm_team_page(self):
         """确认编队页有「未选择笔记」，不能被当成「选择笔记」页（2026-10-29 实机）。"""
