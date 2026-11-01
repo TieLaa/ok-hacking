@@ -425,6 +425,62 @@ def check_places():
     return problems
 
 
+# ---------- 通用交互层零地点知识（2026-11-01 架构）----------
+# `training/interactions.py` 做的是跨地点复用的**动作**。
+# 它**不许认识任何地点** —— 兜底坐标、正则、页面特征都得由调用方给。
+# 否则通用层会变成「什么都知道一点」的地方
+# （2026-11-01 之前的现状：ACTIVITY_GO 一个正则塞了 9 个地点名，
+#  leave_street 的兜底坐标是扭蛋页专属的，三个退出方法各写各的坐标）。
+def check_interactions():
+    """通用交互层不许出现地点名。
+
+    返回问题列表（空 = 通过）。
+    """
+    problems = []
+    path = os.path.join(ROOT, "src", "tasks", "training", "interactions.py")
+    if not os.path.exists(path):
+        return problems
+    # 所有地点名（从 labels.WEEKEND_PLACES 取）+ 公园/餐厅内的活动名
+    place_words = set()
+    try:
+        from src.tasks.ui.labels import WEEKEND_PLACES
+        place_words.update(WEEKEND_PLACES)
+    except Exception:
+        place_words.update(("餐厅", "游戏厅", "公园", "步行街"))
+    place_words.update(("划船", "野餐", "散步", "当服务员", "桌游GM"))
+    src = open(path, encoding="utf-8").read()
+    tree = ast.parse(src, filename=path)
+    # docstring 里说明「为什么」是**需要**写的（记录了 2026-11-01 的具体事故），
+    # 所以只查**代码里真正用到的字符串**，不看文档。
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)):
+            body = getattr(node, "body", None)
+            if body and isinstance(body[0], ast.Expr) \
+                    and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                docstrings.add(id(body[0].value))
+    for node in ast.walk(tree):
+        # 只看**字符串常量**（注释/docstring 里的地名不算 ——
+        # 文档里说明「为什么」是需要写的）
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) in docstrings:
+                continue
+            for w in place_words:
+                if w in node.value:
+                    problems.append(
+                        f"src/tasks/training/interactions.py:{node.lineno} "
+                        f"字符串里出现了地点名「{w}」——"
+                        f"通用交互层不认识地点（坐标/正则由调用方传进来）")
+    print("-" * 96)
+    print(f"通用交互层：地点知识 {len(problems)} 处"
+          f"（通用层 = training/interactions.py）")
+    for p in problems:
+        print("  ✗ " + p)
+    return problems
+
+
 # ---------- 判据单一来源（文案门禁）----------
 # 受管按钮词：出现在这些方法的 names 参数里、且是**内联字面量**，就算违规。
 # 为什么是这几个：它们是「按钮」，必须全等匹配且来自 labels.BUTTONS
@@ -603,9 +659,10 @@ def main():
     label_problems = check_labels()
     date_problems = check_date_entry()
     place_problems = check_places()
+    inter_problems = check_interactions()
 
     if fails or misses or arch_problems or label_problems or date_problems \
-            or place_problems:
+            or place_problems or inter_problems:
         print("回归失败")
         return 1
     print("回归通过")

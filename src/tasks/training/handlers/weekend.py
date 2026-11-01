@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 from src.tasks.ui import labels
+from src.tasks.training.places import activities
 from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,
                                           WORK_STAMINA_COST)  # noqa: F401
 
@@ -29,7 +30,13 @@ class WeekendHandlers:
     GACHA_EMPTY_LIMIT = 4
 
     # 地点详情弹窗的「前往XXX」：公园点「划船」只是打开详情，还要再点这个。
-    ACTIVITY_GO = re.compile(r"^前往(划船|野餐|散步|当服务员|桌游GM|游戏厅|商店|步行街|餐厅)")
+    # 2026-11-01：原来是一个正则塞了 9 个地点名（住在通用层里 → 新增地点就要改
+    # 通用层，而且「前往游戏厅」这种从没见过的组合也会被匹配）。
+    # 现在每个地点模块给自己的正则（`places/activities.py`），这里只管找。
+    ACTIVITY_GO = activities.PARK_GO
+    ACTIVITY_GO_ALL = (activities.PARK_GO, activities.RESTAURANT_GO,
+                       activities.ARCADE_GO, activities.SHOP_GO,
+                       activities.STREET_GO)
 
     def handle_activity_go(self, texts):
         """地点详情弹窗：右下「前往划船 / 前往野餐」才是真正进入。
@@ -45,7 +52,7 @@ class WeekendHandlers:
         或同一个「前往」点过一次画面没变 → **不点**，退出弹窗并把这张卡记成
         今天不可选；下一拍回到卡片页会自动改选另一张（桌游GM 不耗精力）。
         """
-        target = self.match_text(texts, self.ACTIVITY_GO)
+        target = self.find_go_button(texts, self.ACTIVITY_GO_ALL)
         if target is None:
             self._activity_go_key = None
             return False
@@ -106,66 +113,14 @@ class WeekendHandlers:
         退出类按钮走 `labels.BUTTONS["exit_hatch"]`（全等匹配，2026-11-01 统一）：
         原来这里写的是 `click_text(("关闭","取消","返回"))`，那是**包含**匹配，
         正文里出现「返回」两个字也会被点；改成全等之后认不出来还有下面的坐标兜底。
+
+        兜底坐标由**调用方**给（通用层不认识这个弹窗长什么样）。
         """
         if self.click_button("exit_hatch", after_sleep=after_sleep, must=False):
             return True
-        self.click(int(self.width * self.ACTIVITY_CLOSE[0]),
-                   int(self.height * self.ACTIVITY_CLOSE[1]), after_sleep=after_sleep)
-        self.log_info("地点详情：没认出关闭按钮 → 点弹窗右上角 × 兜底")
+        self.exit_with_coords(self.ACTIVITY_CLOSE, after_sleep=after_sleep,
+                              what="地点详情")
         return True
-
-    def choose_option(self, texts, names, after_sleep=0.4):
-        """在周末子页面的选项区里选一个，并处理可能的「确定」。
-
-        确定按钮位置不固定（扭蛋页在底部中间，餐厅/公园可能在别处），
-        先看底部条，再看整屏，避免只在固定区域找不到就反复点同一张卡。
-
-        坑（2026-10-26 实机）：公园的「划船」图标上盖了一个
-        「划船比赛！」活动标签，子串匹配先命中的是这个标签，点它毫无反应。
-        所以这里**先整词匹配**，找不到再用子串，并且排除角标文字。
-        """
-        opts = self.texts_in_region(texts, "weekend_options")
-        opts = [t for t in opts if not self.is_decor(t.name)]
-
-        target = None
-        for name in names:
-            target = next((t for t in opts if t.name.strip() == name), None)
-            if target is not None:
-                break
-        if target is None:
-            plain = [t for t in opts if not self.is_label(t.name)]
-            target = self.match_text(plain, names)
-            if target is not None and self.is_label(target.name):
-                target = None
-        if target is None:
-            return False
-        self.click_box(target, after_sleep=after_sleep)
-        self.log_info(f"选择「{target.name}」")
-
-        confirm = self.find_text(labels.BUTTONS["confirm"])
-        if confirm is not None:
-            self.click_box(confirm, after_sleep=0.45)
-            self.log_info(f"确定 @({confirm.x},{confirm.y})")
-        return True
-
-    # 购买没成交的保护：同一件东西连点这么多次还没变化，就认为点不动。
-    # 用户 2026-10-29 口径：**不要按次数限制购买** —— 羽漱川湊能买两次、
-    # 卧云真昼能买到升级版、白神时久多一件免费商品，商店/游戏厅/步行街
-    # 一天买几件都可能是正常的。要防的是「点了没成交还一直点」。
-    BUY_RETRY_LIMIT = 3
-
-    def buy_stalled(self, scene, money, item):
-        """判断「这一下购买有没有成交」。
-
-        成交一定会让页面状态变（零用钱变少、卡片消失、剩余数变化），
-        所以只盯 **同一场景 + 零用钱没变 + 还是同一件（名字+价格）** 连续出现几次。
-        零用钱变了 = 上一次真花钱了，计数自然重置 → 想买几次买几次。
-        """
-        key = (scene, money, item[0], item[1])
-        same = getattr(self, "_buy_key", None) == key
-        tries = (getattr(self, "_buy_tries", 0) + 1) if same else 1
-        self._buy_key, self._buy_tries = key, tries
-        return tries >= self.BUY_RETRY_LIMIT
 
     def mark_visited(self, place):
         """地点内页真的打开后才登记「今天去过」。
@@ -182,23 +137,21 @@ class WeekendHandlers:
         self._weekend.setdefault("visited", set()).add(place)
 
     def leave_street(self, after_sleep=0.5):
-        """退出扭蛋页：先找文字退路，再点右上角 ↩，最后才用底部兜底。
+        """退出扭蛋页：先找文字退路，再点右上角 ↩。
 
         2026-10-26 实测（1349x759）：**买完卡的详情页**底部有「放弃」，
         点它立即回到周末首页，「放弃」中心约 (0.346w, 0.896h)。
 
-        2026-10-27 实测（logs/debug/1027-000428_nochange3）：第一次进店的
-        「请选择1个扭蛋」页底部只有「能力详情 / 确定」，**没有「放弃」**，
-        旧兜底坐标 (0.346w, 0.896h) 正好落在两个按钮中间的空白，
-        连续 9 拍点不动 → 任务被判「连续 3 轮点不动」停止。
-        这一页右上角 ↩ (0.957w, 0.047h) 实测有效，退回周末地图页。
-
-        退出类按钮同样走 `labels.BUTTONS["exit_hatch"]`（全等匹配）：两个页面各自
+        退出类按钮走 `labels.BUTTONS["exit_hatch"]`（全等匹配）：两个页面各自
         只出现其中一个词，合成一个集合不改行为；同屏出现时「关闭」优先。
+
+        兜底坐标由**步行街模块**给（`StreetPlace.EXIT_COORDS`）——
+        通用层不认识这一页长什么样（2026-11-01）。
         """
         if self.click_button("exit_hatch", after_sleep=after_sleep, must=False):
             return
-        self.click(int(self.width * 0.957), int(self.height * 0.047), after_sleep=after_sleep)
+        self.exit_with_coords(self.EXIT_COORDS, after_sleep=after_sleep,
+                              what="步行街")
 
     def handle_restaurant(self, texts):
         """餐厅内页：打工二选一（当服务员 / 桌游GM）。
@@ -594,11 +547,12 @@ class WeekendHandlers:
             pick = max(affordable, key=lambda i: (
                 1 if "器材手册" in i["name"] else 0, i["price"]))
 
-        if self.buy_stalled("商店", money, (pick["name"], pick["price"])):
+        if self.buy_stalled("商店", money, (pick["name"], pick["price"]),
+                            counter=self.buy_counter("商店")):
             self.log_warning(
                 f"商店：「{pick['name']}」连续 {self.BUY_RETRY_LIMIT} 次点了没成交"
                 "（零用钱没变、卡片还在）→ 今天不再买，关店")
-            self._buy_key = None
+            self.reset_buy_counter(self.buy_counter("商店"))
             self.finish_shop(texts)
             return True
 
@@ -913,11 +867,12 @@ class WeekendHandlers:
                 break
         confirm = self.exact_text(texts, labels.BUTTONS["confirm"])
         if pick is not None and confirm is not None:
-            if self.buy_stalled("游戏厅", money, (pick["attr"], pick["price"])):
+            if self.buy_stalled("游戏厅", money, (pick["attr"], pick["price"]),
+                                counter=self.buy_counter("游戏厅")):
                 self.log_warning(
                     f"游戏厅：「{pick['attr']}」连续 {self.BUY_RETRY_LIMIT} 次点了没成交"
                     "（零用钱没变、卡片还在）→ 今天不再买，退出")
-                self._buy_key = None
+                self.reset_buy_counter(self.buy_counter("游戏厅"))
                 self.exit_page()
                 return True
             self.click_box(pick["box"], after_sleep=0.4)

@@ -120,6 +120,7 @@ handlers 里直接 `top_bar()` 取日期就报红。
 | `check_labels()` | 调用处不许写按钮文案（要走 `labels.BUTTONS`） |
 | `check_date_entry()` | handlers 里不许直接读日期（唯一入口 = `daycycle.py`） |
 | `check_places()` | 地点模块之间不许互相知道（该由地图模块决定去哪个） |
+| `check_interactions()` | 通用交互层不许出现地点名（坐标/正则由调用方传进来） |
 | 回归图 | `docs/shots/expected.json` 锁「哪张图命中哪个 handler」 |
 
 ## 五、落地顺序
@@ -132,7 +133,7 @@ handlers 里直接 `top_bar()` 取日期就报红。
 | 1 | `daycycle.py`：全局日期 + 两个入口 + 当天状态 | ✅ 2026-11-01 |
 | 2 | `systemui.py`：系统级固定控件收口 | ✅ 2026-11-01（倍速/快进已搬） |
 | 3 | 地点模块拆分（步行街 → 游戏厅 → 餐厅 → 公园 → 商店） | ✅ 步行街样板；其余待做 |
-| 4 | 通用交互层：选选项/找确定/退出/购买成交判定 | 待做 |
+| 4 | 通用交互层：选选项/找确定/退出/购买成交判定 | ✅ 2026-11-01 |
 | 5 | 配置层：`config_spec.py` 单一来源 + 门禁 | 待做 |
 
 第 3 步的样板：步行街（它今天暴露的问题最多）。
@@ -153,6 +154,37 @@ class StreetPlace:
 
 模块**只给判断，不点击** —— 点击由 handler 做。
 这样模块可以被离线测试（不需要帧、不需要点击）。
+
+### 3.5 `interactions.py` —— 通用交互层
+
+跨地点复用的**动作**，**零地点知识**（2026-11-01 第 4 步）：
+
+| 接口 | 作用 |
+|---|---|
+| `choose_option(texts, names, ...)` | 选一个选项 + 按确定 |
+| `confirm_after_choice(confirm_region=...)` | 按「确定」（**区域限定**） |
+| `exit_with_coords(coords, ...)` | 按**给定**坐标退出（坐标由调用方给） |
+| `buy_stalled(scene, money, item, counter=...)` | 购买有没有成交（计数器由调用方持有） |
+| `find_go_button(texts, pattern)` | 按**调用方给的正则**找「前往XXX」 |
+
+**为什么必须零地点知识**（2026-11-01 的 5 个具体问题）：
+
+1. `choose_option` 的「确定」原来**全屏找** → 正文里的「确定」会被点
+   （`labels.py` 记过两次同类事故）。现在**区域限定**。
+   *实测确认安全*：扫全部真实存证帧 —— 公园/餐厅的 112 帧根本没有「确定」按钮；
+   有「确定」的 `handle_street`/`handle_boost_training`/`handle_arcade`
+   全部在 `confirm_bar` 里；在区域外的只有 `handle_skill_select` 和
+   `handle_rest_confirm`，但它们**不走 `choose_option`**。
+2. `leave_street` 的兜底坐标是扭蛋页专属的 → 现在归**步行街模块**
+   （`StreetPlace.EXIT_COORDS`）。
+3. `buy_stalled` 的计数是共享变量，商店/游戏厅互相清对方的状态
+   → 现在**每个场景一份**（`buy_counter(scene)`）。
+4. `ACTIVITY_GO` 一个正则塞了 9 个地点 → 现在每个地点模块给自己的正则
+   （`places/activities.py`）。
+5. 三个退出方法各写各的兜底坐标 → 通用层收成 `exit_with_coords`。
+
+**门禁**：`check_handlers.py: check_interactions()` ——
+通用层的**代码**里不许出现地点名（docstring 里说明「为什么」不算）。
 
 ## 六、被否掉的方案
 

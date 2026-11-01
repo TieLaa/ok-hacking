@@ -1695,6 +1695,79 @@ class DayCycleRules(unittest.TestCase):
         self.assertTrue(hasattr(FakeTask, "outing_offer"))
 
 
+class InteractionsRules(unittest.TestCase):
+    """通用交互层：跨地点复用的动作，**零地点知识**。
+
+    2026-11-01 收口时列的 5 个问题，这里逐条锁住。
+    """
+
+    def test_confirm_is_region_limited(self):
+        """「确定」**不再全屏找** —— 正文里的「确定」不能被点。
+
+        `labels.py` 记过两次同类事故：「点休息确认点到对话框标题」
+        「找决定命中正文『…决定通过…』」。全屏找「确定」是同一类问题的
+        新入口 —— 地点内页正文里出现「确定」两个字就会点到正文。
+        """
+        # 正文里有个「确定」，底部条里也有个「确定」→ 必须点底部的那个
+        texts = [box(200, 300, "确定要不要休息？", 400, 50),   # 正文
+                 box(860, 950, "确定", 200, 60)]              # 底部条
+        task = FakeTask(texts)
+        task.confirm_after_choice()
+        self.assertEqual(task.actions[-1][0], "click_box")
+        self.assertEqual(task.actions[-1][1], "确定")
+        # 点的是**底部条**那个（y 中心 980），不是正文那个（y 中心 325）
+        self.assertEqual(task.actions[-1][3], 980)
+
+    def test_confirm_not_found_does_not_click(self):
+        """找不到「确定」就**不点**（原来会全屏乱找）。"""
+        texts = [box(200, 300, "确定要不要休息？", 400, 50)]
+        task = FakeTask(texts)
+        self.assertFalse(task.confirm_after_choice())
+        self.assertEqual(task.actions, [])
+
+    def test_buy_counter_is_per_scene(self):
+        """每个地点一份购买计数，互不干扰。
+
+        2026-11-01 之前是共享的一对 `self._buy_key/_buy_tries`，
+        商店和游戏厅各自手工把对方的状态清零 —— 漏一处就串。
+        """
+        task = FakeTask([])
+        shop = task.buy_counter("商店")
+        arcade = task.buy_counter("游戏厅")
+        self.assertIsNot(shop, arcade)
+        # 商店点不动 3 次
+        for _ in range(2):
+            self.assertFalse(task.buy_stalled("商店", 100, ("a", 60), counter=shop))
+        self.assertTrue(task.buy_stalled("商店", 100, ("a", 60), counter=shop))
+        # 游戏厅的计数**不受影响**
+        self.assertFalse(task.buy_stalled("游戏厅", 100, ("b", 60), counter=arcade))
+
+    def test_buy_counter_resets_after_reset(self):
+        """清掉计数后重新计数。"""
+        task = FakeTask([])
+        counter = task.buy_counter("商店")
+        for _ in range(2):
+            task.buy_stalled("商店", 100, ("a", 60), counter=counter)
+        task.reset_buy_counter(counter)
+        self.assertFalse(task.buy_stalled("商店", 100, ("a", 60), counter=counter))
+
+    def test_exit_with_coords_uses_given_coords(self):
+        """退出兜底按**给定**坐标点（通用层不认识页面长什么样）。"""
+        task = FakeTask([])
+        task.exit_with_coords((0.5, 0.5))
+        self.assertEqual(task.actions[-1][0], "click")
+        self.assertEqual(task.actions[-1][1], int(task.width * 0.5))
+
+    def test_find_go_button_takes_pattern_from_caller(self):
+        """「前往XXX」的正则由**调用方**给（通用层不认识地点）。"""
+        task = FakeTask([box(300, 600, "前往划船", 200, 50)])
+        found = task.find_go_button(task._texts, r"^前往(划船|野餐|散步)")
+        self.assertIsNotNone(found)
+        self.assertEqual(found.name, "前往划船")
+        # 换个正则就匹配不到（通用层自己不知道有哪些地点）
+        self.assertIsNone(task.find_go_button(task._texts, r"^前往(当服务员)"))
+
+
 class WeekendMapRules(unittest.TestCase):
     """周末地图：地点都去过要退回首页，且地图不能被当成剧情页连点 ▼。"""
     MAP = [box(814, 461, "游戏厅", 148, 57), box(1538, 606, "公园", 102, 51),
@@ -3301,6 +3374,188 @@ class MonitorTimeline(unittest.TestCase):
         out = summary_texts(texts)
         self.assertLessEqual(len(out), 50)
         self.assertEqual(len(out.split(" / ")), 8)
+
+
+class StyleResolution(unittest.TestCase):
+    """流派来源：配置里的「指定队长」说了算（用户 2026-11-01 口径）。
+
+    事故（2026-11-01 19:19 实跑）：扭蛋流跑成了训练流。
+    根因：旧逻辑只在 `is_lobby()` 时才套用配置队长，而**接手的局不是大厅**，
+    于是 `_style` 一直是空的 → `style` 兜底成「训练流」；
+    而日历只在训练日弹，周末（非训练日）永远读不到实际队长。
+
+    修法：`resolve_style()` —— 配置里有队长就按它定流派，不管是不是大厅开局。
+    """
+
+    def _task(self, config):
+        task = FakeTask([])
+        task.config = dict(config)
+        task.is_lobby = lambda *a, **k: False     # 接手别人的局
+        return task
+
+    def test_configured_captain_wins_even_when_not_lobby(self):
+        task = self._task({"指定队长": "野上泷"})
+        task.resolve_style()
+        self.assertEqual(task.style, "扭蛋流")
+        self.assertTrue(task.style_known)
+
+    def test_configured_train_captain(self):
+        task = self._task({"指定队长": "真崎辉世"})
+        task.resolve_style()
+        self.assertEqual(task.style, "训练流")
+        self.assertTrue(task.style_known)
+
+    def test_no_captain_waits_for_calendar(self):
+        """无队长 → 清空流派，等日历识别（style_known 为假）。"""
+        task = self._task({"指定队长": ""})
+        task.resolve_style()
+        self.assertFalse(task.style_known)
+        self.assertEqual(task.style, "训练流")     # 兜底
+
+    def test_unknown_captain_falls_back_to_calendar(self):
+        """配置的名字不在角色表 → 不能瞎定流派，回去等日历。"""
+        task = self._task({"指定队长": "查无此人"})
+        task.resolve_style()
+        self.assertFalse(task.style_known)
+
+
+class MonitorCaptainLogic(unittest.TestCase):
+    """监控页「指定队长」勾选框 = 队长的唯一来源（用户 2026-11-01 口径）。
+
+    两条坑：
+    1. 勾选框**默认是勾上的** → 用户一进页面就等于「指定了一个队长」，
+       而下拉第 0 项是「── 训练流 ──」分组标题 → 流派被写成训练流。
+    2. 取消勾选必须**清空变量**（config 里的名字 **和** 运行期 `_style`），
+       否则旧的流派一直留着（界面显示的流派和实际跑的不一致）。
+    """
+
+    def _tab(self, captain=""):
+        from src.ui.MonitorTab import MonitorTab
+
+        class _FakeTask:
+            def __init__(self):
+                self.config = {"指定队长": captain}
+                self.enabled = False
+                self.running = False
+                self.reset_calls = 0
+
+            def reset_style(self):
+                self.reset_calls += 1
+
+            def enable(self):
+                self.enabled = True
+
+            def disable(self):
+                self.enabled = False
+
+            def unpause(self):
+                pass
+
+        tab = MonitorTab.__new__(MonitorTab)
+        task = _FakeTask()
+        tab._task = lambda: task
+        tab._update_data = lambda: None
+        return tab, task
+
+    def test_uncheck_clears_config_and_style(self):
+        tab, task = self._tab("野上泷")
+        tab.set_captain("")
+        self.assertEqual(task.config["指定队长"], "")
+        self.assertEqual(task.reset_calls, 1)
+
+    def test_uncheck_clears_style_even_if_config_already_empty(self):
+        """配置本来就是空时也要清 `_style` —— 否则旧流派一直留着。"""
+        tab, task = self._tab("")
+        tab.set_captain("")
+        self.assertEqual(task.reset_calls, 1)
+
+    def test_select_captain_keeps_style(self):
+        tab, task = self._tab("")
+        tab.set_captain("真崎辉世")
+        self.assertEqual(task.config["指定队长"], "真崎辉世")
+        self.assertEqual(task.reset_calls, 0)
+
+
+class MonitorButtons(unittest.TestCase):
+    """监控页两栏按钮的职责（用户 2026-11-01 口径）。
+
+    - 第一栏 = 总开关【启动 / 停止】：启动 = 接入游戏；停止 = 断开游戏
+      **并且把第二栏复位成「开始」**；
+    - 第二栏 = 【开始 / 暂停】：只管自动训练脚本自己，不碰「接入游戏」。
+    """
+
+    def _view(self):
+        import json
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        from src.ui.monitor_view import MonitorActions, MonitorView
+        from src.tasks.training.constants import STYLE_BY_NAME
+
+        app = QApplication.instance() or QApplication([])
+        groups = {}
+        for name, style in STYLE_BY_NAME.items():
+            groups.setdefault(style, []).append(name)
+        order = ["训练流", "商店流", "扭蛋流", "小游戏流"]
+        caps = {k: sorted(groups[k]) for k in order if k in groups}
+        with open("configs/monitor_layout.json", encoding="utf-8") as f:
+            layout = json.load(f)
+
+        class _Actions(MonitorActions):
+            def __init__(self):
+                self.log = []
+
+            def toggle_connection(self):
+                self.log.append("connection")
+
+            def toggle_auto_training(self):
+                self.log.append("training")
+
+            def set_captain(self, name):
+                self.log.append(("captain", name))
+
+        actions = _Actions()
+        return MonitorView(layout, actions, captains=caps), actions
+
+    def test_first_bar_is_start_stop(self):
+        view, _ = self._view()
+        self.assertEqual(view._btn_conn.text(), "启动")
+        view.update_data({"captain": "", "executor_running": True,
+                           "training_running": False})
+        self.assertEqual(view._btn_conn.text(), "停止")
+
+    def test_second_bar_is_start_pause(self):
+        view, _ = self._view()
+        self.assertEqual(view._btn_train.text(), "开始")
+        view.update_data({"captain": "", "executor_running": False,
+                           "training_running": True})
+        self.assertEqual(view._btn_train.text(), "暂停")
+
+    def test_checkbox_starts_unchecked(self):
+        """默认不勾 —— 旧版默认勾上，用户没动过就等于指定了第一个训练流角色。"""
+        view, _ = self._view()
+        self.assertFalse(view._captain_check.isChecked())
+
+    def test_uncheck_calls_set_captain_empty(self):
+        """取消勾选 → 必须调 set_captain("")（清空变量）。"""
+        view, actions = self._view()
+        view.update_data({"captain": "野上泷", "executor_running": False,
+                           "training_running": False})
+        actions.log.clear()
+        view._captain_check.setChecked(False)
+        self.assertIn(("captain", ""), actions.log)
+
+    def test_check_uses_current_selection_not_first(self):
+        """勾选时用下拉**当前**选中的角色，不是「列表第一个」。"""
+        view, actions = self._view()
+        view.update_data({"captain": "野上泷", "executor_running": False,
+                           "training_running": False})
+        actions.log.clear()
+        view._captain_check.setChecked(False)
+        view._captain_check.setChecked(True)
+        self.assertIn(("captain", "野上泷"), actions.log)
 
 
 if __name__ == "__main__":
