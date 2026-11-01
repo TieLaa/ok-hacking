@@ -32,15 +32,29 @@ from src.tasks.ui import topbar
 class SystemUIHandlers:
     """系统级 UI 的判读与点击。"""
 
+    def top_icon_point(self, name):
+        """某个顶栏图标的点击坐标（相对坐标）。"""
+        return Defs.TOP_ICON_POINTS[name]
+
     # ---------- 顶栏右上角四个图标 ----------
 
     # 图标从左到右：倍速 / 历史记录 / 菜单 / 返回（Defs.TOP_ICON_POINTS）。
     # 「菜单」**禁止点击**（误触会毁局，见 Defs 里的注释）。
     TOP_ICON = ("speed", "history", "menu", "back")
 
-    def top_icon_point(self, name):
-        """某个顶栏图标的点击坐标（相对坐标）。"""
-        return Defs.TOP_ICON_POINTS[name]
+    # 左上角的「训练计划日历」按钮 —— **系统级固定位置**。
+    # 用户 2026-11-01：日历的位置是系统级的，位置可以复用 ——
+    # 训练室（训练日）和校门口（休息日）左上角都是它，点开就是同一个日历页。
+    #
+    # 实测：训练日主界面点 (0.035w, 0.06h) 会打开「XX的训练计划」日历。
+    # 坑（BaseGirlsTask.exit_page 的注释）：这个位置在训练日是**日历**、不是返回。
+    CALENDAR_POINT = (0.035, 0.06)
+
+    def click_calendar(self, after_sleep=0.8):
+        """点左上角打开训练计划日历（系统级固定位置）。"""
+        x, y = self.CALENDAR_POINT
+        self.click(int(self.width * x), int(self.height * y), after_sleep=after_sleep)
+        return True
 
     def click_top_icon(self, name, after_sleep=0.5):
         """点顶栏右上角的某个图标（菜单除外）。"""

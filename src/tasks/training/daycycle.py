@@ -25,6 +25,7 @@
 
 import time
 
+from src.tasks.ui import labels
 from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,  # noqa: F401
                                           STYLE_BY_NAME)  # noqa: F401
 
@@ -173,6 +174,193 @@ class DayCycleMixin:
             # 按钮还没出来，这一拍只推进对话（不算用掉当天机会）
             return "推进对话", "对话框提到「出行」但还没按钮 → 先推进对话"
         return None, "「出行」按钮认不出来"
+
+    # ---------- 队长 / 流派：两条解析路径 ----------
+
+    # 「认不出队长」时的弹窗标题
+    CAPTAIN_ALERT_TITLE = "认不出队长"
+
+    def resolve_style_by_config(self):
+        """路径 A：配置里填了「指定队长」→ 查表定流派。
+
+        返回 True = 定下来了；False = 认不出（调用方弹窗，**不许保底**）。
+
+        2026-11-01 用户口径：
+          - 配置里有队长 → 查表定流派，找得到 √，找不到**弹窗**；
+          - 配置为空 → 走路径 B（回训练室/校门口点日历）。
+
+        注意这里**不再**区分「是不是大厅开的局」——
+        旧逻辑只在 `is_lobby()` 时套用配置队长，于是**接手的局**如果当前不是训练日
+        （日历只在训练日弹），就永远读不到队长，`_style` 一直是空的
+        → `style` 兜底「训练流」，周末计划全走错（实跑 2026-11-01 19:19：
+        扭蛋流跑成了训练流）。
+        """
+        name = (self.config.get("指定队长") or "").strip()
+        if not name:
+            return False                    # 没配置 → 走路径 B
+        style = self.style_for_name(name)
+        if not style:
+            self.log_warning(
+                f"配置的队长「{name}」不在角色表（STYLE_BY_NAME）→ 认不出流派")
+            return False
+        self._style = style
+        self._style_name = name
+        self.log_info(f"流派：{style}（配置指定队长「{name}」，跳过日历）")
+        return True
+
+    def resolve_style_by_calendar(self):
+        """路径 B：回训练室/校门口 → 点日历 → 抓队长名 → 查表定流派。
+
+        返回 True = 定下来了；False = 认不出（调用方弹窗，**不许保底**）。
+
+        2026-11-01 用户口径：
+        「接手的时候首先就是要点多次返回，回到训练日的训练室或者休息日的校门口，
+        以抓取日期。所以：如果是接手训练，返回带日期的界面，点日历，抓取名字，
+        识别队长和流派，识别到了 √，识别不到（弹窗）。」
+
+        为什么必须「返回到带日期的界面」：
+        日历页**自己不带日期**（实测 111 帧里只有 3 帧带），
+        所以要先回到训练室/校门口（顶栏有「第N周 星期X」）才有日期。
+        """
+        name = self.probe_captain_from_calendar()
+        if not name:
+            return False
+        style = self.style_for_name(name)
+        if not style:
+            self.log_warning(
+                f"日历上的队长「{name}」不在角色表（STYLE_BY_NAME）→ 认不出流派")
+            return False
+        self._style = style
+        self._style_name = name
+        self.log_info(f"流派：{style}（日历队长「{name}」）")
+        return True
+
+    def probe_captain_from_calendar(self, texts=None):
+        """读日历页左上角的队长名字。读不到返回 None。
+
+        `texts` 不给就用本拍的 OCR 结果（`_ocr_region()`）。
+
+        这一步**不点返回**、也不做别的动作 —— 只负责把日历打开、名字读出来。
+        打开日历/读名字的时机由调用方安排（见 `resolve_style_by_calendar`）。
+        """
+        # 日历页左上角「XX的训练计划」里的 XX。
+        if texts is None:
+            texts = self._ocr_region()
+        if not self.is_training_plan(texts):
+            return None
+        return self.read_plan_captain(texts)
+
+    def captain_alert(self):
+        """认不出队长/流派 → **弹窗「未能识别到队长」，不许保底**。
+
+        用户 2026-11-01 口径：「两种情况都不允许保底。」
+        之前是静默兜底「训练流」，结果扭蛋流跑成训练流、周末计划全走错，
+        而且日志上看不出来 —— 这比直接停下更糟。
+
+        `alert()` 用 MessageBoxW，**模态阻塞** —— 用户不点掉，任务线程就停在这里。
+        这正是想要的：这种错误不许自己往下走。
+        """
+        self.log_error("未能识别到队长", notify=True)
+        self.alert(self.CAPTAIN_ALERT_TITLE, "未能识别到队长")
+        return False
+
+    # ---------- 路径 B 的多拍状态机 ----------
+
+    # 「返回」最多点几次（兜底，防止点不动时无限循环）。
+    # 实测：周末地图点一次右上角 ↩ 就回到校门口；地点内页要先退出详情弹窗、
+    # 再退出地点，可能要 2~3 下。
+    CAPTAIN_RETURN_MAX = 8
+
+    def style_pending(self):
+        """还在等识别队长吗？"""
+        return bool(getattr(self, "_style_pending", False))
+
+    def _resolve_style_step(self, texts):
+        """路径 B 的一步。返回 True = 这一拍处理完了（别再进主循环的其它逻辑）。
+
+        状态机（用户 2026-11-01 口径）：
+            1. **接手训练以后主动识别返回，一直到回到带日历的页面**；
+            2. 点日历 → 抓队长名字 → 查表定流派；
+               认到了 √，认不到 → **弹窗「未能识别到队长」**。
+
+        「带日历的页面」怎么认？
+        不靠文字（校门口和训练室的文字完全不同，地点内页也带日期），
+        靠**行为**：点左上角 → 下一帧是不是日历页。
+        """
+        state = getattr(self, "_style_probe_state", None) or "返回"
+
+        if state == "返回":
+            # 先确认这一页是不是已经能点日历了（训练室/校门口）
+            if self._looks_like_calendar_host(texts):
+                self._style_probe_state = "点日历"
+                self.log_info("已回到带日历的页面 → 点左上角日历")
+                return True
+            tries = getattr(self, "_style_return_tries", 0)
+            if tries >= self.CAPTAIN_RETURN_MAX:
+                self._style_pending = False
+                return self.captain_alert()
+            self._style_return_tries = tries + 1
+            # 点右上角的返回箭头（系统级固定位置）
+            self.click_back(after_sleep=0.6)
+            self.log_info(f"队长识别：点返回（第 {self._style_return_tries} 次）")
+            return True
+
+        if state == "点日历":
+            self.click_calendar(after_sleep=0.8)
+            self._style_probe_state = "抓名字"
+            return True
+
+        if state == "抓名字":
+            name = self.probe_captain_from_calendar(texts)
+            if name:
+                self._style_pending = False
+                self._style_probe_state = None
+                if self.resolve_style_by_calendar_name(name):
+                    return True
+                return self.captain_alert()
+            # 日历页还没出来/名字读不到 → 再点一次日历（限流）
+            tries = getattr(self, "_style_calendar_tries", 0) + 1
+            self._style_calendar_tries = tries
+            if tries >= 3:
+                self._style_pending = False
+                return self.captain_alert()
+            self.click_calendar(after_sleep=0.8)
+            return True
+
+        return False
+
+    def _looks_like_calendar_host(self, texts):
+        """这一页是不是「左上角能点开日历」的那一页（训练室/校门口）？
+
+        判据：这一页**有日期**（顶栏「第N周 星期X」），
+        而且**不是**某个地点的内页/地图（那些也带日期，但左上角不是日历）。
+
+        为什么不用「有休息」：`handle_style_probe` 原来要求「星期」+「休息」，
+        那是训练室专属 —— **校门口没有「休息」**，于是接手的局在周末
+        永远点不了日历（2026-11-01 实测：周末地图上 handle_style_probe 返回 False）。
+        """
+        state = self.top_bar(texts)
+        if not state.get("week") or not state.get("day"):
+            return False
+        # 地点内页 / 地图：都有地点名（地图上是好几个）
+        places = [t for t in texts
+                  if t.name.strip() in labels.WEEKEND_PLACES]
+        if places:
+            return False
+        # 日历页本身也不该点日历（再点就关了）—— 它有「的训练计划」标题
+        if self.is_training_plan(texts):
+            return False
+        return True
+
+    def resolve_style_by_calendar_name(self, name):
+        """已经拿到队长名字 → 查表定流派。"""
+        style = self.style_for_name(name)
+        if not style:
+            return False
+        self._style = style
+        self._style_name = name
+        self.log_info(f"流派：{style}（日历队长「{name}」）")
+        return True
 
     def outing_used(self):
         """今天的额外出行机会用过了吗？"""

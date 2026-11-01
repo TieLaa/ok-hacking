@@ -109,16 +109,22 @@ class TrainingFlowMixin:
         # 等待用户空闲可能很久：把紧急停止挂进去，否则按了停止键要等用户停手才生效
         if interaction is not None and hasattr(interaction, "abort_check"):
             interaction.abort_check = STOP.event.is_set
-        # 2026-11-01 修正：配置里有队长时**不管是不是大厅开的局**都按它定流派。
-        # 旧逻辑（2026-10-30）只在「从大厅开新一局」时才套用配置队长，
-        # 理由是「中途接手别人的局时，实际队长可能不是配置里那个」——
-        # 但这个判断有个致命副作用：**接手的局如果当前不是训练日**
-        # （日历只在训练日弹出来），就永远读不到实际队长，`_style` 一直是空的
-        # → `style` 兜底「训练流」，周末计划全走错（实跑 2026-11-01 19:19：
-        # 扭蛋流跑成了训练流）。
-        # 现在改成**配置里有队长就按它定流派**，不管是不是从大厅开的局。
-        # 配置为空（无队长模式）才等日历认实际队长。
-        self.resolve_style()
+        # 2026-11-01 修正（用户口径）：队长/流派**只有两条解析路径，都不许保底**：
+        #   A. 配置里填了「指定队长」→ 查表定流派；
+        #      查得到 √，查不到 → **弹窗**。
+        #   B. 配置为空（快速接手）→ 点多次返回回到训练室/校门口（那里能看���日期），
+        #      点日历 → 抓队长名字 → 查表定流派；
+        #      认到了 √，认不到 → **弹窗**。
+        #
+        # 旧逻辑的毛病：认不出就静默兜底「训练流」，结果扭蛋流跑成训练流
+        # （实跑 2026-11-01 19:19），而且日志上看不出来。
+        #
+        # 这里只做「路径 A」——路径 B 要点几次返回、跨几拍才能完成，
+        # 放在主循环里做（见 `_resolve_style_step`）。
+        self.reset_style()
+        if not self.resolve_style_by_config():
+            self._style_pending = True
+            self.log_info("未指定队长 → 回训练室/校门口点日历，识别队长")
         # 运行期状态每次开局都要清（2026-10-29 实机：连开第二把时任务秒退，
         # 因为 _register_stage 还停在上次的 "back"，run() 的终点判据立刻命中）
         self.reset_run_state()
@@ -241,6 +247,15 @@ class TrainingFlowMixin:
                 self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=interval)
                 stuck, last_sig = 0, None
                 continue
+
+            # ---- 队长/流派还没定 → 先专心认队长，不做别的 ----
+            # 2026-11-01 用户口径：接手别人���局时，点多次返回回到训练室/校门口，
+            # 点日历抓队长名字。识别期间**不跑别的动作** ——
+            # 认错队长 = 整局按错流派跑（比停下来更糟）。
+            if self.style_pending():
+                if self._resolve_style_step(texts):
+                    self.sleep(interval)
+                    continue
 
             # ---- 一局的终点：注册球员六步走完（点过左上角「«」返回大厅）才算跑完 ----
             # 2026-10-27 用户补充：打完训练赛 → 注册球员 → 编队 → 保存 → 回大厅，
@@ -579,34 +594,13 @@ class TrainingFlowMixin:
         """流派定了没有？没定就要去开日历认队长。"""
         return bool(getattr(self, "_style", None))
 
-    def resolve_style(self):
-        """决定这一轮按哪个流派跑。
-
-        用户 2026-11-01 口径：**监控页的「指定队长」勾选框是队长的唯一来源**。
-        旧逻辑（2026-10-30）只在「从大厅开新一局」时才套用配置队长，
-        理由是「中途接手别人的局时，实际队长可能不是配置里那个」——
-        但这个判断有个致命副作用：**接手的局如果当前不是训练日**
-        （日历只在训练日弹出来），就永远读不到实际队长，`_style` 一直是空的
-        → `style` 兜底「训练流」，周末计划全走错（实跑 2026-11-01 19:19：
-        扭蛋流跑成了训练流）。
-
-        现在改成**配置里有队长就按它定流派**，不管是不是从大厅开的局。
-        配置为空（无队长模式）才等日历认实际队长。
-
-        - 配置里有队长 → 查表定流派（查不到就回落到日历）
-        - 配置为空 → 清空流派，等日历解析（`handle_style_probe` / `handle_training_plan`）
-        """
-        self.reset_style()
-        if self.apply_configured_captain():
-            return
-        self.log_info("未指定队长 → 流派按游戏内队长/日历识别")
-
     def reset_style(self):
         """清空流派（新的一局 / 接管一局）：等日历解析队长。"""
         self._style = None
         self._style_name = None
-        self._style_probe_tries = 0
-        self._style_probe_at = 0.0
+        # 2026-11-01：识别队长改成**主动**做（daycycle._resolve_style_step），
+        # 它的计数器是 _style_return_tries / _style_calendar_tries，
+        # 旧的 _style_probe_tries / _style_probe_at 随 handle_style_probe 一起删了。
 
     def apply_configured_captain(self):
         """配置里填了「指定队长」→ 直接定流派，**不点日历**。

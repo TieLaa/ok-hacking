@@ -77,8 +77,8 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         # run()/点开始训练时直接查表写入；留空则由第一个训练日点日历解析。
         self._style = None
         self._style_name = None         # 日历上读到的队长名（日志/复盘用）
-        self._style_probe_tries = 0     # 开日历试了几次（最多 3 次）
-        self._style_probe_at = 0.0      # 上次开日历的时间（3 秒冷却）
+        # 2026-11-01：识别队长的计数器搬到 daycycle（_style_return_tries /
+        # _style_calendar_tries），旧的 _style_probe_* 随 handle_style_probe 删了。
 
     # 顺序见 training/handlers/__init__.py
     HANDLERS = HANDLERS

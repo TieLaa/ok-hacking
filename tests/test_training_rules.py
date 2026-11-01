@@ -2453,7 +2453,6 @@ class StylePlanRules(unittest.TestCase):
         self.assertTrue(task.handle_training_plan(texts))
         self.assertIsNone(task._style)                 # 不能写成「星期」
         self.assertEqual(task.style, "训练流")          # 兜底
-        self.assertLess(task._style_probe_tries, 3)    # 还要允许再试
 
     def test_calendar_prefers_roster_name_over_week_header(self):
         """名字和「星期」列头同时在时，取能查到流派的那个人名。"""
@@ -2517,50 +2516,13 @@ class StylePlanRules(unittest.TestCase):
         self.assertFalse(task.handle_training_plan(texts))
         self.assertEqual(task.actions, [])
 
-    # ---------- 开日历的时机 ----------
-
-    def test_probe_opens_calendar_when_style_unknown(self):
-        """接管一局：流派为空 → 训练日主界面点左上角开日历。"""
-        texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
-                 box(380, 16, "120/130", 210, 53),
-                 box(1200, 900, "训练", 120, 60), box(1200, 700, "休息", 120, 60)]
-        task = FakeTask(texts)
-        task.reset_style()
-        self.assertIsNone(task._style)
-        self.assertTrue(task.handle_style_probe(texts))
-        self.assertEqual(task.actions[-1][0], "click")
-        self.assertLess(task.actions[-1][1], int(task.width * 0.10))
-
-    def test_probe_skipped_once_style_known(self):
-        """流派已经解析过（或全自动流程自己写好了）→ 不再点日历。"""
-        texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
-                 box(1200, 900, "训练", 120, 60), box(1200, 700, "休息", 120, 60)]
-        task = FakeTask(texts)
-        task._style = "商店流"
-        self.assertFalse(task.handle_style_probe(texts))
-        self.assertEqual(task.actions, [])
-
-    def test_probe_skipped_on_vacation_page(self):
-        """度假/海边合宿页也有「星期+休息」，但左上角不是日历，不能点。"""
-        texts = [box(30, 20, "第4周", 120, 40), box(200, 20, "星期三", 130, 40),
-                 box(600, 120, "海边合宿", 300, 50),
-                 box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
-        task = FakeTask(texts)
-        self.assertFalse(task.handle_style_probe(texts))
-        self.assertEqual(task.actions, [])
-        self.assertEqual(task._style_probe_tries, 0)
-
-    def test_probe_stops_after_three_tries(self):
-        """连开 3 次都认不出队长就停手，别一直点左上角。"""
-        texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
-                 box(1200, 900, "训练", 120, 60), box(1200, 700, "休息", 120, 60)]
-        task = FakeTask(texts)
-        task._style_probe_at = 0.0
-        for _ in range(3):
-            task._style_probe_at = 0.0
-            task.handle_style_probe(texts)
-        task._style_probe_at = 0.0
-        self.assertFalse(task.handle_style_probe(texts))
+    # ---------- 识别队长（旧 handle_style_probe 已删除）----------
+    # 2026-11-01：识别改成**主动**做（daycycle._resolve_style_step）：
+    # 接手别人的局 → 点返回回到「带日历的页面」→ 点日历 → 抓名字 → 查表定流派；
+    # 认不出 → 弹窗「未能识别到队长」，**不许保底**。
+    # 旧的 handle_style_probe 只在训练日触发（要求「星期」+「休息」），
+    # 接手的局在周末永远点不了日历 → 扭蛋流跑成训练流（19:19 事故）。
+    # 覆盖见 StyleResolution 里的 test_path_b_*。
 
     def test_start_training_resets_style(self):
         """点「开始训练」= 新的一局：流派清空，等日历重新认队长。"""
@@ -3638,7 +3600,10 @@ class StyleResolution(unittest.TestCase):
     于是 `_style` 一直是空的 → `style` 兜底成「训练流」；
     而日历只在训练日弹，周末（非训练日）永远读不到实际队长。
 
-    修法：`resolve_style()` —— 配置里有队长就按它定流派，不管是不是大厅开局。
+    修法（2026-11-01 用户口径，**两条路径都不许保底**）：
+      A. 配置里有队长 → 查表定流派；查不到 → **弹窗「未能识别到队长」**。
+      B. 配置为空（快速接手）→ 点返回回到「带日历的页面」→ 点日历 →
+         抓队长名字 → 查表定流派；认不到 → **弹窗**。
     """
 
     def _task(self, config):
@@ -3648,29 +3613,126 @@ class StyleResolution(unittest.TestCase):
         return task
 
     def test_configured_captain_wins_even_when_not_lobby(self):
+        """路径 A：配置里有队长 → 查表定流派（不管是不是大厅开局）。"""
         task = self._task({"指定队长": "野上泷"})
-        task.resolve_style()
+        self.assertTrue(task.resolve_style_by_config())
         self.assertEqual(task.style, "扭蛋流")
         self.assertTrue(task.style_known)
 
     def test_configured_train_captain(self):
         task = self._task({"指定队长": "真崎辉世"})
-        task.resolve_style()
+        self.assertTrue(task.resolve_style_by_config())
         self.assertEqual(task.style, "训练流")
         self.assertTrue(task.style_known)
 
     def test_no_captain_waits_for_calendar(self):
-        """无队长 → 清空流派，等日历识别（style_known 为假）。"""
+        """路径 B 的入口：配置为空 → 不定流派，走「点日历识别」那条路。
+
+        **不再保底「训练流」** —— 那是 19:19 事故的根因（扭蛋流跑成训练流）。
+        """
         task = self._task({"指定队长": ""})
-        task.resolve_style()
+        self.assertFalse(task.resolve_style_by_config())
         self.assertFalse(task.style_known)
-        self.assertEqual(task.style, "训练流")     # 兜底
 
     def test_unknown_captain_falls_back_to_calendar(self):
-        """配置的名字不在角色表 → 不能瞎定流派，回去等日历。"""
+        """配置的名字不在角色表 → 不能瞎定流派，走路径 B。"""
         task = self._task({"指定队长": "查无此人"})
-        task.resolve_style()
+        self.assertFalse(task.resolve_style_by_config())
         self.assertFalse(task.style_known)
+
+    def test_calendar_path_resolves_captain(self):
+        """路径 B：从日历读到队长名 → 查表定流派。"""
+        task = self._task({"指定队长": ""})
+        self.assertTrue(task.resolve_style_by_calendar_name("野上泷"))
+        self.assertEqual(task.style, "扭蛋流")
+        self.assertTrue(task.style_known)
+
+    def test_alert_when_captain_not_resolvable(self):
+        """认不出 → **弹窗**，不许保底。"""
+        task = self._task({"指定队长": ""})
+        calls = []
+        task.alert = lambda title, text: calls.append((title, text))
+        self.assertFalse(task.captain_alert())
+        self.assertEqual(calls[0][0], "认不出队长")
+        self.assertEqual(calls[0][1], "未能识别到队长")
+
+    # ---------- 路径 B：接手 → 点返回 → 点日历 → 抓名字 ----------
+
+    GATE = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
+            box(380, 16, "130/130", 210, 53),
+            box(721, 54, "北空之丘女子高校", 200, 40),
+            box(950, 560, "商店", 130, 50), box(1150, 700, "出行", 160, 70)]
+    MAP = [box(814, 461, "游戏厅", 148, 57), box(1538, 606, "公园", 102, 51),
+           box(258, 748, "餐厅", 104, 60), box(1010, 897, "步行街", 148, 58)]
+
+    def test_path_b_returns_until_calendar_page(self):
+        """路径 B 第一步：**点返回直到回到带日历的页面**。
+
+        「带日历的页面」= 训练室/校门口（有日期、不是地点内页/地图）。
+        判据不能靠「有休息」—— 校门口没有「休息」，
+        那样接手的局在周末永远点不了日历（2026-11-01 实测）。
+        """
+        task = self._task({"指定队长": ""})
+        task._style_pending = True
+        # 周末地图：有地点名 → 还不是「带日历的页面」→ 该点返回
+        self.assertFalse(task._looks_like_calendar_host(self.MAP))
+        # 校门口：有日期、没有地点名 → 就是它
+        self.assertTrue(task._looks_like_calendar_host(self.GATE))
+        # 日历页本身不该再点日历（再点就把它关了）
+        plan = [box(173, 60, "先斗", 184, 117),
+                box(334, 91, "的训练计划", 300, 74),
+                box(182, 171, "星期", 66, 36),
+                box(361, 164, "星期二", 93, 45),
+                box(200, 400, "弹跳训练", 120, 50),
+                box(400, 400, "意识训练", 120, 50)]
+        self.assertFalse(task._looks_like_calendar_host(plan))
+
+    def test_path_b_full_flow(self):
+        """路径 B 全流程：地图 → 返回 → 校门口 → 点日历 → 抓名字 → 定流派。
+
+        用**真实日历帧的 OCR 坐标**（logs/events/1101-122630_handle_training_plan.jpg：
+        「先斗」(173,60,184,117) + 「的训练计划」(334,91,300,74)）。
+        """
+        task = self._task({"指定队长": ""})
+        task._style_pending = True
+        plan = [box(173, 60, "先斗", 184, 117),
+                box(334, 91, "的训练计划", 300, 74),
+                box(182, 171, "星期", 66, 36),
+                box(361, 164, "星期二", 93, 45),
+                box(547, 171, "星期三", 90, 34),
+                box(200, 400, "弹跳训练", 120, 50),
+                box(400, 400, "意识训练", 120, 50),
+                box(600, 400, "体能训练", 120, 50)]
+
+        # 1) 在周末地图 → 点返回
+        task._resolve_style_step(self.MAP)
+        self.assertNotEqual(getattr(task, "_style_probe_state", None), "点日历")
+        self.assertEqual(task._style_return_tries, 1)
+
+        # 2) 到校门口 → 进「点日历」
+        task._resolve_style_step(self.GATE)
+        self.assertEqual(task._style_probe_state, "点日历")
+
+        # 3) 点日历 → 进「抓名字」
+        task._resolve_style_step(self.GATE)
+        self.assertEqual(task._style_probe_state, "抓名字")
+
+        # 4) 日历页 → 读到「先斗」→ 定流派「扭蛋流」
+        task._resolve_style_step(plan)
+        self.assertTrue(task.style_known)
+        self.assertEqual(task.style, "扭蛋流")
+        self.assertFalse(task.style_pending())
+
+    def test_path_b_alerts_when_calendar_unreachable(self):
+        """点满返回次数还没到带日历的页面 → 弹窗「未能识别到队长」。"""
+        task = self._task({"指定队长": ""})
+        calls = []
+        task.alert = lambda title, text: calls.append((title, text))
+        task._style_pending = True
+        task._style_return_tries = task.CAPTAIN_RETURN_MAX
+        task._resolve_style_step(self.MAP)
+        self.assertEqual(calls[0][1], "未能识别到队长")
+        self.assertFalse(task.style_pending())
 
 
 class MonitorCaptainLogic(unittest.TestCase):

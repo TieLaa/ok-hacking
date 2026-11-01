@@ -96,39 +96,6 @@ class TrainingHandlers:
         self.exit_page(after_sleep=0.8)
         return True
 
-    def handle_style_probe(self, texts):
-        """流派还不知道（快速接手流程）→ 打开左上角的训练计划日历。
-
-        用户 2026-10-29：全自动流程在配置里填了队长，开局就有流派，不会走到这里；
-        队长留空才是快速接手：进训练后点一次日历，解析队长流派再继续。
-        训练日主界面左上角那个按钮就是日历（不是返回，见 flow.exit_page 的注释），
-        最多 3 次，避免别的页面乱点或无限重试。
-        """
-        if self.style_known:
-            return False
-        # 度假/海边合宿页也有「星期 + 休息」，但左上角不是日历：
-        # 2026-10-29 实跑 16:41 就在度假页点了左上角（什么都没发生，白烧一次机会）。
-        if self.match_text(texts, labels.VACATION_TEXTS) is not None:
-            return False
-        if (self.match_text(texts, "星期") is None
-                or self.match_text(texts, "休息") is None):
-            return False
-        tries = getattr(self, "_style_probe_tries", 0)
-        if tries >= 3:
-            return False
-        if time.monotonic() - getattr(self, "_style_probe_at", 0.0) < 3.0:
-            return False
-        self._style_probe_tries = tries + 1
-        self._style_probe_at = time.monotonic()
-        self.click(int(self.width * 0.035), int(self.height * 0.06), after_sleep=0.8)
-        if self._style_probe_tries >= 3:
-            self.log_warning(
-                f"流派识别 3 次都没成功 → 先按「{self.style}」跑"
-                "（配置里填「指定队长」可跳过这一步）")
-        else:
-            self.log_info("流派未知：点左上角打开训练计划日历")
-        return True
-
     def handle_training_day(self, texts):
         """训练日主界面：右下「训练 / 休息」。
 

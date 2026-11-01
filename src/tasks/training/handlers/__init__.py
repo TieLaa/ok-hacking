@@ -57,9 +57,11 @@ HANDLERS = (
     EntryHandlers.handle_note_select,
     EntryHandlers.handle_equipment,
     EntryHandlers.handle_confirm_team,
-    # 流派未知时先开日历认队长（用户 2026-10-29）：必须排在训练日主界面之前，
-    # 否则第一拍就点「训练/休息」，流派还没定下来。
-    TrainingHandlers.handle_style_probe,
+    # 2026-11-01：识别队长/流派改成**主动**做（daycycle._resolve_style_step）：
+    # 接手别人的局时点返回回到「带日历的页面」→ 点日历 → 抓队长名字 →
+    # 查表定流派；认不出就弹窗「未能识别到队长」，**不许保底**。
+    # 原来的 handle_style_probe 只在训练日触发（要求「星期」+「休息」），
+    # 接手的局在周末永远点不了日历 → 扭蛋流跑成训练流（2026-11-01 19:19 事故）。
     TrainingHandlers.handle_training_day,
     TrainingHandlers.handle_training_hub,
     WeekendHandlers.handle_activity_go,
