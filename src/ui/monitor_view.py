@@ -83,7 +83,8 @@ class MonitorActions:
     def toggle_capture(self):
         pass
 
-    def toggle_run(self):
+    def toggle_connection(self):
+        """第一栏的【启动/停止】：总开关（接入 / 断开游戏）。"""
         pass
 
     def set_skill(self, key, value):
@@ -92,19 +93,8 @@ class MonitorActions:
     def set_quick_match(self, enabled):
         pass
 
-    def set_auto_training(self, enabled):
-        pass
-
-    def start_auto_training(self):
-        pass
-
-    def stop_auto_training(self):
-        pass
-
-    def pause_current(self):
-        pass
-
-    def stop_current(self):
+    def toggle_auto_training(self):
+        """第二栏的【开始/暂停】：只管自动训练脚本本身的开关。"""
         pass
 
 
@@ -203,12 +193,11 @@ class MonitorView(QWidget):
         self._captain_check: CheckBox | None = None
         self._captain_combo: ComboBox | None = None
         self._btn_capture: QPushButton | None = None
-        self._btn_run: QPushButton | None = None
+        self._btn_conn: QPushButton | None = None
+        self._conn_text: tuple[str, str] = ("启动", "停止")
         self._switch_quick: SwitchButton | None = None
-        self._btn_train_start = None
-        self._btn_train_stop = None
-        self._btn_pause: QPushButton | None = None
-        self._btn_stop: QPushButton | None = None
+        self._btn_train: QPushButton | None = None
+        self._train_text: tuple[str, str] = ("开始", "暂停")
         self._score_value: QLabel | None = None
         self._skill_labels: dict = {}
         self._skill_gain: QLabel | None = None
@@ -308,7 +297,7 @@ class MonitorView(QWidget):
 
     @Slot()
     def _slot_run(self):
-        self.actions.toggle_run()
+        self.actions.toggle_connection()
 
     @Slot()
     def _slot_refresh(self):
@@ -390,9 +379,9 @@ class MonitorView(QWidget):
     def _slot_quick(self, checked):
         self.actions.set_quick_match(bool(checked))
 
-    @Slot(bool)
-    def _slot_train(self, checked):
-        self.actions.set_auto_training(bool(checked))
+    @Slot()
+    def _slot_train(self):
+        self.actions.toggle_auto_training()
 
     def _slot_move(self, path, delta):
         self.actions.move_block(path, delta)
@@ -467,11 +456,16 @@ class MonitorView(QWidget):
             lay.addWidget(self._btn_capture)
 
         if spec.get("show_run", True):
-            self._btn_run = self._button(
-                spec.get("run_text", "开始"), self._slot_run,
-                object_name="monitorPrimary", min_width=78,
-                tooltip="开始 / 暂停（等同开始按钮）")
-            lay.addWidget(self._btn_run)
+            # 第一栏右边是**总开关**：启动 = 接入游戏并开跑，停止 = 断开游戏。
+            # （旧的「开始/暂停」按的是 executor.pause()，会把第二栏的自动训练
+            #  一起按住，逻辑正好反了 —— 见 MonitorTab.toggle_connection。）
+            self._conn_text = (spec.get("run_text", "启动"),
+                               spec.get("stop_text", "停止"))
+            self._btn_conn = self._make_primary(
+                self._conn_text[0], self._slot_run,
+                icon=FluentIcon.PLAY)
+            self._btn_conn.setToolTip("总开关：启动 = 接入游戏并开始跑；停止 = 断开游戏")
+            lay.addWidget(self._btn_conn)
 
         for text, slot in (("重新检测", self._slot_refresh),):
             lay.addWidget(self._button(text, slot))
@@ -595,6 +589,14 @@ class MonitorView(QWidget):
         lay.setSpacing(10)
 
         self._captain_check = CheckBox(spec.get("label", "指定队长"))
+        # 2026-11-01：**默认不勾选**。
+        # 旧版靠 `_sync_captain` 回填状态，但回填发生在第一次 `update_data` 之后；
+        # 在那之前勾选框是「勾上」的，而下拉框的 currentIndex 又是第 0 项
+        # （「── 训练流 ──」分组标题）。用户一进页面就点「启动」，
+        # 勾选框的勾选状态会被当成「有队长」→ `set_captain(第一个训练流角色)`
+        # → 扭蛋流被写成训练流。
+        # 现在默认不勾，等 `_sync_captain` 按配置里的实际值回填。
+        self._captain_check.setChecked(False)
         lay.addWidget(self._captain_check)
 
         combo = ComboBox()
@@ -610,18 +612,16 @@ class MonitorView(QWidget):
             spec.get("hint", "取消勾选 = 不接开局，只跑已有局"))
 
         if spec.get("show_auto_training", True):
-            # 直接搬 ok-script 任务卡那个「▶ 开始」按钮：原生 PrimaryPushButton。
-            # 开/关两个实例切换显示，保证配色、hover、主题跟随都和框架一致。
-            # 和任务卡完全一致：没运行时是蓝色「▶ 开始」，运行中是蓝色「■ 停止」
-            self._btn_train_start = self._make_primary(
-                spec.get("start_text", "开始"), self._slot_train_start,
+            # 第二栏的按钮只管**自动训练脚本自己**的开关（开始 / 暂停），
+            # 不碰「接入游戏」这件事 —— 那是第一栏总开关的职责。
+            # 一个实例、两种文案：跑着的时候显示「暂停」，没跑显示「开始」。
+            self._train_text = (spec.get("start_text", "开始"),
+                               spec.get("pause_text", "暂停"))
+            self._btn_train = self._make_primary(
+                self._train_text[0], self._slot_train,
                 icon=FluentIcon.PLAY)
-            self._btn_train_stop = self._make_primary(
-                spec.get("stop_text", "停止"), self._slot_train_stop,
-                icon=OKIcon.STOP)
-            self._btn_train_stop.setVisible(False)
-            lay.addWidget(self._btn_train_start)
-            lay.addWidget(self._btn_train_stop)
+            self._btn_train.setToolTip("自动训练脚本开关：开始 / 暂停")
+            lay.addWidget(self._btn_train)
 
         lay.addStretch(1)
 
@@ -685,22 +685,44 @@ class MonitorView(QWidget):
             self._syncing_captain = False
 
     def _on_captain_check(self, checked: bool):
+        """勾选框：勾上 = 有队长，取消 = 无队长。
+
+        取消勾选时**必须把变量清空**（用户 2026-11-01 口径）：
+        旧版这里已经调用了 `set_captain("")`，但页面刚进来时勾选框是
+        **默认勾上**的 —— 于是「勾选状态」和「配置里的队长」对不上：
+        界面显示有队长，配置里其实是空的；反过来，用户取消勾选时
+        `set_captain("")` 又因为「配置本来就是空」被当成「没变化」而跳过，
+        变量没被清、流派还停在旧的（训练流）。
+
+        现在两件事都做了：
+        - 取消勾选 → `set_captain("")`（MonitorTab 里会清 config **和** `_style`）；
+        - 勾选 → 用下拉当前选中的角色（**不是**「第一个角色」），
+          否则会默默把流派定成列表里第一个（训练流）的人。
+        """
         if self._syncing_captain:
             return
         combo = self._captain_combo
         if not checked:
             if combo is not None:
                 combo.setEnabled(False)
+            # 清空变量：名字、流派一起清
+            self._last_captain = ""
             self.actions.set_captain("")
             return
         if combo is not None:
             combo.setEnabled(True)
-        name = self._last_captain or self._first_captain()
+        # 取下拉**当前**选中的角色；没有就退回上一次选过的，再没有就第一个
+        name = ""
+        if combo is not None:
+            data = combo.itemData(combo.currentIndex())
+            if isinstance(data, str) and data != GROUP:
+                name = data
+        name = name or self._last_captain or self._first_captain()
         if name:
             index = self._index_of(name)
             if index >= 0:
                 self._last_valid_index = index
-            self._select_index(index)
+                self._select_index(index)
             self.actions.set_captain(name)
 
     def _on_captain_index(self, index: int):
@@ -718,6 +740,12 @@ class MonitorView(QWidget):
             self.actions.set_captain(str(data))
 
     def _sync_captain(self, name: str):
+        """按配置里的实际队长回填勾选框和下拉。
+
+        勾选状态**只由配置里的队长名决定**（`name` 为空 = 无队长 = 不勾选）。
+        旧版勾选框默认是勾上的，回填要等第一次 `update_data` 才发生；
+        在那之前用户点「启动」，勾选状态会被误当成「有队长」。
+        """
         combo, check = self._captain_combo, self._captain_check
         if combo is None or check is None:
             return
@@ -734,6 +762,10 @@ class MonitorView(QWidget):
                 self._last_valid_index = index
                 if combo.currentIndex() != index:
                     combo.setCurrentIndex(index)
+            elif not checked:
+                # 无队长：把「上一次选过谁」也忘掉，
+                # 下次勾选时不会莫名其妙地选回上次那个人。
+                self._last_captain = ""
             combo.setEnabled(checked)
         finally:
             self._syncing_captain = False
@@ -859,19 +891,24 @@ class MonitorView(QWidget):
                 f"本局三选一拿到的技能数；上一次：{data.get('skill_last') or '—'}")
 
     def _sync_run_button(self, data: dict):
-        if self._btn_run is None:
+        """第一栏总开关：跑着显示【停止】，没跑显示【启动】。"""
+        if self._btn_conn is None:
             return
-        text = "暂停" if data.get("executor_running") else "开始"
-        if self._btn_run.text() != text:
-            self._btn_run.setText(text)
+        text = self._conn_text[1] if data.get("executor_running") else self._conn_text[0]
+        if self._btn_conn.text() != text:
+            self._btn_conn.setText(text)
 
     def _sync_switches(self, data: dict):
-        if self._btn_train_start is not None and "training_enabled" in data:
-            on = bool(data.get("training_enabled"))
-            self._btn_train_start.setVisible(not on)
-            self._btn_train_stop.setVisible(on)
-        for key, switch in (("quick_enabled", self._switch_quick),
-                            ("training_enabled", None)):
+        """第二栏按钮：自动训练在跑 → 【暂停】，没跑 → 【开始】。"""
+        if self._btn_train is not None and "training_running" in data:
+            running = bool(data.get("training_running"))
+            text = self._train_text[1] if running else self._train_text[0]
+            if self._btn_train.text() != text:
+                self._btn_train.setText(text)
+            icon = OKIcon.STOP if running else FluentIcon.PLAY
+            if self._btn_train.icon() is not icon:
+                self._btn_train.setIcon(icon)
+        for key, switch in (("quick_enabled", self._switch_quick),):
             if switch is None or key not in data:
                 continue
             value = bool(data.get(key))

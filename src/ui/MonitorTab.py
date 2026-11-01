@@ -40,11 +40,12 @@ DEFAULT_LAYOUT = {
     "sections": [
         {"type": "connection", "height": 54,
          "title": "{device_title}", "meta": "{device_meta}",
-         "show_run": True},
+         "show_run": True, "run_text": "启动"},
         {"type": "captain", "height": 54,
          "label": "指定队长",
          "hint": "取消勾选 = 不接开局，只跑已有局",
-         "show_quick_match": True, "show_auto_training": True},
+         "show_quick_match": True, "show_auto_training": True,
+         "start_text": "开始", "pause_text": "暂停", "stop_text": "停止"},
         {"type": "hero", "height": 204,
          "kicker": "当前进度",
          "title": "第 {week} 周 {day}",
@@ -396,7 +397,10 @@ class MonitorTab(CustomTab):
             "shop_today": info.get("shop_today") or "否",
             "fail_rate": info.get("fail_rate") or info.get("当前失败率") or MISSING,
             "captain": (config.get("指定队长") or "").strip(),
+            # 第一栏总开关的状态：执行器没被按住 = 已接入游戏
             "executor_running": not getattr(self.executor, "paused", True) if self.executor else False,
+            # 第二栏按钮的状态：自动训练任务在跑/在队列里
+            "training_running": self._running_of(task),
             "attrs": attrs,
             "score": score,
             "skill_color": skills["color"],
@@ -406,7 +410,6 @@ class MonitorTab(CustomTab):
                              + gained.get("white", 0)),
             "skill_last": info.get("skill_last") or "",
             "quick_enabled": self._enabled_of(self._task_by_name("QuickMatchTask")),
-            "training_enabled": self._enabled_of(task),
             "fail_limit": config.get("失败率上限(%)", MISSING),
             "stuck": info.get("stuck") or f"{config.get('卡死判定(秒)', MISSING)}s · 未触发",
             "timeline": info.get("timeline") or [],
@@ -473,16 +476,42 @@ class MonitorTab(CustomTab):
             task.unpause()
 
     def set_captain(self, name):
-        """勾选框/下拉改队长：写回 task.config（Config 会自动存盘）。"""
+        """勾选框/下拉改队长：写回 task.config（Config 会自动存盘）。
+
+        **取消勾选 = 清空变量**（用户 2026-11-01 口径）：
+        旧版只在「勾选框被取消」时才清空，但页面初始化时勾选框是**默认勾上**的，
+        于是第一次进页面就等于「指定了一个队长」，流派被写成这个队长的
+        （扭蛋流扭到训练流），用户后面再取消勾选也晚了 ——
+        因为取消勾选时变量里已经是名字，界面上的勾选框状态和配置对不上。
+
+        现在这里做两件事：
+        1. 取消勾选 → 名字置空（`指定队长` = ""），并且**清掉已定的流派**，
+           让下一次跑重新按日历/游戏内队长认流派；
+        2. 勾上 → 用当前下拉里的角色名。
+
+        流派本身存在 `task._style`（运行期变量），config 里只存队长名字。
+        """
         task = self._task()
         if task is None:
             logger.warning("监控页：没有找到训练任务，队长改动未保存")
             return
         value = (name or "").strip()
-        if (task.config.get("指定队长", "") or "") == value:
-            return
-        task.config["指定队长"] = value
-        logger.info(f"监控页：指定队长 → {value or '（无队长，只跑已有局）'}")
+        if (task.config.get("指定队长", "") or "") != value:
+            task.config["指定队长"] = value
+            if value:
+                logger.info(f"监控页：指定队长 → {value}")
+            else:
+                logger.info("监控页：取消指定队长 → 清空变量，流派改回按游戏内队长识别")
+        # 运行期变量（`_style`）也要跟着清：不然旧流派会一直留在 _style 里，
+        # 界面上的「流派」和实际跑的还是它 —— 取消勾选后必须回到「按日历认队长」。
+        # 注意**不能**因为 config 没变就跳过：用户可能就是想让已定的流派重置。
+        if not value:
+            reset = getattr(task, "reset_style", None)
+            if callable(reset):
+                try:
+                    reset()
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"重置流派失败: {e}")
         self._update_data()
 
     @staticmethod
@@ -509,16 +538,78 @@ class MonitorTab(CustomTab):
             logger.error(f"开始截图失败: {e}")
         self._update_data()
 
-    def toggle_run(self):
-        """等同开始/暂停按钮（和 StartCard 的点击逻辑一致）。"""
+    def toggle_connection(self):
+        """第一栏总开关：【启动 / 停止】（用户 2026-11-01 口径）。
+
+        旧版这里是「开始 / 暂停」，按的是 `executor.pause()` —— 逻辑整个反了：
+        1. 「暂停」只是按住执行器，第二栏的自动训练跟着一起被按住，
+           表现成「第二栏的开关带动第一栏的开关」；
+        2. 停止时没有断开游戏，脚本还挂着游戏窗口不放。
+
+        现在的口径：
+        - **启动**：接入游戏（连设备、开跑）。交给 `start_controller.start()`，
+          它会自己刷新设备、必要时启动游戏 exe。
+        - **停止**：断开游戏 —— 停掉自动训练任务、暂停执行器、释放截图会话。
+          同时把第二栏的【开始/暂停】复位成「开始」（原始状态）。
+        """
+        if getattr(self.executor, "paused", True):
+            self._connection_start()
+        else:
+            self._connection_stop()
+
+    def _connection_start(self):
+        """启动 = 接入游戏 + 开跑。
+
+        交给 `start_controller.start(task)`：它会刷新设备、必要时拉起游戏 exe、
+        把训练任务 enable 并入队、启动执行器 —— 一条龙。
+
+        为什么带 task：只调 `start()`（不带 task）只会连上设备，
+        训练任务没被 enable，界面上「已连接」但**什么都不跑**。
+        第二栏的按钮会随之显示「暂停」（那是脚本的真实状态），
+        但**不是**第二栏驱动了第一栏 —— 是总开关启动后脚本本来就在跑。
+        """
+        task = self._task()
         try:
-            if getattr(self.executor, "paused", True):
-                og.app.start_controller.start()
-            else:
+            og.app.start_controller.start(task)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"启动失败: {e}")
+        self._update_data()
+
+    def _connection_stop(self):
+        """断开游戏：任务停掉 + 执行器暂停 + 截图会话释放。
+
+        顺序有讲究：先把任务 disable（任务线程下一拍就退出），
+        再暂停执行器（不再取帧），最后才关截图会话。
+
+        关截图会话可能等正在取的那一帧（最多 4 秒），所以放到后台线程做，
+        不然界面会卡住不动。
+        """
+        self._stop_auto_training(reset_button=True)
+        try:
+            if self.executor is not None and not getattr(self.executor, "paused", True):
                 self.executor.pause()
         except Exception as e:  # noqa: BLE001
-            logger.error(f"开始/暂停失败: {e}")
+            logger.error(f"暂停执行器失败: {e}")
+        self._close_capture_async()
+        logger.info("监控页：已停止（断开游戏）")
         self._update_data()
+
+    @staticmethod
+    def _close_capture_async():
+        """后台关掉截图会话（等价于「断开游戏」）。"""
+        import threading
+
+        def worker():
+            try:
+                device_manager = getattr(og, "device_manager", None)
+                capture = getattr(device_manager, "capture_method", None)
+                if capture is not None and hasattr(capture, "close"):
+                    capture.close()
+                    device_manager.capture_method = None
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"断开截图失败: {e}")
+
+        threading.Thread(target=worker, name="MonitorDisconnect", daemon=True).start()
 
     def set_skill(self, key, value):
         """技能品质数量：写回任务配置并立刻重算预计分数。"""
@@ -540,53 +631,42 @@ class MonitorTab(CustomTab):
             task.disable()
         logger.info(f"监控页：快速比赛 → {'开' if enabled else '关'}")
 
-    def start_auto_training(self):
-        """等同任务卡上的「▶ 开始」：交给 start_controller，它会连设备并开跑。"""
+    def toggle_auto_training(self):
+        """第二栏按钮：【开始 / 暂停】—— 只管自动训练脚本自己。
+
+        不碰「接入游戏」：那是第一栏总开关的事。
+        - 开始：把训练任务 enable 起来（前提是已经接上游戏，否则点了也没用）；
+        - 暂停：把训练任务 disable（跑完当前动作就退出，状态回到「未开始」）。
+        """
         task = self._task()
         if task is None:
             logger.warning("监控页：没找到训练任务")
             return
-        try:
-            og.app.start_controller.start(task)
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"启动自动训练失败: {e}")
-        self._update_data()
-
-    def stop_auto_training(self):
-        """等同任务卡上的「■ 停止」。"""
-        task = self._task()
-        if task is None:
-            return
-        try:
-            task.disable()
-            task.unpause()
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"停止自动训练失败: {e}")
-        self._update_data()
-
-    def set_auto_training(self, enabled):
-        task = self._task()
-        if task is None:
-            logger.warning("监控页：没找到训练任务")
-            return
-        if enabled:
-            task.enable()
+        if getattr(task, "enabled", False) or getattr(task, "running", False):
+            self._stop_auto_training(reset_button=True)
         else:
-            task.disable()
-        logger.info(f"监控页：自动训练 → {'开' if enabled else '关'}")
+            try:
+                task.enable()
+                logger.info("监控页：自动训练 → 开始")
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"开始自动训练失败: {e}")
+        self._update_data()
 
-    def pause_current(self):
-        task = getattr(self.executor, "current_task", None) or self._task()
-        if task is not None:
-            task.pause()
-            logger.info("监控页：暂停当前任务")
+    def _stop_auto_training(self, reset_button=False):
+        """停掉自动训练任务。
 
-    def stop_current(self):
-        task = getattr(self.executor, "current_task", None) or self._task()
+        `reset_button=True` 时把第二栏按钮复位成「开始」（原始状态）——
+        第一栏点「停止」后要连带复位，用户再点一次就能直接重新开始。
+        """
+        task = self._task()
         if task is not None:
-            task.disable()
-            task.unpause()
-            logger.info("监控页：停止当前任务")
+            try:
+                task.disable()
+                task.unpause()
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"停止自动训练失败: {e}")
+        if reset_button:
+            logger.info("监控页：自动训练 → 已停止（按钮复位为「开始」）")
 
     def _task_by_name(self, name):
         try:
@@ -603,6 +683,17 @@ class MonitorTab(CustomTab):
     @staticmethod
     def _enabled_of(task) -> bool:
         return bool(getattr(task, "enabled", False)) if task is not None else False
+
+    @staticmethod
+    def _running_of(task) -> bool:
+        """任务是不是在跑（正在执行）或在队列里等。
+
+        第二栏的【开始/暂停】按这个切文案：
+        在跑 → 「暂停」；没跑 → 「开始」。
+        """
+        if task is None:
+            return False
+        return bool(getattr(task, "running", False) or getattr(task, "enabled", False))
 
     def refresh(self):
         """重新扫一遍窗口，再刷一次页面数据。"""
