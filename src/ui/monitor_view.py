@@ -44,15 +44,6 @@ DEFAULT_ATTRS = ("投射", "弹跳", "运控", "体能", "防守", "意识")
 class MonitorActions:
     """页面按钮 + 布局编辑的回调容器。MonitorTab 会把自己的方法挂进来。"""
 
-    def start(self):
-        pass
-
-    def pause(self):
-        pass
-
-    def stop(self):
-        pass
-
     def refresh_connection(self):
         pass
 
@@ -311,26 +302,6 @@ class MonitorView(QWidget):
     def _slot_edit(self):
         self.actions.toggle_editing()
 
-    @Slot()
-    def _slot_start(self):
-        self.actions.start()
-
-    @Slot()
-    def _slot_task_pause(self):
-        self.actions.pause()
-
-    @Slot()
-    def _slot_task_stop(self):
-        self.actions.stop()
-
-    @Slot()
-    def _slot_pause(self):
-        self.actions.pause_current()
-
-    @Slot()
-    def _slot_stop(self):
-        self.actions.stop_current()
-
     def _make_primary(self, text, handler, height=30, icon=None):
         btn = PrimaryPushButton(icon or FluentIcon.PLAY, text)
         btn.setFixedHeight(height)
@@ -366,14 +337,6 @@ class MonitorView(QWidget):
     @Slot(str, int)
     def _slot_skill(self, key, value):
         self.actions.set_skill(key, value)
-
-    @Slot()
-    def _slot_train_start(self):
-        self.actions.start_auto_training()
-
-    @Slot()
-    def _slot_train_stop(self):
-        self.actions.stop_auto_training()
 
     @Slot(bool)
     def _slot_quick(self, checked):
@@ -620,7 +583,9 @@ class MonitorView(QWidget):
             self._btn_train = self._make_primary(
                 self._train_text[0], self._slot_train,
                 icon=FluentIcon.PLAY)
-            self._btn_train.setToolTip("自动训练脚本开关：开始 / 暂停")
+            self._btn_train.setToolTip(
+                "自动训练脚本开关：开始 / 暂停（只管训练脚本，不影响游戏连接）")
+
             lay.addWidget(self._btn_train)
 
         lay.addStretch(1)
@@ -891,22 +856,37 @@ class MonitorView(QWidget):
                 f"本局三选一拿到的技能数；上一次：{data.get('skill_last') or '—'}")
 
     def _sync_run_button(self, data: dict):
-        """第一栏总开关：跑着显示【停止】，没跑显示【启动】。"""
+        """第一栏总开关：接上游戏显示【停止】，没接上显示【启动】。
+
+        判据是**连接态**（`connected`），不是执行器状态 —— 否则第二栏
+        的动作会带动第一栏（2026-11-02 修正，详见 MonitorTab._connected）。
+        """
         if self._btn_conn is None:
             return
-        text = self._conn_text[1] if data.get("executor_running") else self._conn_text[0]
+        text = self._conn_text[1] if data.get("connected") else self._conn_text[0]
         if self._btn_conn.text() != text:
             self._btn_conn.setText(text)
 
     def _sync_switches(self, data: dict):
-        """第二栏按钮：自动训练在跑 → 【暂停】，没跑 → 【开始】。"""
-        if self._btn_train is not None and "training_running" in data:
-            running = bool(data.get("training_running"))
+        """第二栏按钮：自动训练**真在跑** → 【暂停】，否则 → 【开始】。
+
+        2026-11-02 修正：旧判据是 `running or enabled`（enabled 含「在队列里
+        等」），于是点完【开始】按钮立刻变【暂停】，但其实一帧都还没跑。
+        现在只认 `training_active`（= enabled 且 running）。
+
+        **断开游戏时**（第一栏点【停止】）第二栏要回到未启动状态：
+        训练任务已被 disable，`enabled` 立刻为假 → `training_active` 为假
+        → 显示【开始】。不用等任务线程把 `running` 收尾（那有几秒滞后）。
+        """
+        if self._btn_train is not None and "training_active" in data:
+            running = bool(data.get("training_active"))
             text = self._train_text[1] if running else self._train_text[0]
             if self._btn_train.text() != text:
                 self._btn_train.setText(text)
             icon = OKIcon.STOP if running else FluentIcon.PLAY
-            if self._btn_train.icon() is not icon:
+            # 不用 `is` 比图标：PySide 每次返回的都是新包装对象，
+            # `is` 永远判「变了」→ 每 500ms 重设一次图标。
+            if self._btn_train.icon() != icon:
                 self._btn_train.setIcon(icon)
         for key, switch in (("quick_enabled", self._switch_quick),):
             if switch is None or key not in data:

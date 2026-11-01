@@ -3792,12 +3792,200 @@ class MonitorCaptainLogic(unittest.TestCase):
         self.assertEqual(task.reset_calls, 0)
 
 
+class MonitorButtonActions(unittest.TestCase):
+    """监控页两栏按钮的**动作**（不只是文案）—— 用户 2026-11-01/02 口径。
+
+    这里测的是「点了之后到底调了什么」，因为根因就在调用序列里：
+    旧版第二栏点【暂停】调了 `task.unpause()`，它的实体是 `executor.start()`，
+    会把整个执行器从暂停里放出来 —— 于是「停自动训练」顺手撤销了
+    「断开游戏」，第一栏自己跳回【停止】。
+    """
+
+    def _tab(self, connected=True, running=False):
+        from src.ui.MonitorTab import MonitorTab
+
+        class _FakeTask:
+            def __init__(self):
+                self.config = {"指定队长": ""}
+                self.enabled = False
+                self.running = running
+                self.calls = []
+
+            def enable(self):
+                self.calls.append("enable")
+                self.enabled = True
+
+            def disable(self):
+                self.calls.append("disable")
+                self.enabled = False
+                self.running = False
+
+            def unpause(self):
+                # 旧版会调它；新逻辑**不应该**再调
+                self.calls.append("unpause")
+
+        class _FakeExecutor:
+            def __init__(self):
+                self.paused = True
+                self.calls = []
+
+            def start(self):
+                self.calls.append("executor.start()")
+                self.paused = False
+
+            def pause(self):
+                self.calls.append("executor.pause()")
+                self.paused = True
+
+        class _FakeCapture:
+            def __init__(self):
+                self.closed = False
+
+            def connected(self):
+                return not self.closed
+
+            def close(self):
+                self.closed = True
+
+        class _FakeDeviceManager:
+            def __init__(self, capture):
+                self.capture_method = capture
+
+        tab = MonitorTab.__new__(MonitorTab)
+        task = _FakeTask()
+        executor = _FakeExecutor()
+        capture = _FakeCapture()
+        device_manager = _FakeDeviceManager(capture)
+        tab._task = lambda: task
+        tab.executor = executor
+        tab._update_data = lambda: None
+        tab._connected = lambda: (device_manager.capture_method is not None
+                                  and device_manager.capture_method.connected())
+        tab._close_capture_async = lambda: MonitorTab._close_capture_async()
+        # 让 _close_capture_async 里的 `og.device_manager` 指到我们的假设备
+        import ok
+        old = getattr(ok.og, "device_manager", None)
+        ok.og.device_manager = device_manager
+        self.addCleanup(lambda: setattr(ok.og, "device_manager", old))
+        return tab, task, executor, capture
+
+    def test_pause_auto_training_does_not_unpause_task(self):
+        """第二栏【暂停】只调 disable —— **不调 unpause**。
+
+        `unpause()` = `executor.start()`：会把执行器从暂停里放出来，
+        于是「停自动训练」顺手撤销了「断开游戏」。
+        """
+        tab, task, executor, _ = self._tab()
+        task.enabled = True
+        task.running = True
+        tab.toggle_auto_training()
+        self.assertIn("disable", task.calls)
+        self.assertNotIn("unpause", task.calls)
+        # 执行器没被碰
+        self.assertEqual(executor.calls, [])
+
+    def test_pause_auto_training_does_not_touch_executor(self):
+        """第二栏【暂停】不能唤醒执行器（那是第一栏的语义）。"""
+        tab, task, executor, _ = self._tab()
+        executor.paused = True
+        task.enabled = True
+        task.running = True
+        tab.toggle_auto_training()
+        self.assertTrue(executor.paused)
+        self.assertEqual(executor.calls, [])
+
+    def test_disconnect_clears_connection_immediately(self):
+        """断开后连接态要**立刻**为假（不等后台线程）。
+
+        旧版把 `capture_method = None` 也放在后台线程里，于是断开后的
+        几秒内 `_connected()` 仍为真 —— 第一栏还显示【停止】、
+        第二栏也以为还能开始。置 None 只是属性赋值，先做掉它。
+        """
+        tab, task, executor, capture = self._tab()
+        self.assertTrue(tab._connected())
+        tab.toggle_connection()          # 断开
+        self.assertFalse(tab._connected())
+
+    def test_start_auto_training_requires_connection(self):
+        """没接上游戏时点第二栏【开始】→ 不 enable，只提示。"""
+        tab, task, executor, capture = self._tab(connected=False)
+        capture.close()          # 模拟已断开
+        tab.toggle_auto_training()
+        self.assertNotIn("enable", task.calls)
+        self.assertEqual(task.enabled, False)
+
+    def test_start_auto_training_enables_when_connected(self):
+        """接上游戏时点第二栏【开始】→ enable + 唤醒执行器。"""
+        tab, task, executor, _ = self._tab(connected=True)
+        tab.toggle_auto_training()
+        self.assertIn("enable", task.calls)
+        self.assertTrue(task.enabled)
+
+    def test_disconnect_resets_second_bar_state(self):
+        """第一栏【停止】（断开游戏）→ 训练任务被 disable、按钮复位成【开始】。
+
+        用户 2026-11-02 口径：断开连接的链路要收尾干净。
+        """
+        tab, task, executor, _ = self._tab()
+        task.enabled = True
+        task.running = True
+        tab.toggle_connection()       # 已连接 → 走 _connection_stop
+        self.assertIn("disable", task.calls)
+        self.assertFalse(task.enabled)
+        self.assertFalse(task.running)
+
+    def test_disconnect_second_bar_text_resets_immediately(self):
+        """断开后第二栏**立刻**回到【开始】，不等任务线程收尾。
+
+        `disable()` 是同步的（`_enabled` 立刻变 False），但 `running`
+        要等任务线程跑完当前拍才置 False —— 有几秒滞后。
+        判据必须用 `enabled and running`，否则断开后界面还挂着【暂停】。
+        """
+        from src.ui.MonitorTab import MonitorTab
+
+        class _Task:
+            enabled = False
+            running = False
+
+        tab = MonitorTab.__new__(MonitorTab)
+        # 模拟「刚 disable、任务线程还没收尾」的中间态
+        task = _Task()
+        task.enabled = False
+        task.running = True
+        self.assertFalse(MonitorTab._active_of(task))
+        # 真在跑：两个都为真
+        task.enabled = True
+        task.running = True
+        self.assertTrue(MonitorTab._active_of(task))
+        # 只排队没跑
+        task.enabled = True
+        task.running = False
+        self.assertFalse(MonitorTab._active_of(task))
+
+    def test_connect_does_not_disable_training(self):
+        """第一栏【停止】是唯一会停训练的动作；别的地方不许停它。"""
+        tab, task, executor, _ = self._tab()
+        task.enabled = True
+        task.running = True
+        tab.toggle_auto_training()    # 第二栏暂停
+        self.assertIn("disable", task.calls)
+        self.assertEqual(task.calls.count("disable"), 1)
+
+
 class MonitorButtons(unittest.TestCase):
-    """监控页两栏按钮的职责（用户 2026-11-01 口径）。
+    """监控页两栏按钮的职责（用户 2026-11-01/02 口径）。
 
     - 第一栏 = 总开关【启动 / 停止】：启动 = 接入游戏；停止 = 断开游戏
       **并且把第二栏复位成「开始」**；
-    - 第二栏 = 【开始 / 暂停】：只管自动训练脚本自己，不碰「接入游戏」。
+    - 第二栏 = 【开始 / 暂停】：只管自动训练脚本自己，不碰「接入游戏」；
+    - **两者互不带动**：点第二栏不能改第一栏的文案，反之亦然。
+
+    2026-11-02 修正的两处根因（回归测的就是这两条）：
+    1. 第一栏旧判据是 `not executor.paused`（执行器运行态），第二栏点【暂停】
+       里的 `task.unpause()` → `executor.start()` 会把它顶回去 = 第二栏带动第一栏。
+       现在第一栏判据是**连接态**（`connected`）。
+    2. 第二栏旧判据是 `running or enabled`（enabled 含「在队列里等」），
+       点完【开始】立刻变【暂停】但其实一帧没跑。现在只认 `training_active`。
     """
 
     def _view(self):
@@ -3835,19 +4023,67 @@ class MonitorButtons(unittest.TestCase):
         actions = _Actions()
         return MonitorView(layout, actions, captains=caps), actions
 
+    @staticmethod
+    def _data(**over):
+        """一份最小可用数据（键名 = MonitorTab._collect 的键）。"""
+        data = {"captain": "", "connected": False,
+                "training_running": False, "training_active": False}
+        data.update(over)
+        return data
+
     def test_first_bar_is_start_stop(self):
         view, _ = self._view()
         self.assertEqual(view._btn_conn.text(), "启动")
-        view.update_data({"captain": "", "executor_running": True,
-                           "training_running": False})
+        view.update_data(self._data(connected=True))
         self.assertEqual(view._btn_conn.text(), "停止")
 
     def test_second_bar_is_start_pause(self):
         view, _ = self._view()
         self.assertEqual(view._btn_train.text(), "开始")
-        view.update_data({"captain": "", "executor_running": False,
-                           "training_running": True})
+        view.update_data(self._data(training_active=True))
         self.assertEqual(view._btn_train.text(), "暂停")
+
+    def test_second_bar_queued_is_still_start(self):
+        """只是排上队（enabled 但没 running）不算在跑 —— 按钮显示【开始】。
+
+        旧判据 `running or enabled` 会让用户点完【开始】就看到【暂停】，
+        但其实一帧都还没跑（执行器可能还停着）。
+        """
+        view, _ = self._view()
+        view.update_data(self._data(training_running=True, training_active=False))
+        self.assertEqual(view._btn_train.text(), "开始")
+
+    def test_second_bar_does_not_move_first_bar(self):
+        """**第二栏点完，第一栏文案不变**（互不带动）。
+
+        这是用户 2026-11-01 反馈的核心诉求，当时没修好：
+        第一栏判据是 `not executor.paused`，第二栏的 `task.unpause()`
+        会调 `executor.start()` 把 paused 置回 False → 第一栏自己跳回「停止」。
+        """
+        view, _ = self._view()
+        view.update_data(self._data(connected=False))
+        self.assertEqual(view._btn_conn.text(), "启动")
+        # 第二栏在跑（点了【暂停】之后 training_active 变假）
+        view.update_data(self._data(connected=False, training_active=True))
+        self.assertEqual(view._btn_conn.text(), "启动")
+        view.update_data(self._data(connected=False, training_active=False))
+        self.assertEqual(view._btn_conn.text(), "启动")
+
+    def test_disconnect_resets_second_bar_to_start(self):
+        """第一栏【停止】（断开游戏）后，第二栏回到未启动状态 = 【开始】。
+
+        用户 2026-11-02 口径：断开连接的链路要收尾干净，
+        否则用户会看到一个「暂停」按钮，但游戏已经断开、点了也没用。
+        """
+        view, _ = self._view()
+        # 断开前：连着游戏、训练在跑
+        view.update_data(self._data(connected=True, training_active=True))
+        self.assertEqual(view._btn_conn.text(), "停止")
+        self.assertEqual(view._btn_train.text(), "暂停")
+        # 断开后：连接态为假、训练任务已 disable（training_active 变假）
+        view.update_data(self._data(connected=False, training_active=False))
+        self.assertEqual(view._btn_conn.text(), "启动")
+        self.assertEqual(view._btn_train.text(), "开始")
 
     def test_checkbox_starts_unchecked(self):
         """默认不勾 —— 旧版默认勾上，用户没动过就等于指定了第一个训练流角色。"""
@@ -3857,8 +4093,7 @@ class MonitorButtons(unittest.TestCase):
     def test_uncheck_calls_set_captain_empty(self):
         """取消勾选 → 必须调 set_captain("")（清空变量）。"""
         view, actions = self._view()
-        view.update_data({"captain": "野上泷", "executor_running": False,
-                           "training_running": False})
+        view.update_data(self._data(captain="野上泷"))
         actions.log.clear()
         view._captain_check.setChecked(False)
         self.assertIn(("captain", ""), actions.log)
@@ -3866,8 +4101,7 @@ class MonitorButtons(unittest.TestCase):
     def test_check_uses_current_selection_not_first(self):
         """勾选时用下拉**当前**选中的角色，不是「列表第一个」。"""
         view, actions = self._view()
-        view.update_data({"captain": "野上泷", "executor_running": False,
-                           "training_running": False})
+        view.update_data(self._data(captain="野上泷"))
         actions.log.clear()
         view._captain_check.setChecked(False)
         view._captain_check.setChecked(True)

@@ -31,11 +31,16 @@
 
 | type | 作用 | 关键字段 |
 |---|---|---|
-| `connection` | 连接状态条 | `height` `title` `meta` |
-| `captain` | 队长选择（勾选框 + 分组下拉） | `height` `label` `hint` `combo_width` |
-| `hero` | 周目 / 体力 / 文案 / 按钮 | `stats` 数组、`now`、按钮文案 |
+| `connection` | 连接状态条 | `height` `title` `meta` `run_text` `stop_text` |
+| `captain` | 队长选择（勾选框 + 分组下拉）+ 自动训练开关 | `height` `label` `hint` `combo_width` `start_text` `pause_text` |
+| `hero` | 周目 / 体力 / 文案 | `stats` 数组、`title`、`fallback` |
 | `cards` | 一行摘要卡 | `items[].title` + `rows`（每行 `["左","右"]`） |
 | `timeline` | 最近动作 | `max_rows` `time_width` `event_width` |
+
+> 2026-11-02 清理：hero 段原来的 `now` / `now_label` / `start_text` /
+> `pause_text` / `stop_text` 是**死配置** —— `_build_hero` 一个都没读，
+> 改了 JSON 也没反应。已从 JSON 和 `DEFAULT_LAYOUT` 里删掉。
+> 队长栏的 `stop_text` 同理（只剩 `start_text` / `pause_text` 两个文案）。
 
 「最近动作」每行 4 列：**时间 / 域（入口·比赛·训练…）/ 本拍识别到的文字 / 结果**。
 
@@ -62,13 +67,13 @@
 
 | 位置 | 控件 | 作用 |
 |---|---|---|
-| 连接条右侧 | **启动 / 停止** | **总开关**：启动 = 接入游戏（连设备、必要时拉起游戏）；停止 = 断开游戏（停任务 + 暂停执行器 + 释放截图会话），并把第二栏复位成「开始」 |
+| 连接条右侧 | **启动 / 停止** | **总开关**：启动 = 接入游戏（连设备、必要时拉起游戏）；停止 = 断开游戏（停任务 + 暂停执行器 + 释放截图会话），**并把第二栏复位成「开始」** |
 | 连接条右侧 | 重新检测 | 重扫窗口并刷新页面数据 |
 | 队长栏 | **开始 / 暂停** | **只管自动训练脚本自己**：开始 = `task.enable()`；暂停 = `task.disable()`。不碰「接入游戏」 |
 | 队长栏右侧 | 快速比赛 开关 | 启停 `QuickMatchTask`（实时同步任务状态） |
 | 队长栏最右 | ✎ | 进出编辑布局模式 |
 
-### 为什么要拆成两个（2026-11-01）
+### 为什么要拆成两个（2026-11-01，2026-11-02 补完）
 
 旧版第一栏是「开始 / 暂停」，按的是 `executor.pause()`，第二栏是「▶ 开始 / ■ 停止」：
 
@@ -77,7 +82,52 @@
 - 「停止」只停了任务，**没有断开游戏**，脚本还挂着游戏窗口不放。
 
 现在：第一栏 = 总开关（接入 / 断开游戏），第二栏 = 自动训练脚本的开关。
-两者互不带动；第一栏点「停止」时会把第二栏复位成「开始」（原始状态）。
+两者互不带动；第一栏点「停止」时会把第二栏复位成「开始」（未启动状态）。
+
+### 三个判据不能混（2026-11-02 修正，这是上次没修干净的地方）
+
+88dd7da 那次只把**文案**拆开了，**判据**还串着。这次改的是判据：
+
+| 按钮 | 判据 | 曾经错在哪 |
+|---|---|---|
+| 第一栏【启动/停止】 | `connected`：**游戏接上了没有**（`capture_method` 在且 connected） | 旧判据 `not executor.paused` 是**执行器**的运行态 → 第二栏点【暂停】里的 `task.unpause()` 会调 `executor.start()`，把第一栏从「启动」顶回「停止」 |
+| 第二栏【开始/暂停】 | `training_active` = `enabled and running` | 旧判据 `running or enabled`（`enabled` 含「在队列里等」）→ 点完【开始】立刻变【暂停】，其实一帧没跑 |
+| 第二栏【开始】前置条件 | `connected` 必须为真 | 旧版不管连接状态就 `enable()` → 任务在队列里躺着，执行器还停着，永远不动 |
+
+**`task.unpause()` 是第二栏的毒药**（2026-11-02 删掉）：
+
+```python
+# ok/task/task.py:1224
+def unpause(self):
+    self._paused = False
+    self.executor.start()   # ← 把整个执行器从暂停里放出来
+```
+
+第二栏从来没调过 `task.pause()`，所以根本不需要 `unpause()`。
+留着它就等于「停自动训练」顺手撤销了「断开游戏」：
+第一栏刚【停止】（执行器已 pause、截图会话已释放），第二栏再点【暂停】
+就把执行器唤醒了 → 第一栏自己跳回【停止】，而且执行器去取帧时
+`capture_method` 已经是 `None` → 拿不到帧。
+
+> `task.disable(); task.unpause()` 这个写法是抄框架 `TaskCard.stop_clicked()` 的。
+> 框架里成立是因为框架的 stop 语义是「停掉这张任务卡」；我们的第二栏是
+> 「暂停自动训练」，语义不同，副作用也不同。
+
+### 断开游戏时第二栏要复位成【开始】
+
+用户 2026-11-02 口径：「断开连接」的链路要收尾干净 —— 断开后第二栏必须回到
+**未启动状态**（显示【开始】），否则用户会看到一个「暂停」按钮，
+但游戏已经断开、点了也没用。
+
+实现上有个坑：`task.disable()` 是**同步**生效的（`_enabled` 立刻变 False），
+但 `task.running` 要等任务线程跑完当前拍才置 False —— 中间有几秒窗口。
+所以判据要用 `enabled and running`（不是光看 `running`），
+断开后按钮立刻变【开始】，不用等任务线程收尾。
+
+还有个竞态：`_close_capture_async` 旧版把 `capture_method = None`（属性赋值）
+也放在后台线程里，于是断开后的几秒内 `_connected()` 仍为真 —— 第一栏还显示
+【停止】、第二栏也以为还能开始。现在**先同步置 None、再后台 close**
+（close 要等正在取的那一帧，最多 4 秒，不能放 UI 线程）。
 
 ## 流派从哪来
 
@@ -147,6 +197,14 @@
 | `{fail_rate}` | 最近一次科目页失败率 | `info["当前失败率"]` |
 | `{buy_strategy}` `{clear_balance}` `{fail_limit}` `{picnic_threshold}` `{stuck}` | 配置回显 | `TrainingTask.config` |
 | `{device_title}` `{device_meta}` | 设备信息 | `og.device_manager` |
+
+按钮专用（不给卡片用，只给两个按钮的状态）：
+
+| 键 | 含义 | 判据 |
+|---|---|---|
+| `connected` | 游戏接上了没有 → 第一栏【启动/停止】 | `capture_method` 在且 `connected()` 为真 |
+| `training_active` | 训练任务**真在跑** → 第二栏【开始/暂停】 | `task.enabled and task.running` |
+| `training_running` | 任务在跑或在队列里（只作信息，不控按钮） | `task.running or task.enabled` |
 
 **尚未接入**（显示「—」，接了才有值）：`{match_countdown}` `{weekend_plan}` `{shop_today}`。
 不想要这几行，直接从 `rows` 里删掉，别留着占位。
