@@ -91,7 +91,7 @@ class WeekendHandlers:
     def blocked_activities(self):
         """今天已经证实点不动的打工选项。
 
-        挂在 `_weekend` 上：跟着「第N周 + 星期X」一起重置（`weekend_state()`），
+        挂在 `_weekend` 上：跟着「第N周 + 星期X」一起重置（`day_state()`），
         不落盘、不跨天。
         """
         return self._weekend.setdefault("blocked", set())
@@ -173,8 +173,11 @@ class WeekendHandlers:
         2026-10-26 用户反馈：在地图上点了「公园」，页面其实没打开，
         但旧代码点击前就 `visited.add(place)`，结果整天的公园都被跳过。
         现在只在各地点 handler 识别到自己的内页标题时登记。
-        这里直接写 `_weekend`，不走 `weekend_state()` —— 后者按顶栏日期判断，
-        地点内页如果读不到顶栏会重置整个状态，把 visited 清空。
+
+        这里直接写 `_weekend`，**不**走 `day_state()` —— 后者按顶栏日期判断，
+        地点内页如果读不到顶栏会重建整个状态，把 visited 清空。
+        （`day_state()` 现在已经修成「读不到日期就沿用旧状态」，但这里
+        直接写更稳：登记不该依赖「读得到日期」。）
         """
         self._weekend.setdefault("visited", set()).add(place)
 
@@ -487,7 +490,7 @@ class WeekendHandlers:
                 self.mark_visited("公园")
             return ok
 
-        st = self.weekend_state()
+        st = self.day_state()
         day = st["date"][1] if st["date"] else None
         if st.get("park_choice") is None:
             if day == "日":
@@ -864,7 +867,7 @@ class WeekendHandlers:
         if self.click_button("confirm", after_sleep=0.8, must=False):
             self.log_info("扭蛋：确定")
             # 今天花过钱了：扭蛋流周末不必再去餐厅打工（flow.weekend_priority 用）
-            self.weekend_state()["gacha_spent"] = True
+            self.day_state()["gacha_spent"] = True
         else:
             self.click(int(self.width * 0.5), int(self.height * 0.93), after_sleep=0.8)
             self.log_warning("扭蛋：没认出「确定」，按底部中间兜底")
@@ -1024,6 +1027,10 @@ class WeekendHandlers:
 
         2026-10-29 口径：周末首页**不再进店**（进店挪到「比赛日进比赛前」，
         见 `training.handle_pre_match_shop`），这里只负责点出行。
+
+        **判断在 `training/daycycle.py`**（与训练日那个入口同级）：
+        `outing_offer(..., block_if_used=False)` —— 周末出行是**主流程**，
+        不是野上泷周五那种「额外外出」，所以**不受** `outing_done` 限制。
         """
         # 地图上没有「出行」按钮（2026-10-27 修正）：旧判据是「有地点名就是地图」，
         # 但周末首页的台词也含地点名（「告诉她公园的草坪是假的」），
@@ -1034,7 +1041,8 @@ class WeekendHandlers:
         # 训练日里的额外出行（野上泷：周五也能出行）：一天只用一次。
         # 用过之后如果又停在一个「有出行」的页面（进地图又退回来的首页），
         # 再点就是「出行 → 地图 → 退回首页」打转，所以这里直接退出去。
-        st = self.weekend_state()
+        # 注意：**只对非周末生效** —— 周末出行是主流程，每次进地图都要点。
+        st = self.day_state()
         day = st["date"][1] if st["date"] else None
         if st.get("outing_done") and day not in ("六", "日"):
             self.exit_page()
@@ -1046,10 +1054,11 @@ class WeekendHandlers:
         # （日志 `left_click 今天可以出行哦！要不 (950, 182)`），不是右侧按钮。
         # 2026-10-31：判据收进 parsers.find_go_out_button（只认整词「出行」，
         # 多个候选时优先右下按钮区），训练日那边也用它，别各写一份。
-        target = self.find_go_out_button(texts)
-        if target is not None:
+        action, reason = self.outing_offer(texts, block_if_used=False)
+        if action == "点按钮":
+            target = self.find_go_out_button(texts)
             self.click_box(target, after_sleep=0.6)
-            self.log_info("周末：点「出行」进地图"
+            self.log_info(f"周末：点「出行」进地图"
                           f"@({target.x + target.width // 2},"
                           f"{target.y + target.height // 2})")
         elif self.click_text("出行", region_name="go_out", after_sleep=0.6,
@@ -1057,7 +1066,9 @@ class WeekendHandlers:
             # 兜底：按钮上除了「出行」还带了箭头之类的字，整词匹配不到
             self.log_info("周末：点「出行」进地图（按钮区兜底）")
         else:
-            # 只有台词、没有按钮：这一拍什么都不点，等对话先推进
+            # 只有台词、没有按钮：这一拍什么都不点，等对话先推进。
+            # 注意：这里**不点台词**（训练日那个入口才点）——
+            # 周末首页的台词不是按钮，点它会点到句子中间（2026-10-30 实跑）。
             return False
         return True
 
@@ -1239,7 +1250,7 @@ class WeekendHandlers:
             return False
         if not self.match_text(texts, labels.WEEKEND_PLACES):
             return False
-        st = self.weekend_state()
+        st = self.day_state()
         visited = st.setdefault("visited", set())
         day = st["date"][1] if st["date"] else None
 

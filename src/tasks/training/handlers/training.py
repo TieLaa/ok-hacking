@@ -130,7 +130,12 @@ class TrainingHandlers:
         return True
 
     def handle_training_day(self, texts):
-        """训练日主界面：右下「训练 / 休息」。"""
+        """训练日主界面：右下「训练 / 休息」。
+
+        **判断在 `training/daycycle.py`**（用户 2026-11-01 的架构）：
+        「今天练还是休」「今天要不要外出」这两个**新一天入口**是同级的，
+        都归那个模块；这里只负责「照它说的做」。
+        """
         if self.match_text(texts, "星期") is None:
             return False
         if self.match_text(texts, "休息") is None:
@@ -139,50 +144,33 @@ class TrainingHandlers:
             return True
         # 2026-10-29 用户补充：野上泷周五也能出行 —— 训练日主界面上出现「出行」时，
         # 先把这次外出机会用掉（一天一次），再回来训练/休息；否则练完这天就过去了。
-        # 2026-10-31 修正：只认**按钮**，而且点到了才记「今天用过了」。
-        # 旧版 `click_text("出行")` 会把对话框台词「今天可以出行哦！要不」当按钮点
-        # （官方日志 `left_click 今天可以出行哦！要不 (950, 182)`），按钮一下没点到，
-        # 外出标记却已经置上，下一拍直接进训练（用户：「为什么没有点出行，
-        # 反而默认进了训练」）。
-        if self.match_text(texts, "出行") is not None:
-            st = self.weekend_state()
-            if not st.get("outing_done"):
-                go_out = self.find_go_out_button(texts)
-                if go_out is not None:
-                    self.click_box(go_out, after_sleep=0.6)
-                    st["outing_done"] = True
-                    self.log_info("训练日有「出行」按钮 → 先外出（一天一次）")
-                    return True
-                line = self.match_text(texts, "出行")
-                if line is not None and len(line.name.strip()) > 4:
-                    # 按钮还没出来，这一拍只推进对话（不算用掉当天机会）
-                    self.click_box(line, after_sleep=0.6)
-                    self.log_info("训练日：对话框提到「出行」但还没按钮 → 先推进对话")
-                    return True
-        state = self.top_bar()
-        cur = state.get("stamina")
-        # 周五按流派分档（用户 2026-10-29）：训练流不变，其他流派 55，商店流 80
-        limit = self.rest_threshold(state.get("day"))
-        action = self.texts_in_region(texts, "main_action")
-        force_rest = self._force_rest
-        if force_rest:
-            self._force_rest = False
-            self.log_info("失败率过高，强制休息")
-        if force_rest or (cur is not None and cur < limit):
-            target = self.match_text(action, "休息")
+        action, reason = self.outing_offer(texts)
+        if action == "点按钮":
+            button = self.find_go_out_button(texts)
+            self.click_box(button, after_sleep=0.6)
+            self.mark_outing_used()
+            self.log_info(f"训练日有「出行」按钮 → 先外出（一天一次）：{reason}")
+            return True
+        if action == "推进对话":
+            line = self.match_text(texts, "出行")
+            self.click_box(line, after_sleep=0.6)
+            self.log_info(f"训练日：{reason}")
+            return True
+        action, reason = self.training_day_action(texts)
+        area = self.texts_in_region(texts, "main_action")
+        if action == "休息":
+            target = self.match_text(area, "休息")
             if target is not None:
                 self.click_box(target, after_sleep=0.6)
             else:
                 self.flow_click("day_rest", after_sleep=0.6)
-            if not force_rest:
-                self.log_info(f"体力 {cur} < {limit}（{self.style}·星期{state.get('day')}）→ 休息")
         else:
-            target = self.match_text(action, "训练")
+            target = self.match_text(area, "训练")
             if target is not None:
                 self.click_box(target, after_sleep=0.6)
             else:
                 self.flow_click("day_train", after_sleep=0.6)
-            self.log_info(f"体力 {cur}，进入训练科目")
+        self.log_info(reason)
         return True
 
     def _boost_text_cards(self, texts):

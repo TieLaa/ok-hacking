@@ -622,7 +622,7 @@ class TrainingFlowMixin:
         步行街 / 游戏厅仍是显式开关（没验证过内页，先别默认乱进）。
         """
         if st is None:
-            st = self.weekend_state()
+            st = self.day_state()
         if day is None:
             day = (st.get("date") or (None, None))[1]
         # 读不到星期时按周六那一行兜底（每个流派都有定义）

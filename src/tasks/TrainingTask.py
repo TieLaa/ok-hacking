@@ -17,6 +17,8 @@ from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 from src.tasks.training.flow import TrainingFlowMixin
 from src.tasks.training.parsers import TrainingParsersMixin
 from src.tasks.training.scoring import TrainingScoringMixin
+from src.tasks.training.daycycle import DayCycleMixin
+from src.tasks.training.systemui import SystemUIHandlers
 from src.tasks.training.handlers import HANDLERS
 from src.tasks.training.handlers.popup import PopupHandlers
 from src.tasks.training.handlers.training import TrainingHandlers
@@ -27,6 +29,7 @@ from src.tasks.training.handlers.fishing import FishingHandlers
 
 
 class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin,
+                   DayCycleMixin, SystemUIHandlers,
                    PopupHandlers, TrainingHandlers, WeekendHandlers,
                    MatchHandlers, EntryHandlers, FishingHandlers, BaseGirlsTask):
 

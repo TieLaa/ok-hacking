@@ -2,6 +2,9 @@
 
 > 目的：让「加一个界面」变成可复现的固定流程，而不是每次临场发挥。
 > 本文件是规则，`AGENTS.md` 是硬约束（每次会话必加载）。两者冲突时以 `AGENTS.md` 为准。
+>
+> **模块边界的唯一事实来源是 `docs/ARCHITECTURE.md`**（2026-11-01 定稿）：
+> 分层、模块归属、状态归属、门禁都在那里。
 
 ## 1. 目录职责
 
@@ -11,6 +14,8 @@
 | `src/tasks/training/flow.py` | 单拍状态机、卡死检测、存证 | 业务判据 |
 | `src/tasks/training/parsers.py` | 只读解析：OCR 文本 → 结构化数据、帧取色 | 点击、等待 |
 | `src/tasks/training/scoring.py` | 纯打分（输入 dict / 文本，输出数字） | 任何 `self.click` |
+| `src/tasks/training/daycycle.py` | **全局日期 + 两个新一天入口 + 当天状态**（唯一读顶栏日期的地方） | 具体业务的判据 |
+| `src/tasks/training/systemui.py` | **系统级固定控件**（返回 / 倍速 / 历史记录 / 菜单 / 快进） | 任何业务判断 |
 | `src/tasks/training/handlers/<域>.py` | 按界面域分的 handler：popup / training / weekend / match / entry | 跨域判据、通用工具 |
 | `src/tasks/training/handlers/__init__.py` | **唯一**的 `HANDLERS` 优先级表 | 方法实现 |
 | `src/tasks/training/constants.py` | 流派地图、JPEG 参数等模块级常量 | 运行期可变状态 |

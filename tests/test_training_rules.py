@@ -1586,9 +1586,117 @@ class ResultButtonRules(unittest.TestCase):
         self.assertEqual(task.actions[0][0], "click_box")
 
 
+class DayCycleRules(unittest.TestCase):
+    """全局日期 + 两个新一天入口（用户 2026-11-01 的架构）。
+
+    架构要点：
+      - **一天只有一个标识**：顶栏「第N周 星期X」。游戏里交互就过天，
+        所以日期变了就是新的一天，不需要另外维护「今天过没过」。
+      - **新一天有两个入口，同级**：训练日主界面、周末出行首页。
+        它们的判断都在 `training/daycycle.py`，handler 只负责照做。
+    """
+
+    TOPBAR = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
+              box(380, 16, "120/130", 210, 53)]
+
+    def test_current_day_reads_topbar(self):
+        task = FakeTask(list(self.TOPBAR))
+        self.assertEqual(task.current_day(), (1, "五"))
+        self.assertEqual(task.day_name(), "五")
+        self.assertFalse(task.is_weekend())
+
+    def test_current_day_cached_per_frame(self):
+        """同一帧只读一次顶栏（各模块各读一次会读到不同的值）。"""
+        task = FakeTask(list(self.TOPBAR))
+        task._tick_frame = task.frame
+        task.current_day()
+        # 换掉 OCR 结果，同一帧不该重新读
+        task._texts = [box(30, 20, "第9周", 120, 40), box(200, 20, "星期日", 130, 40)]
+        self.assertEqual(task.current_day(), (1, "五"))
+        # 换帧 → 重读
+        task._tick_frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        self.assertEqual(task.current_day(), (9, "日"))
+
+    def test_day_state_survives_topbar_dropout(self):
+        """顶栏读不到周/星期 → 沿用旧状态，**不清空**当天行程。
+
+        2026-11-01 的真实 bug：原来 key 一变就整个重建 `_weekend`，
+        顶栏抖一帧 → visited/gacha_spent 全丢 → 当天「已经买过扭蛋」的事实没了。
+        """
+        task = FakeTask(list(self.TOPBAR))
+        st = task.day_state()
+        st["visited"].add("步行街")
+        st["gacha_spent"] = True
+        # 顶栏坏掉（只剩体力）
+        task._texts = [box(380, 16, "120/130", 210, 53)]
+        task._tick_frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        st2 = task.day_state()
+        self.assertIn("步行街", st2["visited"])
+        self.assertTrue(st2["gacha_spent"])
+
+    def test_day_state_resets_on_new_day(self):
+        """日期变了 → 新的一天，状态重置。"""
+        task = FakeTask(list(self.TOPBAR))
+        task.day_state()["visited"].add("步行街")
+        # 换到星期六
+        task._texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期六", 130, 40),
+                       box(380, 16, "120/130", 210, 53)]
+        task._tick_frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        st = task.day_state()
+        self.assertNotIn("步行街", st["visited"])
+        self.assertEqual(st["date"], (1, "六"))
+
+    def test_training_day_action_rest_when_low_stamina(self):
+        """训练日入口①：体力低于阈值 → 休息。"""
+        task = FakeTask([box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
+                         box(380, 16, "20/130", 210, 53)])
+        action, reason = task.training_day_action(task._texts)
+        self.assertEqual(action, "休息")
+        self.assertIn("20", reason)
+
+    def test_training_day_action_trains_when_enough(self):
+        """训练日入口①：体力够 → 训练。"""
+        task = FakeTask([box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
+                         box(380, 16, "120/130", 210, 53)])
+        action, _ = task.training_day_action(task._texts)
+        self.assertEqual(action, "训练")
+
+    def test_outing_offer_requires_button_not_dialogue(self):
+        """出行入口②：只有**按钮**才算，台词不算。"""
+        texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
+                 box(380, 16, "120/130", 210, 53),
+                 box(945, 168, "今天可以出行哦！要不", 330, 40)]
+        task = FakeTask(texts)
+        action, reason = task.outing_offer(texts)
+        self.assertEqual(action, "推进对话")
+        self.assertIn("对话", reason)
+
+    def test_outing_offer_blocked_after_used(self):
+        """今天的额外出行用过了 → 不再点（block_if_used=True）。"""
+        texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
+                 box(380, 16, "120/130", 210, 53),
+                 box(1150, 700, "出行", 160, 70)]
+        task = FakeTask(texts)
+        task.mark_outing_used()
+        action, reason = task.outing_offer(texts)
+        self.assertIsNone(action)
+        self.assertIn("用过", reason)
+        # 周末首页不受限制（周末出行是主流程）
+        action2, _ = task.outing_offer(texts, block_if_used=False)
+        self.assertEqual(action2, "点按钮")
+
+    def test_two_entry_points_are_siblings(self):
+        """两个入口同级：训练日和出行首页的判断都在同一个模块里。"""
+        from src.tasks.training import daycycle
+        self.assertTrue(hasattr(daycycle.DayCycleMixin, "training_day_action"))
+        self.assertTrue(hasattr(daycycle.DayCycleMixin, "outing_offer"))
+        # handler 只做「照它说的做」
+        self.assertTrue(hasattr(FakeTask, "training_day_action"))
+        self.assertTrue(hasattr(FakeTask, "outing_offer"))
+
+
 class WeekendMapRules(unittest.TestCase):
     """周末地图：地点都去过要退回首页，且地图不能被当成剧情页连点 ▼。"""
-
     MAP = [box(814, 461, "游戏厅", 148, 57), box(1538, 606, "公园", 102, 51),
            box(258, 748, "餐厅", 104, 60), box(1010, 897, "步行街", 148, 58)]
 

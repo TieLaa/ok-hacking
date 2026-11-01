@@ -17,13 +17,7 @@ import numpy as np
 
 from src.tasks.ui import Defs  # noqa: F401
 from src.tasks.ui import labels
-from src.tasks.ui import topbar
 from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
-
-# 倍速看门狗：连续这么多拍点击后状态毫无变化就锁到下一周。
-# 注意这是**看门狗阈值**（防止每拍刷屏），不是游戏里的档位上限 ——
-# 上限由图标自己表达（还有空心三角 = 没到顶），代码里不写死 2x / 3x。
-_SPEED_STALL_LIMIT = 2
 
 
 class MatchHandlers:
@@ -141,9 +135,7 @@ class MatchHandlers:
         if auto is None and not intro and not ff:
             return False
 
-        x = int(self.width_of_screen(Defs.MATCH_FAST_FORWARD[0]))
-        y = int(self.height_of_screen(Defs.MATCH_FAST_FORWARD[1]))
-        self.click(x, y, after_sleep=0.6)
+        self.click_match_fast_forward(after_sleep=0.6)
         if auto is None:
             self.log_debug("比赛开场：点左下角 ▶▶ 快进")
         return True
@@ -209,72 +201,6 @@ class MatchHandlers:
         self._speed_stalls = 0
         self._speed_sig = None
         self._speed_locked = False
-
-    def speed_level(self, texts):
-        """当前倍速状态：(label, at_max, off)。
-
-        - `at_max` 由图标判：**还有白色空心三角 = 没到本存档的最高档**，一个空心都没有 = 到顶。
-          这样**不需要知道上限是 2 还是 3**（图标里画几个三角就是几档，见 `ui/topbar.py`）。
-        - `off` 只能靠 OCR 判：OFF 态是灰字「OFF 加速」，像素上和「全实心」几乎一样。
-        - `label` 只用于日志（OCR 小字会漏）。
-        """
-        off = topbar.off_text(texts, self.width, self.height)
-        at_max = topbar.speed_at_max(self.frame)
-        label = topbar.speed_label(texts, self.width, self.height)
-        return label, at_max, off
-
-    def ensure_speed(self, texts):
-        """把倍速点到**本存档当前解锁的最高档**（不假设是 2x 还是 3x，更不写死 3）。
-
-        依据（2026-11-01 用户口径 + 逐档实测）：
-        - 点击是**循环且一次只前进一档**：1x → 2x → 3x → OFF → 1x；
-        - 高倍率随游戏进度逐步解锁，所以「最高档」这个数字**不是常量**；
-        - 图标里实心三角的个数就是档位，还有空心三角就说明没到顶。
-
-        所以本函数**一拍只点一次**（本帧的 `self.frame` 到下一拍才更新，盲连点会点过头，
-        从 3x 连点两下直接回到 1x），下一拍重新判「还有没有空心三角」再决定要不要继续。
-
-        看门狗：连续 `_SPEED_STALL_LIMIT` 次点击都没让状态变化（点击被吃掉/已经到顶但像素没读对），
-        就锁到下一周，避免每拍刷屏。这是**看门狗阈值**，不是游戏上限。
-
-        只在「训练日主界面 / 赛前准备」这两个确定安全的时机调用，避免在结算页、商店页乱点顶栏。
-        """
-        if self.match_text(texts, labels.WEEK_RE) is None:
-            return False
-        week_m = labels.WEEK_RE.search("".join(t.name for t in texts).replace(" ", ""))
-        week = int(week_m.group(1)) if week_m else None
-
-        label, at_max, off = self.speed_level(texts)
-        if at_max is None:                       # 帧读不出来：不猜、不乱点
-            return False
-        if at_max and not off:                   # 已经没有空心三角 = 到顶了
-            return False
-
-        if self._speed_week != week:
-            self._speed_week = week
-            self._speed_clicks = 0
-            self._speed_stalls = 0
-            self._speed_locked = False
-            self._speed_sig = None
-        if self._speed_locked:
-            return False
-
-        # 上一拍点过了：看这一拍状态有没有变化，没变就记一次"没进展"
-        sig = (label, at_max, off)
-        if self._speed_sig is not None and sig == self._speed_sig:
-            self._speed_stalls += 1
-            if self._speed_stalls >= _SPEED_STALL_LIMIT:
-                self._speed_locked = True
-                self.log_info("倍速点了 2 次状态都没变，本周不再尝试")
-                return False
-
-        x = int(self.width * Defs.SPEED_ICON_CLICK[0])
-        y = int(self.height * Defs.SPEED_ICON_CLICK[1])
-        self.click(x, y, after_sleep=0.5)
-        self._speed_clicks += 1
-        self._speed_sig = sig
-        self.log_info(f"倍速 +1 档（当前 {label or '未读出'}，图标仍有空心三角）")
-        return True
 
     def _card_choices(self, texts):
         """底排横向大卡：同一行 2~3 块短标题 + 每块自己下方一行效果文字。

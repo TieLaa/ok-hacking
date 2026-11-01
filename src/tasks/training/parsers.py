@@ -750,67 +750,16 @@ class TrainingParsersMixin:
         return []
 
     def weekend_state(self):
-        """按「第N周 + 星期X」维护周末状态：去过哪些地点、商店看没看、公园选什么。
+        """当天的状态（去过哪些地点、商店看没看、公园选什么）。
+
+        **实现已搬到 `training/daycycle.py`**（用户 2026-11-01 的架构：
+        全局日期 + 两个新一天入口放同一个模块）。这里只保留旧名，
+        让现有调用点不用改 —— 新代码请直接用 `day_state()`。
 
         `visited` 是关键：游戏厅进去发现没有可跳过的小游戏会退出，
         如果不记录「今天已经去过」，下一拍又会点进游戏厅，来回循环（2026-10-26）。
-
-        2026-11-01 修：**顶栏读不到周/星期时不清状态**。
-        原来只要 key 变了就整个重建 `_weekend`，于是顶栏 OCR 抖一帧
-        （扭蛋页只读到体力、没读到「第1周 星期五」）→ visited / gacha_spent
-        全被清空 → 当天「已经买过扭蛋」的事实丢了，又要去餐厅打工一次。
-        现在只在**真的读到一个完整日期键**（周和星期都有）时才允许重建；
-        读不到就沿用旧状态。
         """
-        state = self.top_bar()
-        week, day = state.get("week"), state.get("day")
-        prev = self._weekend.get("date")
-        # 读不到完整日期键 → 顶栏 OCR 抖动，不是「换了一天」，沿用旧状态。
-        if week is None or day is None:
-            if prev is not None:
-                self.log_debug(f"顶栏没读到周/星期（{week}/{day}）→ 沿用 {prev} 的周末状态")
-            self._ensure_weekend_keys()
-            return self._weekend
-        key = (week, day)
-        if prev != key:
-            if prev is not None:
-                # 观测用：改期角色「跳进其他流程」后顶栏日期会不会变还不知道。
-                # 先把这个切换记下来，等角色到手跑一局，就能从日志判断
-                # day_state 的键该不该带上「流程实例」（变了就重置今日行程，不变就沿用）。
-                self.log_info(f"日期键 {prev} → {key}（今日行程重置）")
-            self._weekend = self._new_weekend_state(key)
-        return self._weekend
-
-    @staticmethod
-    def _new_weekend_state(key):
-        """一天的周末状态（新的一天）。"""
-        return {
-            "date": key,
-            "shop_checked": False,
-            "bought": False,
-            "park_choice": None,
-            "visited": set(),
-            # 今天在步行街**试过**抽扭蛋（买没买成都算试过）。
-            # 地图上按它排除步行街，防止「买不到 → 又点进去」的无限循环。
-            "gacha_tried": set(),
-            # 今天在步行街抽到过扭蛋（扭蛋流决定要不要再去餐厅打工）
-            "gacha_spent": False,
-            # 训练日里出现「出行」时先外出（野上泷周五也能出行），一天只做一次
-            "outing_done": False,
-        }
-
-    def _ensure_weekend_keys(self):
-        """补齐 `_weekend` 里缺的键（老存档/顶栏抖动时用）。
-
-        2026-11-01：`_weekend` 初始值只有 4 个键（TrainingTask.__init__），
-        其它键要等 `weekend_state()` 重建时才补上。顶栏读不到日期时
-        不再重建 → 那些键就永远缺，`task._weekend["visited"]` 会 KeyError。
-        """
-        defaults = self._new_weekend_state(self._weekend.get("date"))
-        for k, v in defaults.items():
-            if k not in self._weekend:
-                self._weekend[k] = v
-        return self._weekend
+        return self.day_state()
 
     def read_fail_rate(self, texts):
         """读取当前选中科目的失败率（0~100），读不到返回 None。"""

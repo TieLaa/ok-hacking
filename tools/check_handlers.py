@@ -325,6 +325,59 @@ def check_architecture():
     return problems
 
 
+# ---------- 全局日期单一入口（2026-11-01 架构）----------
+# 用户 2026-11-01 定的架构：**全局日期只有一处读**。
+# 「一天」的标识是顶栏的「第N周 星期X」；游戏里交互就过天，所以
+# 日期变了就是新的一天 —— 不需要各模块自己维护「今天过没过」。
+#
+# 为什么必须收口（真实 bug）：`top_bar()` 会被 20 多个地方调用，
+# 同一帧里各读一次可能读到不同的值（OCR 抖动）。`day_state()` 原来
+# 按「日期键变了就重建整个状态」→ 顶栏抖一帧 → visited/gacha_spent
+# 全被清空 → 当天「已经买过扭蛋」的事实丢了。
+#
+# 规则：
+#   ✗ 禁止：handlers/ 下的模块直接调 `self.top_bar()` 取**日期**
+#     （体力等其它字段仍可取 —— 那是另一回事，见下）
+#   ✓ 允许：daycycle.py 自己读（它就是那个公共入口）
+#   ✓ 允许：parsers.py（顶层解析层，读顶栏是它的本职）
+def check_date_entry():
+    """全局日期只能从 `daycycle.current_day()` 拿。
+
+    返回问题列表（空 = 通过）。
+    """
+    problems = []
+    allowed = {
+        "src/tasks/training/daycycle.py",       # 公共入口自己
+        "src/tasks/training/parsers.py",        # 顶层解析层
+        "src/tasks/training/flow.py",           # 单拍状态机
+    }
+    handlers_dir = os.path.join(ROOT, "src", "tasks", "training", "handlers")
+    for f in sorted(os.listdir(handlers_dir)):
+        if not f.endswith(".py"):
+            continue
+        rel = "src/tasks/training/handlers/" + f
+        path = os.path.join(handlers_dir, f)
+        tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if not (isinstance(fn, ast.Attribute) and fn.attr == "top_bar"):
+                continue
+            # 用了 .get("week") / .get("day") 才算「取日期」
+            src = ast.unparse(node)
+            if '"week"' in src or '"day"' in src:
+                problems.append(
+                    f"{rel}:{node.lineno} 直接读 top_bar() 取日期——"
+                    f"改用 daycycle 的 current_day() / day_state()")
+    print("-" * 96)
+    print(f"日期入口：handlers 里直接读日期 {len(problems)} 处"
+          f"（唯一入口 = src/tasks/training/daycycle.py）")
+    for p in problems:
+        print("  ✗ " + p)
+    return problems
+
+
 # ---------- 判据单一来源（文案门禁）----------
 # 受管按钮词：出现在这些方法的 names 参数里、且是**内联字面量**，就算违规。
 # 为什么是这几个：它们是「按钮」，必须全等匹配且来自 labels.BUTTONS
@@ -501,8 +554,9 @@ def main():
 
     arch_problems = check_architecture()
     label_problems = check_labels()
+    date_problems = check_date_entry()
 
-    if fails or misses or arch_problems or label_problems:
+    if fails or misses or arch_problems or label_problems or date_problems:
         print("回归失败")
         return 1
     print("回归通过")
