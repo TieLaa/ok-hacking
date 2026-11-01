@@ -16,7 +16,13 @@ import cv2
 import numpy as np
 
 from src.tasks.ui import Defs  # noqa: F401
+from src.tasks.ui import topbar
 from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
+
+# 倍速看门狗：连续这么多拍点击后状态毫无变化就锁到下一周。
+# 注意这是**看门狗阈值**（防止每拍刷屏），不是游戏里的档位上限 ——
+# 上限由图标自己表达（还有空心三角 = 没到顶），代码里不写死 2x / 3x。
+_SPEED_STALL_LIMIT = 2
 
 
 class MatchHandlers:
@@ -196,55 +202,78 @@ class MatchHandlers:
         """比赛相关的共享状态：养成任务和「快速比赛」模块都要初始化（两个任务共用）。"""
         self._skip_tries = 0
         self._match_intro_at = 0.0
+        # 倍速：week 变了就重来；stalls 是看门狗（点击没让状态变化几次就锁本周）
         self._speed_week = None
+        self._speed_clicks = 0
+        self._speed_stalls = 0
+        self._speed_sig = None
         self._speed_locked = False
 
-    def try_speed_2x(self, texts):
-        """大师赛解锁 2x：把顶栏倍速按钮从 1x 切到 2x。
+    def speed_level(self, texts):
+        """当前倍速状态：(label, at_max, off)。
 
-        不作为独立 handler：只在「训练日主界面 / 赛前准备」这两个确定安全的时机调用，
-        避免在结算页、商店页乱点顶栏。
+        - `at_max` 由图标判：**还有白色空心三角 = 没到本存档的最高档**，一个空心都没有 = 到顶。
+          这样**不需要知道上限是 2 还是 3**（图标里画几个三角就是几档，见 `ui/topbar.py`）。
+        - `off` 只能靠 OCR 判：OFF 态是灰字「OFF 加速」，像素上和「全实心」几乎一样。
+        - `label` 只用于日志（OCR 小字会漏）。
+        """
+        off = topbar.off_text(texts, self.width, self.height)
+        at_max = topbar.speed_at_max(self.frame)
+        label = topbar.speed_label(texts, self.width, self.height)
+        return label, at_max, off
 
-        判据只看图标右侧三角是否实心蓝（1x 是灰白，2x 是实心蓝），不依赖 OCR 小字。
-        每周最多尝试一次：点了没变化就认为还没解锁，本周不再点，避免每拍刷屏。
+    def ensure_speed(self, texts):
+        """把倍速点到**本存档当前解锁的最高档**（不假设是 2x 还是 3x，更不写死 3）。
+
+        依据（2026-11-01 用户口径 + 逐档实测）：
+        - 点击是**循环且一次只前进一档**：1x → 2x → 3x → OFF → 1x；
+        - 高倍率随游戏进度逐步解锁，所以「最高档」这个数字**不是常量**；
+        - 图标里实心三角的个数就是档位，还有空心三角就说明没到顶。
+
+        所以本函数**一拍只点一次**（本帧的 `self.frame` 到下一拍才更新，盲连点会点过头，
+        从 3x 连点两下直接回到 1x），下一拍重新判「还有没有空心三角」再决定要不要继续。
+
+        看门狗：连续 `_SPEED_STALL_LIMIT` 次点击都没让状态变化（点击被吃掉/已经到顶但像素没读对），
+        就锁到下一周，避免每拍刷屏。这是**看门狗阈值**，不是游戏上限。
+
+        只在「训练日主界面 / 赛前准备」这两个确定安全的时机调用，避免在结算页、商店页乱点顶栏。
         """
         if self.match_text(texts, Defs.WEEK_RE) is None:
             return False
         week_m = Defs.WEEK_RE.search("".join(t.name for t in texts).replace(" ", ""))
         week = int(week_m.group(1)) if week_m else None
 
-        if self.speed_is_2x():
+        label, at_max, off = self.speed_level(texts)
+        if at_max is None:                       # 帧读不出来：不猜、不乱点
             return False
-        if self._speed_week == week and self._speed_locked:
+        if at_max and not off:                   # 已经没有空心三角 = 到顶了
             return False
+
         if self._speed_week != week:
             self._speed_week = week
+            self._speed_clicks = 0
+            self._speed_stalls = 0
             self._speed_locked = False
+            self._speed_sig = None
+        if self._speed_locked:
+            return False
+
+        # 上一拍点过了：看这一拍状态有没有变化，没变就记一次"没进展"
+        sig = (label, at_max, off)
+        if self._speed_sig is not None and sig == self._speed_sig:
+            self._speed_stalls += 1
+            if self._speed_stalls >= _SPEED_STALL_LIMIT:
+                self._speed_locked = True
+                self.log_info("倍速点了 2 次状态都没变，本周不再尝试")
+                return False
 
         x = int(self.width * Defs.SPEED_ICON_CLICK[0])
         y = int(self.height * Defs.SPEED_ICON_CLICK[1])
         self.click(x, y, after_sleep=0.5)
-        if self.speed_is_2x():
-            self.log_info("已切到 2x 速度")
-        else:
-            self._speed_locked = True
-            self.log_info("倍速按钮点了没变 2x（未到大师赛），本周不再尝试")
+        self._speed_clicks += 1
+        self._speed_sig = sig
+        self.log_info(f"倍速 +1 档（当前 {label or '未读出'}，图标仍有空心三角）")
         return True
-
-    def speed_is_2x(self):
-        """顶栏倍速图标：右三角实心蓝 = 2x。"""
-        frame = self.frame
-        if frame is None:
-            return False
-        h, w = frame.shape[:2]
-        x1, y1, x2, y2 = Defs.SPEED_ICON_TRIANGLE
-        roi = frame[int(h * y1):int(h * y2), int(w * x1):int(w * x2)]
-        if roi.size == 0:
-            return False
-        b = roi[:, :, 0].astype(int)
-        r = roi[:, :, 2].astype(int)
-        blue = (b > 150) & (b > r + 20)
-        return float(blue.mean()) > Defs.SPEED_BLUE_RATIO_2X
 
     def _card_choices(self, texts):
         """底排横向大卡：同一行 2~3 块短标题 + 每块自己下方一行效果文字。
@@ -298,7 +327,7 @@ class MatchHandlers:
         if skip is None and go is None:
             return False
 
-        if self.try_speed_2x(texts):
+        if self.ensure_speed(texts):
             return True
 
         mode = self.config.get("比赛日处理", "")

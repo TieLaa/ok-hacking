@@ -135,7 +135,7 @@ class TrainingHandlers:
             return False
         if self.match_text(texts, "休息") is None:
             return False
-        if self.try_speed_2x(texts):
+        if self.ensure_speed(texts):
             return True
         # 2026-10-29 用户补充：野上泷周五也能出行 —— 训练日主界面上出现「出行」时，
         # 先把这次外出机会用掉（一天一次），再回来训练/休息；否则练完这天就过去了。
