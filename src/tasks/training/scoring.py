@@ -15,7 +15,6 @@ from collections import deque
 import cv2
 import numpy as np
 
-from src.tasks.ui import Defs  # noqa: F401
 from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 
 

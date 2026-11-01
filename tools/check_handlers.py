@@ -325,6 +325,104 @@ def check_architecture():
     return problems
 
 
+# ---------- 判据单一来源（文案门禁）----------
+# 受管按钮词：出现在这些方法的 names 参数里、且是**内联字面量**，就算违规。
+# 为什么是这几个：它们是「按钮」，必须全等匹配且来自 labels.BUTTONS
+# （见 src/tasks/ui/labels.py 的说明）。页面标记（"跳过比赛"/"失败率"…）不在此列，
+# 它们是 match_text 的包含匹配用途，等页面标记迁移时再扩这张表。
+MANAGED_WORDS = ("确定", "确认", "决定", "下一步", "关闭", "取消", "放弃")
+
+# names 参数在哪个位置（见 BaseGirlsTask），以及「这个调用是不是要点按钮」。
+#   True  = 点击意图，按钮文案必须来自 labels.BUTTONS
+#   False = 纯检测（match_text 的用途就是「在不在这一页」），按钮词出现在混合元组里
+#           是正常的页面标记（例：('失败率','决定','休息','赢得比赛','VS')）
+# exact_text 两用：整词找目标既可能是点击也可能是判页面，所以只在
+# 「整条元组都是受管按钮词」（= 它就是个按钮集合）时才拦。
+NAME_ARG_INDEX = {
+    "find_text": (0, True),
+    "click_text": (0, True),
+    "click_text_and_expect": (1, True),
+    "exact_text": (1, "pure"),
+}
+
+ALLOWLIST_PATH = os.path.join(ROOT, "tools", "labels_allowlist.txt")
+
+
+def load_allowlist():
+    """{ '相对路径.py' : {'确定', ...} } —— 棘轮白名单，**只许缩短**。
+
+    格式：一行一条 `相对路径.py|词`，# 开头是注释。空文件 = 全部迁移完成。
+    """
+    allowed = {}
+    if not os.path.exists(ALLOWLIST_PATH):
+        return allowed
+    for raw in open(ALLOWLIST_PATH, encoding="utf-8"):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        path, _, word = line.partition("|")
+        allowed.setdefault(path.strip(), set()).add(word.strip())
+    return allowed
+
+
+def check_labels():
+    """文案门禁：按钮词不许在调用处写内联字面量，必须走 labels.BUTTONS。
+
+    为什么用 ast 不用 grep：grep 会命中注释、docstring、日志文案
+    （这就是「返回出现 139 次」那种统计失真的来源）；ast 只看真正的 names 参数。
+
+    与 check_architecture 同一套哲学：
+      ✗ 禁止：把按钮文案写在调用处（数据散落在 153 个点上）
+      ✓ 允许：模块级/类级**声明表**（labels.BUTTONS、EXIT_TEXTS、POPUP_TEXTS…）
+      ✓ 允许：白名单文件里登记过的历史包袱（每迁移一处删一行）
+
+    返回问题列表（空 = 通过）。
+    """
+    allow = load_allowlist()
+    problems, baselined = [], 0
+
+    for dp, _, files in os.walk(os.path.join(ROOT, "src")):
+        for f in files:
+            if not f.endswith(".py"):
+                continue
+            path = os.path.join(dp, f)
+            rel = os.path.relpath(path, ROOT).replace("\\", "/")
+            tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                fn = node.func
+                name = (fn.attr if isinstance(fn, ast.Attribute)
+                        else fn.id if isinstance(fn, ast.Name) else "")
+                spec = NAME_ARG_INDEX.get(name)
+                if spec is None:
+                    continue
+                idx, mode = spec
+                if len(node.args) <= idx:
+                    continue
+                arg = node.args[idx]
+                literals = [n.value for n in ast.walk(arg)
+                            if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+                hit = [s for s in literals if s.strip() in MANAGED_WORDS]
+                if not hit:
+                    continue
+                if hit and mode == "pure" and len(hit) != len(literals):
+                    continue      # 混合元组 = 页面标记（exact_text 判页面），不是按钮集合
+                if set(hit) <= allow.get(rel, set()):
+                    baselined += 1
+                    continue
+                problems.append(
+                    f"{rel}:{node.lineno} {name} 里写死了按钮文案 {tuple(hit)} ——"
+                    f"改用 self.click_button(\"键名\") / labels.BUTTONS")
+
+    print("-" * 96)
+    print(f"文案门禁：按钮文案内联 {len(problems)} 处；白名单内 {baselined} 处"
+          f"（{ALLOWLIST_PATH}，只许缩短）")
+    for p in problems:
+        print("  ✗ " + p)
+    return problems
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     verbose = "--verbose" in sys.argv
@@ -402,8 +500,9 @@ def main():
             print(f"  {base}: 首个 {expected.get(base, '?')}，另外 {'、'.join(others)}")
 
     arch_problems = check_architecture()
+    label_problems = check_labels()
 
-    if fails or misses or arch_problems:
+    if fails or misses or arch_problems or label_problems:
         print("回归失败")
         return 1
     print("回归通过")

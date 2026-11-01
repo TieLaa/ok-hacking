@@ -53,7 +53,10 @@ OUT_JSON = os.path.join(ROOT, "docs", "roster", "ssr_roster.json")
 class Screen:
     """持续抓帧 + OCR（复用 ok-script 的 WGC 实现，跟 wgc_capture.py 一致）。"""
 
-    def __init__(self, hwnd, ocr_every=1):
+    def __init__(self, hwnd):
+        # 2026-11-01：删掉没用过的 `ocr_every` 参数（vulture 唯一一处真死参数：
+        # 构造时存进 self 都没做，全仓也没有调用点传它）。要加节流就该真实现，
+        # 而不是留一个「看着像能配」的空参数。
         from ok.device.capture_methods.windows_graphics import (
             WindowsGraphicsCaptureMethod)
         self.hwnd = hwnd

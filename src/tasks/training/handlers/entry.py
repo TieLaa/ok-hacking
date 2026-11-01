@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 from src.tasks.ui import Defs  # noqa: F401
+from src.tasks.ui import labels
 from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 
 
@@ -68,7 +69,7 @@ class EntryHandlers:
             return False
         # 周末地图：地点名是导航，不是可推进的剧情。
         # 2026-10-26 卡死：地图上被当成剧情页连点 ▼，反复 50 秒才被看门狗救回来。
-        if len([t for t in texts if t.name.strip() in Defs.WEEKEND_PLACES]) >= 2:
+        if len([t for t in texts if t.name.strip() in labels.WEEKEND_PLACES]) >= 2:
             return False
 
         # 训练事件 / 只有 ▼ 的剧情页（实机 2026-10-26）：右下角白色 ▼ 是最可靠的信号。
@@ -195,8 +196,7 @@ class EntryHandlers:
         self.flow_click("captain_card", after_sleep=0.5)
         self.log_info("选第一位队长（列表按等级降序，第一张最强）")
         # 选完队长后按钮可能移动，重新 OCR 再点「下一步」
-        ok = self.click_text_and_expect(
-            self._ocr_region(), "下一步", ("选择队友",), timeout=8)
+        ok = self.click_button_and_expect("next", ("选择队友",), timeout=8)
         self.log_info("进入选择队友" if ok else "点「下一步」没反应")
         return True
 
@@ -219,7 +219,7 @@ class EntryHandlers:
         「SR-亚理纱贾斯敏」（带稀有度前缀、间隔点被 OCR 吃掉），
         而配置/列表里写的是「亚理纱·贾斯敏」；旧判据 `want in name` 直接比字符串，
         于是 16 张卡全被当成「不是她」→ 报「队长池里没有」并停任务
-        （logs/mcp/sento_summary.txt 就是这一条）。现在统一走 `Defs.name_matches`。
+        （logs/mcp/sento_summary.txt 就是这一条）。现在统一走 `labels.name_matches`。
         """
         # 2026-10-30 用户实机：接手的局，队长列表**停在最下面**，
         # 只往下翻会从底部继续到底，上面的角色全漏掉（这一轮就漏了近江奏）。
@@ -239,9 +239,8 @@ class EntryHandlers:
                 page_names.append(name or "")
                 tried += 1
                 self.log_info(f"队长卡 {tried}（第{page + 1}屏）：{name or '（没认出名字）'}")
-                if name and Defs.name_matches(want, name):
-                    ok = self.click_text_and_expect(
-                        self._ocr_region(), "下一步", ("选择队友",), timeout=8)
+                if name and labels.name_matches(want, name):
+                    ok = self.click_button_and_expect("next", ("选择队友",), timeout=8)
                     self.log_info(f"选定队长「{name}」"
                                   f"（匹配「{want}」）" + ("" if ok else "（点下一步没反应）"))
                     return True
@@ -311,8 +310,7 @@ class EntryHandlers:
         # 这里原来只等「选择器材」，而下一屏其实是「选择笔记」→ 每次白等 8 秒
         # 超时 + 5 秒兜底（用户感受到的「发呆十几秒」）。两个都算成功。
         self.sleep(0.8)
-        ok = self.click_text_and_expect(
-            self._ocr_region(), "下一步", ("选择笔记", "选择器材"), timeout=8)
+        ok = self.click_button_and_expect("next", ("选择笔记", "选择器材"), timeout=8)
         if not ok:
             x, y = self.flow_point("next_step")
             ok = self.click_and_expect(x, y, ("选择笔记", "选择器材"), timeout=5)
@@ -356,7 +354,7 @@ class EntryHandlers:
             self.log_debug("选择笔记：本页已点过下一步，等切页（不再点）")
             return True
 
-        target = self.exact_text(texts, ("下一步",))
+        target = self.exact_text(texts, labels.BUTTONS["next"])
         if target is not None:
             x = int(target.x + target.width / 2)
             y = int(target.y + target.height / 2)
@@ -380,8 +378,7 @@ class EntryHandlers:
         # 2026-10-30：新流程里器材页之后是「选择笔记」，不是直接「确认编队」。
         # 只等确认编队会白等满 8 秒超时（用户实测「发呆 16 秒」就是这里 +
         # 后面 5 秒兜底）。两个目标都算成功。
-        ok = self.click_text_and_expect(
-            self._ocr_region(), "下一步", ("选择笔记", "确认编队"), timeout=8)
+        ok = self.click_button_and_expect("next", ("选择笔记", "确认编队"), timeout=8)
         if not ok:
             x, y = self.flow_point("next_step")
             ok = self.click_and_expect(x, y, ("选择笔记", "确认编队"), timeout=5)

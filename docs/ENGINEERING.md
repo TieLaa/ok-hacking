@@ -15,8 +15,9 @@
 | `src/tasks/training/handlers/__init__.py` | **唯一**的 `HANDLERS` 优先级表 | 方法实现 |
 | `src/tasks/training/constants.py` | 流派地图、JPEG 参数等模块级常量 | 运行期可变状态 |
 | `src/tasks/BaseGirlsTask.py` | 通用文字匹配 / 点击 / 截图 / 区域工具 | 养成业务 |
-| `src/tasks/ui/Defs.py` | 区域坐标、文案表、正则 | 业务分支 |
-| `tools/` | 运维脚本：抓图、OCR 转储、回归、日志 | 任何游戏业务逻辑 |
+| `src/tasks/ui/labels.py` | **界面上的文字**：按钮表 `BUTTONS`、页面/选项文案、文本正则、角色名归一化（零依赖） | 坐标、区域、业务分支 |
+| `src/tasks/ui/Defs.py` | **几何**：区域表 `REGIONS`、坐标、ROI、图标噪声带（不含文案） | 文案、业务分支 |
+| `tools/` | 运维脚本：抓图、OCR 转储、回归、日志、日志保留 | 任何游戏业务逻辑 |
 | `docs/shots/` | 回归截图（PNG）+ `expected.json` + `.ocr_cache/` | 人工截图素材 |
 | `docs/` | 手册、运行报告、已知问题 | 临时草稿 |
 
@@ -38,6 +39,22 @@
 - 点击只出现在 handler / flow；parsers 和 scoring 必须能脱离游戏跑。
 - 配置读取一律 `self.config.get("键", 默认值)`，默认值写代码；`configs/*.json` 是用户覆盖，不要当默认值改。
 
+### 3.1 文案：按钮必须是「全等 + 单一来源」
+
+（2026-11-01 落地，动机与量化见 `docs/PROMPT_PLAYBOOK.md`「常量池 vs 入口」那一节）
+
+| 要干的事 | 用什么 | 匹配语义 |
+|---|---|---|
+| **点一个按钮** | `self.click_button("confirm")` / `self.click_button_and_expect("next", ("选择队友",))` | **全等**（`exact_text`） |
+| 判断「在不在这一页」 | `self.match_text(texts, labels.XXX)` | 包含（含整段拼接兜底） |
+| 需要拿按钮文本框算位置、或后面还有坐标兜底 | `self.exact_text(texts, labels.BUTTONS["键名"])` 保留原逻辑 | 全等 |
+
+- 按钮文案只写在 `labels.BUTTONS`，键名按**动作**取（`confirm` / `next` / `decide` / `close` / `give_up` / `exit_hatch`），不要按词面取。
+- `「下一步」会被 OCR 读成「下一」`（掉字）——这类键在 `labels.OCR_LOSSY` 里声明前缀兜底，**不要**在每个调用处各写一份。
+- 新增按钮：先在 `BUTTONS` 里加一项并写清「谁用、为什么是这个组合」，再用 `click_button` 调它。
+- 门禁：`check_handlers.py` 的 `check_labels()` 会扫 `src/`，按钮词写在调用处直接 exit 1；
+  `tools/labels_allowlist.txt` 是棘轮白名单，**只许缩短**（2026-11-01 已清到 0 行）。
+
 ## 4. tools/ 脚本规则
 
 - 一个用途一个文件；文件名动词开头：`check_`（只读校验）、`dump_`（导出）、`capture` / `shot`（抓图）、`start_`（启动）。
@@ -48,7 +65,7 @@
 ## 5. 回归门禁
 
 ```powershell
-.venv\Scripts\python.exe tools\check_handlers.py --cache            # 必须 exit 0
+.venv\Scripts\python.exe tools\check_handlers.py --cache            # 必须 exit 0（含结构断言 + 文案门禁）
 .venv\Scripts\python.exe tools\check_handlers.py --cache --all-hits # 查抢占（诊断，不强制）
 .venv\Scripts\python.exe -m unittest discover -s tests -p "test_training_rules.py"  # 决策逻辑
 ```
@@ -57,6 +74,8 @@
 - `tests/test_training_rules.py` 是决策断言：选哪张卡、点哪个位置、体力怎么解析。回归图只能验证「命中谁」，验证不了「决策对不对」。
 - 改 handler 顺序 = 改行为。顺序调整后必须重跑全量。
 - `--all-hits` 列出「同一张图有多个 handler 返回 True」。这些不一定是 bug（顺序正确就安全），但**新增**的多命中要确认不是新 handler 判据过宽。
+- `check_architecture()`：禁止在判断分支里写 handler 名字（依赖要进 `handlers/__init__.py` 的声明表）。
+- `check_labels()`：禁止在调用处写按钮文案（要走 `labels.BUTTONS` + `click_button`）。
 
 ## 6. 截图与日志
 
@@ -64,6 +83,10 @@
 
 - 运行时取色读内存帧，不受存盘格式影响。
 - 事后复核颜色必须用 q95+4:4:4 的 jpg，不要用历史 PNG 之外的压缩图。
+- **保留策略**在 `tools/prune_logs.py`（默认 dry-run）：`logs/unknown` 只删 jpg、txt 永久保留；
+  `events` / `debug` 按天数；`logs/mcp` 留最近 10 次 run；总量上限 1.5 GB。
+  永不碰 `docs/shots/`（回归语料）。有 run 在跑时 `--apply` 会拒绝执行。
+  （2026-11-01：4.9 GB → 1.5 GB，`unknown` 的 5847 个 txt 一个没动。）
 
 ## 7. 重构规则
 

@@ -18,6 +18,7 @@ import numpy as np
 from ok.feature.Box import Box
 
 from src.tasks.ui import Defs  # noqa: F401
+from src.tasks.ui import labels
 from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,  # noqa: F401
                                           STYLE_BY_NAME)
 
@@ -46,8 +47,17 @@ CRIT_RING_HALF_H = 0.050
 # 名字行下面是 0.49 的「角色/行为卡/通用」标签行，底部 0.88/0.93 是「得分手/控卫/能力详情」。
 SKILL_NAME_CY = 0.43
 SKILL_NAME_CY_TOL = 0.035
+# 扭蛋卡头横带的「彩色」判据（用户 2026-11-01：训练等级提升后解锁了**彩色扭蛋**，
+# 优先级 彩色 > 金色 > 紫色）。
+# 彩色卡那一带是**整条彩虹渐变**，不是单一色相：实拍帧 logs/now.jpg（1549x871）里
+# 中间那张彩色卡的色相摊在 75~165，30° 一档有 3 档各占 ≥14%（最大档 0.51）；
+# 同页两张金卡 0.96~1.00 全落在同一档、紫/蓝卡同理。
+# 所以：**≥3 档各占 ≥10%，且最大档 < 0.70** 才算彩色 —— 单色卡永远过不了第二条。
+RAINBOW_BAND_MIN_BINS = 3
+RAINBOW_BAND_BIN_FRAC = 0.10
+RAINBOW_BAND_MAX_TOP = 0.70
 # 代码版本戳（run() 会打到日志里）：排查「改完不生效」时一眼看出跑的是哪份代码
-CODE_VERSION = "2026-10-31e"
+CODE_VERSION = "2026-11-01b"
 
 
 def ring_is_border(ratio, baseline=None, floor=GOLD_RING_MIN,
@@ -65,6 +75,22 @@ def ring_is_border(ratio, baseline=None, floor=GOLD_RING_MIN,
 
 
 class TrainingParsersMixin:
+
+    # ---------- 扭蛋页几何（2026-11-01） ----------
+    # 扭蛋卡「标题条」的行位置（比例）。品质色取这一条横带。
+    # 实拍（logs/events/1101-122241_handle_street.jpg，1549x871）OCR：
+    #   卡名「投射增加++/体能增加+/全属性增加」cy=0.407，
+    #   品质横带铺在 cy 0.25~0.43（饱和像素占比 >0.5 的行）。
+    # 所以标题条取 0.36~0.43 落在横带上、又不吃卡名那一行。
+    GACHA_TITLE_BAND = (0.36, 0.43)
+    # 卡名行所在的纵向范围（比例）：卡名文字本身。
+    GACHA_NAME_ROW = (0.28, 0.44)
+    # 卡片说明文字（卡名下方那段）在 0.44~0.58。
+    GACHA_EFFECT_ROW = (0.44, 0.58)
+    # 扭蛋卡名列中心：实拍 0.253 / 0.503 / 0.752（1549 宽）→ 约 0.25/0.50/0.75。
+    # 价格药丸是**晚于**卡面渲染的：2026-11-01 15:09 实跑里卡面文字已经读到了，
+    # 价格数字还没画出来，所以「读不到卡」≠「这一页没卡」。
+    GACHA_CARD_CXS = (0.25, 0.50, 0.75)
 
     # 商店商品格：实测 3 列 × 2 行（2026-10-27 商店帧 1920x1080）。
     # 列中心 0.223 / 0.357 / 0.490（间距 0.134），行中心 0.368 / 0.634（间距 0.266）。
@@ -92,6 +118,170 @@ class TrainingParsersMixin:
             if 0.50 <= cx <= 0.62 and cy < 0.09:
                 best = int(s)
         return best
+
+    # ---------- 顶栏体力条像素兜底（2026-11-01） ----------
+    # OCR 把「/」读成「1」是固定毛病，不是偶发：57/130 → `571130`、30/130 → `301130`、
+    # 33/115 → `333/115`、17/115 → `971115`（RULES.md 记过 301130 那次）。
+    # 顶栏体力药丸 = 左边**黄色填充段** + 右边**灰色空段**，总宽是固定版式比例：
+    # 实测 554/1920 = 447/1549 = 377/1307 = **0.2885w**（与上限 115/121/130 无关）。
+    # 所以量填充比例就能反推体力，和 OCR 正读值比只差 ≤1 个单位
+    # （58→58、40→39、50→49、75→74、61→60、94→93）。斜杠读错时，末 3 位当上限、
+    # 比例当当前值即可还原，不必再指望 OCR 认斜杠。
+    STAMINA_BAR_BOX = (0.10, 0.005, 0.75, 0.075)   # x1, y1, x2, y2（画面比例）
+    STAMINA_BAR_WIDTH_F = 0.2885                   # 药丸总宽 / 画面宽（固定版式）
+    STAMINA_BAR_LEFT_F = 0.2010                    # 药丸左沿 / 画面宽（固定版式）
+    STAMINA_BAR_LEFT_TOL = 0.010                   # 左沿偏离这么多 = 不是体力条，别信
+    STAMINA_BAR_TOL = 2                            # 像素换算 vs OCR 的容忍差（体力单位）
+
+    def stamina_bar(self):
+        """量顶栏体力条，返回 (填充比例, 左 px, 右 px)；量不出来返回 None。
+
+        同一帧只算一次：一拍里 top_bar() 会被好几个 handler 调用。
+        """
+        frame = self.frame
+        if frame is None:
+            return None
+        cache = getattr(self, "_stamina_bar_cache", None)
+        if isinstance(cache, dict) and cache.get("frame") is frame:
+            return cache.get("value")
+        value = self._stamina_bar_measure(frame)
+        self._stamina_bar_cache = {"frame": frame, "value": value}
+        return value
+
+    def _stamina_bar_measure(self, frame):
+        """只量黄色填充段，总宽和左沿都用**版式常量**，不去找灰色空段。
+
+        为什么不信灰段（2026-11-01 实测）：`2026-10-31-gacha-discount.png` 那帧
+        带深色遮罩，灰段的 V 掉出灰底区间 → 找不到右沿 → 整帧被判「量歪」。
+        而药丸左沿（0.2010w）和总宽（0.2885w）在 1920/1549/1307 三种画面上
+        完全一致（386+554 / 312+447 / 263+377），直接当常量用更稳。
+        """
+        h, w = frame.shape[:2]
+        x1f, y1f, x2f, y2f = self.STAMINA_BAR_BOX
+        y1, y2 = int(h * y1f), min(h, int(h * y2f))
+        xa, xb = int(w * x1f), int(w * x2f)
+        roi = frame[y1:y2, xa:xb]
+        if roi.size == 0:
+            return None
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        hue, sat, val = cv2.split(hsv)
+        yellow = (hue >= 18) & (hue <= 38) & (sat >= 150) & (val >= 200)
+        cols = yellow.sum(axis=0)
+        runs, start = [], None
+        for i, c in enumerate(cols):
+            if c >= 3:
+                if start is None:
+                    start = i
+            elif start is not None:
+                runs.append((start, i - 1))
+                start = None
+        if start is not None:
+            runs.append((start, len(cols) - 1))
+        runs = [r for r in runs if r[1] - r[0] >= 20]     # 够长的那段才是填充
+        if not runs:
+            return None
+        left, fill_end = runs[0][0] + xa, runs[0][1] + xa
+        # 版式校验：左沿必须是 0.2010w（小游戏页那种「7/10」的条位置完全不同）
+        if abs(left - w * self.STAMINA_BAR_LEFT_F) > w * self.STAMINA_BAR_LEFT_TOL:
+            return None
+        total = w * self.STAMINA_BAR_WIDTH_F
+        ratio = (fill_end - left + 1) / total
+        if not (0.0 <= ratio <= 1.02):
+            return None
+        return min(ratio, 1.0), left, int(left + total)
+
+    def top_bar(self, texts=None):
+        """顶栏解析，外加**体力条像素兜底**（详见 STAMINA_BAR_* 的注释）。
+
+        两条信息互相校验：
+          - 斜杠被读成数字的粘连串（`571130` = 57/130）：能拆出**精确**的当前值候选；
+          - 体力条填充比例：只知道大概（±1），但能仲裁候选里哪一个是对的。
+        只在 OCR 解不出体力、或与像素差 > `STAMINA_BAR_TOL` 时才改判。
+        """
+        state = super().top_bar(texts)
+        ratio = self.stamina_bar()
+        if ratio is None:
+            return state
+        frac, px_left, px_right = ratio
+        cache = self._stamina_bar_cache if isinstance(self._stamina_bar_cache, dict) else {}
+        if cache.get("resolved") and not state.get("stamina"):
+            # 同一帧已经还原过：直接复用，别两次调用得出 56 / 57 两个值
+            est, mx = cache["resolved"]
+            state["stamina"], state["stamina_max"] = est, mx
+            info = getattr(self, "info", None)
+            if isinstance(info, dict):
+                info.update({"stamina": est, "stamina_max": mx,
+                             "stamina_pct": round(est / float(mx) * 100)})
+            return state
+        pool = texts if texts is not None else getattr(self, "_tick_texts", None)
+        mx = state.get("stamina_max")
+        cands = []
+        if mx is None:
+            mx, cands = self.stamina_candidates(pool, px_left, px_right)
+        if mx is None:
+            mx = getattr(self, "_stamina_max_seen", None)
+        if not mx:
+            return state                  # 上限都没读过：不猜（上层按「读不到」处理）
+        # +0.5：填充段右沿永远是「半列黄 + 半列灰」，实测 8 帧正读值对照
+        # （58/115、40/115、50/115、75/121、61/121、87/117、94/130、57/130）
+        # 只按比例算都低 0.5~1 个单位，加上这个半格偏差后逐帧相等。
+        est = int(round(frac * mx + 0.5))
+        cur = state.get("stamina")
+        if cur is not None and abs(cur - est) <= self.STAMINA_BAR_TOL:
+            return state                  # OCR 和像素对得上，保持原样
+        # 候选里挑离像素值最近的那个（同距取小的，斜杠「1」拆掉后一般就是它）
+        pick = min(cands, key=lambda c: (abs(c - est), c)) if cands else None
+        if pick is not None and abs(pick - est) <= 5:
+            est = pick
+        if cur is None:
+            self.log_info(f"体力：OCR 没读出斜杠（粘成 {cands or '无'}），"
+                          f"按体力条填充 {frac:.3f}×{mx} 还原为 {est}")
+        else:
+            self.log_warning(f"体力：OCR 读 {cur}，体力条填充 {frac:.3f}×{mx} → {est}，"
+                             "按像素值算")
+        state["stamina"], state["stamina_max"] = est, mx
+        self._stamina_max_seen = mx
+        if isinstance(self._stamina_bar_cache, dict):
+            self._stamina_bar_cache["resolved"] = (est, mx)   # 同一帧结论固定，别算了又变
+        info = getattr(self, "info", None)
+        if isinstance(info, dict):
+            info.update({"stamina": est, "stamina_max": mx,
+                         "stamina_pct": round(est / float(mx) * 100)})
+        return state
+
+    def stamina_candidates(self, pool, px_left, px_right):
+        """「斜杠/周数被读成数字」的粘连串 → (上限, [当前值候选])，没有返回 (None, None)。
+
+        例：`571130` → (130, [5, 7, 11, 51, 57, 71, …] 里 ≤130 的那批)；
+        `3251130`（第3周 + 25/130 粘成一串）同理。
+        候选只负责「哪几位是粘进来的前缀」的穷举，具体哪个对由体力条填充比例仲裁
+        （`top_bar` 取离像素值最近的那个，容差 5）。
+        只在药丸的横向范围内找：顶栏金币也是纯数字，但它不在药丸里。
+        """
+        if not pool:
+            return None, None
+        for t in self.texts_in_region(pool, "top_bar"):
+            s = t.name.replace(" ", "")
+            if not s.isdigit() or not (5 <= len(s) <= 8):
+                continue
+            if not (px_left - 8 <= t.x <= px_right + 8):
+                continue
+            mx = int(s[-3:])
+            if not (100 <= mx <= 200):
+                continue
+            head = s[:-3]
+            cands = set()
+            # head 里所有连续子串都当候选：粘进来的「第N周」和「斜杠读成的 1」
+            # 都在 head 的前/中段，切掉它们剩下的就是当前体力。
+            for i in range(len(head)):
+                for j in range(i + 1, len(head) + 1):
+                    v = int(head[i:j])
+                    if v <= mx:
+                        cands.add(v)
+            if not cands:
+                continue
+            return mx, sorted(cands)
+        return None, None
 
     def read_shop_items(self, texts):
         """解析商店左侧商品：名称 + 价格 + 卡片中心点击坐标。
@@ -210,13 +400,13 @@ class TrainingParsersMixin:
     def is_stamina_clear(text):
         """这段文字是不是「清空精力」效果（而不是恢复精力）。
 
-        只认 Defs.GACHA_CLEAR_PHRASES 里写死的整句，不做「包含清空/包含精力」
+        只认 labels.GACHA_CLEAR_PHRASES 里写死的整句，不做「包含清空/包含精力」
         这种模糊匹配；并且先排除恢复类字样 —— 「恢复全部精力」不能被选成清空扭蛋。
         """
         s = (text or "").replace(" ", "").replace("　", "")
-        if any(bad in s for bad in Defs.GACHA_CLEAR_EXCLUDE):
+        if any(bad in s for bad in labels.GACHA_CLEAR_EXCLUDE):
             return False
-        return any(p in s for p in Defs.GACHA_CLEAR_PHRASES)
+        return any(p in s for p in labels.GACHA_CLEAR_PHRASES)
 
     @staticmethod
     def stamina_recover(text):
@@ -284,19 +474,57 @@ class TrainingParsersMixin:
                 pills.append([int(s), cx, cy, t.y])
         return [tuple(p) for p in pills]
 
+    def gacha_card_slots(self, texts):
+        """扭蛋三张卡 = [(列中心 cx, 价格|None, 卡名底 y)]。
+
+        两条路：
+          1. 有价格药丸 → 用药丸定位（准），价格就是药丸上的数字；
+          2. 没有 → 用卡名行反推列中心，价格 None（价格还没渲染出来）。
+
+        返回的价格为 None 时，上层**不能**当成「这一页没卡」——
+        那是 2026-11-01 15:09 白丢一次扭蛋的直接原因。
+        """
+        pills = self.gacha_price_pills(texts)
+        if pills:
+            return [(p[1], p[0], p[3]) for p in pills]
+        # 兜底：按卡名行聚类出列
+        name_boxes = []
+        for t in texts:
+            cy = (t.y + t.height / 2) / self.height
+            s = t.name.strip()
+            if not (self.GACHA_NAME_ROW[0] <= cy <= self.GACHA_NAME_ROW[1]):
+                continue
+            if not (2 <= len(s) <= 12):
+                continue
+            if not any("\u4e00" <= ch <= "\u9fff" for ch in s):
+                continue
+            name_boxes.append(((t.x + t.width / 2) / self.width, t.y + t.height))
+        if not name_boxes:
+            return []
+        name_boxes.sort()
+        cols = []
+        for cx, bottom in name_boxes:
+            if cols and abs(cx - cols[-1][-1][0]) < 0.13:
+                cols[-1].append((cx, bottom))
+            else:
+                cols.append([(cx, bottom)])
+        return [(sum(c for c, _ in col) / len(col), None, max(b for _, b in col))
+                for col in cols]
+
     def read_gacha_cards(self, texts):
         """解析扭蛋三选一：卡名 / 品质色 / 是否有队友加成 / 分值 / 点击坐标。
 
-        坐标靠「价格药丸」定位（每张卡底部一个 60/80 的数字），
-        卡名取价格正上方最近的短文本，品质色取卡头那一条横带的色相。
+        坐标靠「价格药丸」定位（每张卡底部一个 60/80 的数字）；
+        价格**还没渲染出来**时退化成「按卡名行反推列中心」（`gacha_card_slots`），
+        此时 `price` 为 None —— 买不买由上层决定，绝不能因为读不到价格就当没卡。
         「打折」卡药丸里的原价+实付价先用 `gacha_price_pills` 聚成一份，
         否则一张卡会读出两条记录（见那里的注释）。
         """
         frame = self.frame
         cards = []
-        for price, cx, _cy, price_top in self.gacha_price_pills(texts):
+        for cx, price, price_top in self.gacha_card_slots(texts):
             names = [n for n in texts
-                     if 0.28 <= (n.y + n.height / 2) / self.height <= 0.44
+                     if self.GACHA_NAME_ROW[0] <= (n.y + n.height / 2) / self.height <= self.GACHA_NAME_ROW[1]
                      and abs((n.x + n.width / 2) / self.width - cx) < 0.13
                      and 2 <= len(n.name.strip()) <= 12
                      and any("\u4e00" <= ch <= "\u9fff" for ch in n.name.strip())]
@@ -306,7 +534,8 @@ class TrainingParsersMixin:
                 (n.y + n.height / 2) / self.height - 0.41))
 
             quality, hue, sat = self.card_band_quality(cx)
-            rank = {"金": 3, "紫": 2, "蓝": 1}.get(quality, 0)
+            # 彩色 = 2026-11-01 训练等级提升后解锁的最高品质，排在金之前。
+            rank = {"彩": 4, "金": 3, "紫": 2, "蓝": 1}.get(quality, 0)
             mate = self.has_mate_badge(cx)
             # 「增强款」斜标签贴在卡片右上角（2026-10-30 截图：金/蓝卡都有）。
             # 卡内说明里也有「增强 额外获得体能+14」，所以必须限定在卡片顶部
@@ -318,14 +547,23 @@ class TrainingParsersMixin:
                 for n in texts)
             # 效果文本：卡名下沿到价格药丸之间的同列文字。
             # 2026-10-26 漏读「消耗所有精力」导致 72 体力买了清空扭蛋。
-            effect = " ".join(
-                n.name.strip() for n in texts
-                if title.y + title.height <= n.y < price_top
-                and abs((n.x + n.width / 2) / self.width - cx) < 0.13)
+            # 价格还没渲染时（price_top = 卡名底），只取**说明文字那一段**
+            # （GACHA_EFFECT_ROW），否则会把「确定」「能力详情」也当效果。
+            if price is None:
+                effect = " ".join(
+                    n.name.strip() for n in texts
+                    if title.y + title.height <= n.y
+                    and self.GACHA_EFFECT_ROW[0] <= (n.y + n.height / 2) / self.height <= self.GACHA_EFFECT_ROW[1]
+                    and abs((n.x + n.width / 2) / self.width - cx) < 0.13)
+            else:
+                effect = " ".join(
+                    n.name.strip() for n in texts
+                    if title.y + title.height <= n.y < price_top
+                    and abs((n.x + n.width / 2) / self.width - cx) < 0.13)
             score = rank * 10 + (3 if mate else 0) + (1 if "+" in title.name else 0)
             cards.append({
                 "name": title.name.strip(),
-                "price": int(price),
+                "price": int(price) if price is not None else None,
                 "quality": quality,
                 "mate": mate,
                 "enhanced": enhanced,
@@ -341,14 +579,18 @@ class TrainingParsersMixin:
         return cards
 
     def card_band_quality(self, cx):
-        """取卡片标题条（y≈0.36~0.43）的底色，返回 金/紫/蓝/其他 与 H/S。"""
-        return self.card_quality_at(cx, 0.36, 0.43)
+        """取扭蛋卡片标题条（y≈0.36~0.43）的底色，返回 彩/金/紫/蓝/其他 与 H/S。"""
+        return self.card_quality_at(cx, self.GACHA_TITLE_BAND[0],
+                                    self.GACHA_TITLE_BAND[1], rainbow=True)
 
-    def card_quality_at(self, cx, y1f, y2f):
-        """按比例框取卡片底色判断品质，返回 金/紫/蓝/其他 与中位 H/S。
+    def card_quality_at(self, cx, y1f, y2f, rainbow=False):
+        """按比例框取卡片底色判断品质，返回 彩/金/紫/蓝/其他 与中位 H/S。
 
         `cx` / `y1f` / `y2f` 都是比例（0~1）：扭蛋页用标题条 0.36~0.43，
         游戏厅卡片用自己的卡面区间（2026-10-27），两种情况共用同一套色相阈值。
+        `rainbow=True` 时才判「彩色」：只有扭蛋页的标题条是**整条彩虹渐变**
+        （用户 2026-11-01 训练等级提升后解锁彩蛋），游戏厅卡片底色仍是单色，
+        传 False 就不做这一步，免得把带高光的卡误判成彩色。
         """
         frame = self.frame
         if frame is None:
@@ -367,6 +609,8 @@ class TrainingParsersMixin:
             return "其他", -1, -1
         hmed = float(np.median(hue[m]))
         smed = float(np.median(sat[m]))
+        if rainbow and self.band_is_rainbow(hue[m]):
+            return "彩", hmed, smed
         if 10 <= hmed <= 45 and smed >= 90:
             return "金", hmed, smed
         if 115 <= hmed <= 160:
@@ -374,6 +618,21 @@ class TrainingParsersMixin:
         if 90 <= hmed < 115:
             return "蓝", hmed, smed
         return "其他", hmed, smed
+
+    @staticmethod
+    def band_is_rainbow(hues):
+        """色相是否摊成彩虹（= 彩色品质）。判据见 RAINBOW_BAND_* 的注释。
+
+        实拍（logs/now.jpg，1549x871）：彩色卡 3 档 ≥0.10、最大档 0.51；
+        金卡/紫卡/蓝卡最大档 0.88~1.00。两条判据同时用：档数挡「深色卡带点杂色」，
+        最大档占比挡「整片同色但边缘蹭到背景」。
+        """
+        if hues is None or len(hues) < 50:
+            return False
+        counts, _ = np.histogram(hues, bins=list(range(0, 181, 30)))
+        frac = counts / float(counts.sum())
+        return (int((frac >= RAINBOW_BAND_BIN_FRAC).sum()) >= RAINBOW_BAND_MIN_BINS
+                and float(frac.max()) < RAINBOW_BAND_MAX_TOP)
 
     def has_mate_badge(self, cx):
         """卡头左上角有没有队友标记（= 这次带队友加成）。
@@ -495,33 +754,68 @@ class TrainingParsersMixin:
 
         `visited` 是关键：游戏厅进去发现没有可跳过的小游戏会退出，
         如果不记录「今天已经去过」，下一拍又会点进游戏厅，来回循环（2026-10-26）。
+
+        2026-11-01 修：**顶栏读不到周/星期时不清状态**。
+        原来只要 key 变了就整个重建 `_weekend`，于是顶栏 OCR 抖一帧
+        （扭蛋页只读到体力、没读到「第1周 星期五」）→ visited / gacha_spent
+        全被清空 → 当天「已经买过扭蛋」的事实丢了，又要去餐厅打工一次。
+        现在只在**真的读到一个完整日期键**（周和星期都有）时才允许重建；
+        读不到就沿用旧状态。
         """
         state = self.top_bar()
-        key = (state.get("week"), state.get("day"))
+        week, day = state.get("week"), state.get("day")
         prev = self._weekend.get("date")
+        # 读不到完整日期键 → 顶栏 OCR 抖动，不是「换了一天」，沿用旧状态。
+        if week is None or day is None:
+            if prev is not None:
+                self.log_debug(f"顶栏没读到周/星期（{week}/{day}）→ 沿用 {prev} 的周末状态")
+            self._ensure_weekend_keys()
+            return self._weekend
+        key = (week, day)
         if prev != key:
             if prev is not None:
                 # 观测用：改期角色「跳进其他流程」后顶栏日期会不会变还不知道。
                 # 先把这个切换记下来，等角色到手跑一局，就能从日志判断
                 # day_state 的键该不该带上「流程实例」（变了就重置今日行程，不变就沿用）。
                 self.log_info(f"日期键 {prev} → {key}（今日行程重置）")
-            self._weekend = {
-                "date": key,
-                "shop_checked": False,
-                "bought": False,
-                "park_choice": None,
-                "visited": set(),
-                # 今天在步行街抽到过扭蛋（扭蛋流决定要不要再去餐厅打工）
-                "gacha_spent": False,
-                # 训练日里出现「出行」时先外出（野上泷周五也能出行），一天只做一次
-                "outing_done": False,
-            }
+            self._weekend = self._new_weekend_state(key)
+        return self._weekend
+
+    @staticmethod
+    def _new_weekend_state(key):
+        """一天的周末状态（新的一天）。"""
+        return {
+            "date": key,
+            "shop_checked": False,
+            "bought": False,
+            "park_choice": None,
+            "visited": set(),
+            # 今天在步行街**试过**抽扭蛋（买没买成都算试过）。
+            # 地图上按它排除步行街，防止「买不到 → 又点进去」的无限循环。
+            "gacha_tried": set(),
+            # 今天在步行街抽到过扭蛋（扭蛋流决定要不要再去餐厅打工）
+            "gacha_spent": False,
+            # 训练日里出现「出行」时先外出（野上泷周五也能出行），一天只做一次
+            "outing_done": False,
+        }
+
+    def _ensure_weekend_keys(self):
+        """补齐 `_weekend` 里缺的键（老存档/顶栏抖动时用）。
+
+        2026-11-01：`_weekend` 初始值只有 4 个键（TrainingTask.__init__），
+        其它键要等 `weekend_state()` 重建时才补上。顶栏读不到日期时
+        不再重建 → 那些键就永远缺，`task._weekend["visited"]` 会 KeyError。
+        """
+        defaults = self._new_weekend_state(self._weekend.get("date"))
+        for k, v in defaults.items():
+            if k not in self._weekend:
+                self._weekend[k] = v
         return self._weekend
 
     def read_fail_rate(self, texts):
         """读取当前选中科目的失败率（0~100），读不到返回 None。"""
         joined = "".join(t.name for t in self.texts_in_region(texts, "fail_rate")).replace(" ", "")
-        if m := Defs.FAIL_RATE_RE.search(joined):
+        if m := labels.FAIL_RATE_RE.search(joined):
             return int(m.group(1))
         return None
 
@@ -536,7 +830,7 @@ class TrainingParsersMixin:
         found = {}
         for t in pool:
             name = t.name.strip()
-            if name in Defs.TRAINING_SUBJECTS:
+            if name in labels.TRAINING_SUBJECTS:
                 found.setdefault(name, t)
         singles = [t for t in pool if len(t.name.strip()) == 1]
         for i, a in enumerate(singles):
@@ -544,7 +838,7 @@ class TrainingParsersMixin:
             acy = a.y + a.height / 2
             for b in singles[i + 1:]:
                 name = sa + b.name.strip()
-                if name not in Defs.TRAINING_SUBJECTS or name in found:
+                if name not in labels.TRAINING_SUBJECTS or name in found:
                     continue
                 if abs((b.y + b.height / 2) - acy) > a.height * 0.8:
                     continue
@@ -565,7 +859,7 @@ class TrainingParsersMixin:
         # 只在「整名没读出来、且这个字只属于唯一一个科目」时才补，避免乱认。
         for t in singles:
             ch = t.name.strip()
-            matches = [n for n in Defs.TRAINING_SUBJECTS
+            matches = [n for n in labels.TRAINING_SUBJECTS
                        if n not in found and (n.startswith(ch) or n.endswith(ch))]
             if len(matches) != 1:
                 continue
@@ -576,13 +870,13 @@ class TrainingParsersMixin:
 
     def current_subject(self, texts):
         """当前已选中的科目：右边有「决定」的那一行。"""
-        decide = self.match_text(texts, "决定")
+        decide = self.match_text(texts, labels.BUTTONS["decide"])
         if decide is None:
             return None
         dy = decide.y + decide.height / 2
         cands = []
         for t in self.texts_in_region(texts, "subject_list"):
-            if t.name.strip() not in Defs.TRAINING_SUBJECTS:
+            if t.name.strip() not in labels.TRAINING_SUBJECTS:
                 continue
             cy = t.y + t.height / 2
             if abs(cy - dy) < 45 * self.height / 1080.0:
@@ -698,7 +992,7 @@ class TrainingParsersMixin:
         cands = []
         for t in area:
             s = t.name.replace(" ", "").strip()
-            m = Defs.PLAN_TITLE_RE.match(s)
+            m = labels.PLAN_TITLE_RE.match(s)
             if m:
                 cands.append(m.group(1))
         title = next((t for t in area
@@ -758,15 +1052,15 @@ class TrainingParsersMixin:
         日历标题只显示姓氏，所以按前缀匹配；多个前缀都命中（「羽」→ 羽田 / 羽漱川）
         时取**更长的那个**，长度一样才算歧义（返回 None，宁可不动）。
 
-        2026-10-31：两侧都先过 `Defs.norm_name` —— 游戏里「亚理纱·贾斯敏」可能被 OCR
+        2026-10-31：两侧都先过 `labels.norm_name` —— 游戏里「亚理纱·贾斯敏」可能被 OCR
         读成「亚理纱贾斯敏」，底部名字行还可能带「SR-」前缀，带间隔点直接比会漏。
         """
         if not name:
             return None
-        s = Defs.norm_name(name).replace(" ", "").strip()
+        s = labels.norm_name(name).replace(" ", "").strip()
         best, best_len, tie = None, 0, False
         for full, style in STYLE_BY_NAME.items():
-            f = Defs.norm_name(full)
+            f = labels.norm_name(full)
             if s == f:
                 return style
             if not (f.startswith(s) or s.startswith(f)):
@@ -870,8 +1164,8 @@ class TrainingParsersMixin:
     def read_scene(self, texts):
         """场上角色：队友数（扣掉队长和经理）+ 经理在不在。"""
         names = self.scene_names(texts)
-        manager = 1 if any(any(m in n for m in Defs.MANAGER_TEXTS) for n in names) else 0
-        mates = [n for n in names if not any(m in n for m in Defs.MANAGER_TEXTS)]
+        manager = 1 if any(any(m in n for m in labels.MANAGER_TEXTS) for n in names) else 0
+        mates = [n for n in names if not any(m in n for m in labels.MANAGER_TEXTS)]
         return {
             "names": names,
             "manager": manager,
@@ -889,7 +1183,7 @@ class TrainingParsersMixin:
         """
         panel = self.texts_in_region(texts, "attr_panel")
         values = {}
-        for name in Defs.TRAINING_SUBJECTS:
+        for name in labels.TRAINING_SUBJECTS:
             # 必须整词匹配：match_text 的「拼接兜底」会返回面板里最长的框
             # （例如「C+354/±90」），拿来当名字会把整行读错。
             head = self.exact_text(panel, (name,))
@@ -943,7 +1237,7 @@ class TrainingParsersMixin:
         # MAX 字样（满经验卡没有经验条）
         bar_texts = self.texts_in_region(texts, "equip_bars")
         joined = "".join(t.name for t in bar_texts).upper().replace(" ", "")
-        max_count = joined.count(Defs.EQUIP_MAX_TEXT)
+        max_count = joined.count(labels.EQUIP_MAX_TEXT)
         if max_count:
             equip += max_count
             full += max_count
@@ -970,7 +1264,7 @@ class TrainingParsersMixin:
             return False
         texts = texts if texts is not None else self._ocr_region()
         subjects = [t for t in texts
-                    if t.name.strip() in Defs.TRAINING_SUBJECTS
+                    if t.name.strip() in labels.TRAINING_SUBJECTS
                     and (t.x + t.width / 2) / max(self.width, 1) > 0.7]
         if len(subjects) < 2:
             return False
@@ -987,7 +1281,7 @@ class TrainingParsersMixin:
                 return False
         if target is None:
             # 没有指定科目（离线工具）才退回「决定按钮所在行」
-            decide = self.match_text(texts, "决定")
+            decide = self.match_text(texts, labels.BUTTONS["decide"])
             sel_cy = ((decide.y + decide.height / 2) if decide is not None
                       else self.height / 2)
             target = min(subjects,
@@ -1017,8 +1311,12 @@ class TrainingParsersMixin:
                         for s in subjects if s is not target)
         baseline = others[len(others) // 2] if others else 0.0
         # 2026-10-29：金框在度假页也漏识别，占比与基线一直打出来（校准用）
-        self.log_debug(f"科目金框：{target.name.strip()} 占比 {ratio:.3f}，"
-                       f"其它行中位数 {baseline:.3f}")
+        # 2026-11-01：`quiet=True` 原来是个**失效开关** —— 训练日选科目的候选扫描
+        # （training.py:has_gold_border(..., quiet=True)）传了 True，函数体却从没读过它，
+        # 于是 6 个科目×每拍的校准日志照刷。现在真的静音。
+        if not quiet:
+            self.log_debug(f"科目金框：{target.name.strip()} 占比 {ratio:.3f}，"
+                           f"其它行中位数 {baseline:.3f}")
         return ring_is_border(ratio, baseline)
 
     def has_crit_border(self, texts=None, subject=None, quiet=False):
@@ -1053,7 +1351,7 @@ class TrainingParsersMixin:
         texts = texts if texts is not None else self._ocr_region()
 
         subjects = [t for t in texts
-                    if t.name.strip() in Defs.TRAINING_SUBJECTS
+                    if t.name.strip() in labels.TRAINING_SUBJECTS
                     and (t.x + t.width / 2) / max(self.width, 1) > 0.7]
         target = None
         if subject:
@@ -1064,7 +1362,7 @@ class TrainingParsersMixin:
                 return False
             cy = target.y + target.height / 2
         else:
-            decide = self.match_text(texts, "决定")
+            decide = self.match_text(texts, labels.BUTTONS["decide"])
             if decide is None:
                 return False
             sel_cy = decide.y + decide.height / 2
@@ -1081,9 +1379,11 @@ class TrainingParsersMixin:
         b_min = others[0] if others else 0.0
         b_med = others[len(others) // 2] if others else 0.0
         # 2026-10-29：彩框在度假页也漏识别，占比一直打出来（校准用）
-        self.log_debug(f"科目彩框：{target.name.strip() if target else '当前行'}"
-                       f" 占比 {ratio:.3f}，其它行最低 {b_min:.3f}"
-                       f"／中位 {b_med:.3f}（门限 {CRIT_RING_MIN}）")
+        # 2026-11-01：同 has_gold_border —— quiet 以前没人读，候选扫描每拍照刷一行。
+        if not quiet:
+            self.log_debug(f"科目彩框：{target.name.strip() if target else '当前行'}"
+                           f" 占比 {ratio:.3f}，其它行最低 {b_min:.3f}"
+                           f"／中位 {b_med:.3f}（门限 {CRIT_RING_MIN}）")
         return ring_is_border(ratio, b_min,
                               floor=CRIT_RING_MIN, factor=CRIT_RING_FACTOR)
 
@@ -1228,7 +1528,7 @@ class TrainingParsersMixin:
         cands = []
         for t in texts:
             s = t.name.strip()
-            if s in ui or s in Defs.WEEKEND_PLACES or self.is_decor(s):
+            if s in ui or s in labels.WEEKEND_PLACES or self.is_decor(s):
                 continue
             if re.search(r"[0-9%]", s):
                 continue
@@ -1284,7 +1584,7 @@ class TrainingParsersMixin:
         rows = []
         for t in texts:
             s = t.name.strip()
-            if s in ui or s in Defs.WEEKEND_PLACES or self.is_decor(s):
+            if s in ui or s in labels.WEEKEND_PLACES or self.is_decor(s):
                 continue
             if re.search(r"[0-9%]", s) or not (2 <= len(s) <= 30):
                 continue

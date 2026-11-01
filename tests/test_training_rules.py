@@ -231,6 +231,67 @@ class GachaRules(unittest.TestCase):
         self.assertTrue(task.handle_street(task._texts))
         self.assertEqual(task.actions[0][1], 1100)          # 70 币那张，不是左边的 90 币
 
+    def test_colorful_card_beats_gold(self):
+        """2026-11-01 实拍（第3周周日 57/130、零用钱 524）：左金 / **中彩色** / 右金。
+
+        彩色卡的卡头是整条彩虹渐变，中位色相落在紫区（H≈121），旧判据判成「紫」→
+        200 分，被 300 分的金卡压掉，于是买了左边那张。现在彩色 400 分必须胜出。
+        """
+        task = FakeTask(gacha_texts([
+            ("推荐属性++", "主力两项推荐属性+36，队友属性大幅提升"),
+            ("体能增加+++", "主力体能+100，队友属性巨幅提升"),
+            ("运控升级包++", "运控属性+40，运控训练的训练等级+3"),
+        ], stamina="57/130", money="524",
+            price=[("100", "90"), ("120", "110"), ("100", "90")]),
+            qualities=["金", "彩", "金"])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions[0][0], "click")
+        self.assertEqual(task.actions[0][1], 1100)          # 中间那张彩色卡
+
+    def test_same_quality_prefers_enhanced_over_mate(self):
+        """同分先看「增强款」，再看队友（用户 2026-11-01：「同分排序 增强款 > 队友」）。
+
+        两者都只做同分比较（不再各自 +30/+20 塞进 score），但增强排在前面。
+        """
+        task = FakeTask(gacha_texts([
+            ("投射增强++", "主力投射+72"),
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+            ("弹跳增加", "主力弹跳+20"),
+        ], stamina="57/130", money="524", price="90"),
+            qualities=["金", "金", "蓝"], mates=[False, True, False])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions[0][1], 620)           # 增强款那张（左）
+
+    def test_mate_breaks_tie_when_nobody_enhanced(self):
+        """都没有增强款时，队友优先（同品质同价 → 选带队友的）。"""
+        task = FakeTask(gacha_texts([
+            ("投射增加++", "主力投射+72"),
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+        ], stamina="57/130", money="524", price="90"),
+            qualities=["金", "金"], mates=[False, True])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions[0][1], 1100)          # 带队友的右边那张
+
+    def test_quality_beats_mate_bonus(self):
+        """品质是第一权重：金卡没队友，也压过紫卡+队友（用户 2026-11-01）。"""
+        task = FakeTask(gacha_texts([
+            ("投射增加++", "主力投射+72"),
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+        ], stamina="57/130", money="524", price="90"),
+            qualities=["金", "紫"], mates=[False, True])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions[0][1], 620)           # 左边那张金卡
+
+    def test_blue_card_never_bought_even_with_mate(self):
+        """蓝卡再带队友也不买（配置「扭蛋品质优先」里没有蓝）。"""
+        task = FakeTask(gacha_texts([
+            ("训练增强", "训练可以额外获得1点主属性，队友属性大幅提升"),
+            ("防守增加", "主力防守+30"),
+        ], stamina="57/130", money="524", price="90"),
+            qualities=["蓝", "蓝"], mates=[True, True])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions, [("click", 1837, 50)])   # 右上角 ↩ 退出
+
     def test_gacha_animation_then_cards_appear(self):
         """动画播完后刷出三张卡：要正常选卡，不能退出。"""
         empty = [box(760, 80, "请选择1个扭蛋i", 400, 70),
@@ -246,6 +307,124 @@ class GachaRules(unittest.TestCase):
         self.assertTrue(task.handle_street(empty))
         self.assertEqual(task.actions[0][0], "click")        # 选了卡
         self.assertEqual(task.actions[-1][1], "确定")        # 并点确定
+
+    # ---------- 2026-11-01 15:09 事故：卡面出来了、价格还没出来 ----------
+
+    def _no_price_page(self):
+        """卡面已经画出来、但价格数字还没渲染的那一拍。
+
+        实拍 OCR（15:09:19,564）：`请选择1个扭蛋i / 训练增强 / 运控增加+++ /
+        防守增加+ / 主力运控+100，队友属性 / 主力防守+48，队友属性 / 确定 / 能力详情`
+        —— **没有任何价格数字**。对比 10:22 成功那帧有 `80`/`00`/`70`/`100`。
+
+        版式跟 `gacha_texts` 一致（同样 1920x1080、同样三列），只是少了价格药丸。
+        """
+        texts = [box(760, 80, "请选择1个扭蛋i", 400, 70),
+                 box(380, 16, "130/130", 210, 53),
+                 box(1050, 20, "169", 80, 40)]
+        xs = [480, 960, 1440]
+        names = ["训练增强", "运控增加+++", "防守增加+"]
+        effects = ["训练可以额外获得1点主属性", "主力运控+100，队友属性巨幅提升",
+                   "主力防守+48，队友属性大幅提升"]
+        for i in range(3):
+            texts.append(box(xs[i], 330, names[i], 280, 60))
+            texts.append(box(xs[i], 520, effects[i], 300, 60))
+        texts.append(box(860, 950, "确定", 200, 60))
+        return texts
+
+    def test_cards_found_without_price(self):
+        """价格没渲染出来时，卡面**照样要认出来**（价格是 None）。
+
+        旧代码靠价格药丸定位卡片 → 没价格 = 没卡 → 白丢一次扭蛋。
+        """
+        page = self._no_price_page()
+        task = FakeTask(page, qualities=["紫", "金", "紫"])
+        cards = task.read_gacha_cards(page)
+        self.assertEqual(len(cards), 3)
+        self.assertEqual([c["name"] for c in cards],
+                         ["训练增强", "运控增加+++", "防守增加+"])
+        self.assertEqual([c["price"] for c in cards], [None, None, None])
+
+    def test_waits_for_price_to_render(self):
+        """卡面先出、价格后出：必须**继续等**，等价格出来再买。
+
+        2026-11-01 15:09 实跑：19.5s 那拍卡面已出、价格未出，旧判据
+        「连续两拍读不到卡就退出」正好卡在这个中间态 → 退出 → 白丢一次扭蛋。
+        """
+        page = self._no_price_page()
+        priced = gacha_texts([
+            ("训练增强", "训练可以额外获得1点主属性"),
+            ("运控增加+++", "主力运控+100，队友属性巨幅提升"),
+            ("防守增加+", "主力防守+48，队友属性大幅提升"),
+        ], stamina="130/130", money="169", price="80")
+        task = FakeTask(page, qualities=["紫", "金", "紫"], mates=[False, True, False])
+        task.ocr_queue = [priced, priced, priced, priced]
+        self.assertTrue(task.handle_street(page))
+        # 买的是中间那张（运控增加+++，金+队友）—— 不是退出
+        self.assertEqual(task.actions[0][0], "click")
+        self.assertEqual(task.actions[0][1], 1100)     # 中间那张卡的卡名中心
+        self.assertEqual(task.actions[-1][1], "确定")
+
+    def test_no_price_never_buys(self):
+        """价格一直读不到 → 不买、退出（买不起点「确定」会卡在扭蛋页）。"""
+        page = self._no_price_page()
+        task = FakeTask(page, qualities=["紫", "金", "紫"], mates=[False, True, False])
+        task.ocr_queue = [page] * 8
+        self.assertTrue(task.handle_street(page))
+        self.assertEqual(task.actions, [("click", 1837, 50)])   # 只有右上角 ↩
+
+    def test_failed_read_marks_tried_not_spent(self):
+        """没买成 → 记「试过了」，但**不能**记「已经消费」。
+
+        2026-11-01 15:09：原来 `mark_visited` 写在读卡之前，所以没买到也记上了
+        「今天来过」，后面再想重进步行街就不可能了。
+        现在：进过 = visited；试过 = gacha_tried；买成 = gacha_spent。
+        """
+        page = self._no_price_page()
+        task = FakeTask(page, qualities=["紫", "金", "紫"])
+        task.ocr_queue = [page] * 8
+        self.assertTrue(task.handle_street(page))
+        self.assertIn("步行街", task._weekend.get("gacha_tried") or set())
+        self.assertFalse(task._weekend.get("gacha_spent"))
+
+    def test_street_not_entered_twice_after_failure(self):
+        """买失败后回到地图，**不能再点一次步行街**（否则无限循环）。
+
+        2026-11-01 15:09 的衍生问题：如果「没买成」不登记，地图上 todo 里
+        还留着步行街 → 又点进去 → 又失败 → 循环。
+        """
+        page = self._no_price_page()
+        task = FakeTask(page, qualities=["紫", "金", "紫"])
+        task.ocr_queue = [page] * 8
+        self.assertTrue(task.handle_street(page))
+        # 现在回到地图
+        map_texts = [
+            box(35, 16, "第1周", 92, 40), box(163, 18, "星期五", 84, 35),
+            box(250, 628, "餐厅", 104, 60), box(1010, 897, "步行街", 148, 58),
+            box(258, 748, "餐厅", 104, 60), box(1075, 20, "169", 80, 40),
+        ]
+        task._texts = map_texts
+        task.config["允许进步行街"] = True
+        task._style = "扭蛋流"
+        task._weekend["date"] = (1, "五")
+        task.handle_weekend(map_texts)
+        clicked = [a for a in task.actions if a[0] == "click_box"]
+        self.assertTrue(clicked)
+        self.assertNotEqual(clicked[-1][1], "步行街", "不能再次点步行街")
+        self.assertEqual(clicked[-1][1], "餐厅")
+
+    def test_successful_buy_marks_visited(self):
+        """真的买成了 → 记「步行街已去过」+「已经消费」。"""
+        priced = gacha_texts([
+            ("训练增强", "训练可以额外获得1点主属性"),
+            ("运控增加+++", "主力运控+100，队友属性巨幅提升"),
+            ("防守增加+", "主力防守+48，队友属性大幅提升"),
+        ], stamina="130/130", money="169", price="80")
+        task = FakeTask(priced, qualities=["紫", "金", "紫"], mates=[False, True, False])
+        task.ocr_queue = [priced, priced, priced, priced]
+        self.assertTrue(task.handle_street(priced))
+        self.assertIn("步行街", task._weekend.get("visited") or set())
+        self.assertTrue(task._weekend.get("gacha_spent"))
 
     def test_stamina_recover_parse(self):
         """2026-10-27 用户截图：精力恢复++ 的两种写法要能算出总量。"""
@@ -915,6 +1094,173 @@ class CritBorderRules(unittest.TestCase):
         self.assertFalse(task.has_crit_border(texts, subject="防守流"))
 
 
+class RainbowGachaBand(unittest.TestCase):
+    """彩色扭蛋卡（2026-11-01 训练等级提升后解锁）：判据见 RAINBOW_BAND_*。
+
+    实拍帧 logs/now.jpg（1549x871）重算：中间那张彩色卡的卡头横带色相摊在
+    75~165，30° 一档有 3 档 ≥0.14（最大档 0.51）；同页两张金卡最大档 0.96~1.00。
+    """
+
+    def _frame(self, hues):
+        """1920x1080 空帧，在中间那张卡的卡头横带（y 0.37~0.42、x 0.45~0.55）画竖条。
+
+        hues = [(h, 占比), ...]，色相按下标均分宽度。
+        """
+        hsv = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        h, w = hsv.shape[:2]
+        y1, y2 = int(h * 0.37), int(h * 0.42)
+        x1, x2 = int(w * 0.45), int(w * 0.55)
+        step = (x2 - x1) // len(hues)
+        for i, hue in enumerate(hues):
+            hsv[y1:y2, x1 + i * step:x1 + (i + 1) * step] = (hue, 255, 255)
+        return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+    def test_rainbow_band_is_color(self):
+        task = DryRunTask(self._frame([30, 90, 150]), [])
+        self.assertEqual(task.card_band_quality(0.5)[0], "彩")
+
+    def test_gold_band_is_gold(self):
+        task = DryRunTask(self._frame([22]), [])
+        self.assertEqual(task.card_band_quality(0.5)[0], "金")
+
+    def test_purple_band_is_purple(self):
+        task = DryRunTask(self._frame([130]), [])
+        self.assertEqual(task.card_band_quality(0.5)[0], "紫")
+
+    def test_two_colors_is_not_color(self):
+        """只有两档（金卡边缘蹭到背景那种）不能算彩色 —— 要 ≥3 档。"""
+        task = DryRunTask(self._frame([22, 130]), [])
+        self.assertNotEqual(task.card_band_quality(0.5)[0], "彩")
+
+    def test_arcade_card_band_skips_rainbow(self):
+        """游戏厅卡面不判彩色（`card_quality_at` 默认 rainbow=False），
+        免得卡面高光/渐变被误判成彩色。"""
+        task = DryRunTask(self._frame([30, 90, 150]), [])
+        self.assertNotEqual(task.card_quality_at(0.5, 0.37, 0.42)[0], "彩")
+
+
+class IconNoiseFilter(unittest.TestCase):
+    """顶栏图标被 OCR 读成的假汉字要丢掉（用户 2026-11-01）：
+
+    「那不是字，是**历史记录**和**菜单**两个图标」。OCR 硬读成 `早三/昆三/数目三/…`，
+    置信度 0.5~0.8，累计上万次，还会污染 `match_text` 的整段拼接判据。
+    """
+
+    def _task(self, boxes):
+        return DryRunTask(np.zeros((1080, 1920, 3), dtype=np.uint8), boxes)
+
+    def _icon(self, name, conf=0.6):
+        # 右上角图标带里（cx≈0.82w, cy≈0.04h）
+        return Box(x=1550, y=20, width=120, height=50, name=name, confidence=conf)
+
+    def test_icon_garbage_is_dropped(self):
+        names = ("早三", "昆三", "数目三", "战昆三色")
+        for n in names:
+            task = self._task([self._icon(n)])
+            self.assertEqual(task.drop_icon_noise(task._texts), [], n)
+
+    def test_real_text_with_san_is_kept(self):
+        """三分威 / 三张卡 / 事件三选一 / 三倍经 / 降序三 是真文本，不能杀。"""
+        for n in ("三分威", "三张卡", "事件三选一", "三倍经", "降序三"):
+            task = self._task([box(700, 500, n, 200, 60)])
+            self.assertEqual([t.name for t in task.drop_icon_noise(task._texts)], [n], n)
+
+    def test_same_string_off_band_is_kept(self):
+        """`三色` 这种串在屏幕中间（比如商品名）不能因为长得像就丢。"""
+        task = self._task([box(700, 500, "三色", 200, 60)])
+        self.assertEqual(len(task.drop_icon_noise(task._texts)), 1)
+
+
+class StaminaBarFallback(unittest.TestCase):
+    """体力条像素兜底：OCR 把 `/` 读成 `1`（571130 / 301130 / 333115）。
+
+    药丸总宽是固定版式 0.2885w（实测 554/1920、447/1549、377/1307），
+    填充比例反推体力与 OCR 正读值差 ≤1，所以斜杠读错时不再无解。
+    """
+
+    W, H = 1920, 1080
+    LEFT, TOTAL = 386, 554          # 1920 宽实拍帧量出来的药丸位置/总宽
+
+    def _frame(self, cur=57, mx=130, **kw):
+        frame = np.full((self.H, self.W, 3), (250, 247, 240), dtype=np.uint8)
+        left, total = kw.get("left", self.LEFT), kw.get("total", self.TOTAL)
+        right = left + total
+        fill_end = left + int(round(total * cur / float(mx)))
+        y1, y2 = 10, 70
+        frame[y1:y2, left:right] = (184, 195, 199)          # 灰色空段
+        frame[y1:y2, left:fill_end] = (0, 238, 255)         # 黄色填充（H≈27）
+        return frame
+
+    def _pill_box(self, name, y=10):
+        return box(self.LEFT, y, name, self.TOTAL, 40)
+
+    def test_slash_read_as_one_is_recovered(self):
+        """`571130`（= 57/130）用填充比例还原成 57。"""
+        task = DryRunTask(self._frame(57, 130), [self._pill_box("571130")])
+        state = task.top_bar(task._texts)
+        self.assertEqual(state["stamina"], 57)
+        self.assertEqual(state["stamina_max"], 130)
+        self.assertTrue(any("体力条" in s for s in task.logs))
+
+    def test_clean_ocr_is_kept(self):
+        """OCR 读对了（57/130）就用 OCR 的值，不扰动。"""
+        task = DryRunTask(self._frame(57, 130), [self._pill_box("57/130")])
+        state = task.top_bar(task._texts)
+        self.assertEqual((state["stamina"], state["stamina_max"]), (57, 130))
+        self.assertEqual(task.logs, [])
+
+    def test_wrong_digit_is_corrected(self):
+        """OCR 某一位读错（87/115，实际 57/115）→ 以像素为准（±1，见 STAMINA_BAR 校准）。"""
+        task = DryRunTask(self._frame(57, 115), [self._pill_box("87/115")])
+        state = task.top_bar(task._texts)
+        self.assertLessEqual(abs(state["stamina"] - 57), 1)
+        self.assertTrue(any("按像素值算" in s for s in task.logs))
+
+    def test_no_bar_means_no_guess(self):
+        """没有体力条的帧（黑屏/其它页面）不许瞎猜。"""
+        frame = np.zeros((self.H, self.W, 3), dtype=np.uint8)
+        task = DryRunTask(frame, [self._pill_box("571130")])
+        self.assertIsNone(task.top_bar(task._texts)["stamina"])
+
+    def test_bar_at_odd_position_is_rejected(self):
+        """药丸左沿不在 0.2010w（小游戏页那种 7/10 的条）→ 不采信像素值。"""
+        task = DryRunTask(self._frame(57, 130, left=700),
+                          [self._pill_box("571130", )])
+        task._texts = [box(700, 10, "571130", self.TOTAL, 40)]
+        self.assertIsNone(task.top_bar(task._texts)["stamina"])
+
+    def test_blob_max_reused_when_digits_unreadable(self):
+        """斜杠串整个没读到时，沿用本局读过的上限再按比例还原（±1）。"""
+        task = DryRunTask(self._frame(57, 130), [])
+        task._stamina_max_seen = 130
+        state = task.top_bar([])
+        self.assertEqual(state["stamina_max"], 130)
+        self.assertLessEqual(abs(state["stamina"] - 57), 1)
+
+    def test_same_frame_resolves_once(self):
+        """同一帧里 top_bar 被调两次，结论必须一致（别 57/56 来回跳）。"""
+        task = DryRunTask(self._frame(57, 130), [])
+        task._stamina_max_seen = 130
+        first = task.top_bar([])["stamina"]
+        second = task.top_bar([])["stamina"]
+        self.assertEqual(first, second)
+
+    def test_candidates_disambiguate_which_digit_to_drop(self):
+        """粘连串拆出来的候选里既有 71 也有 57 → 由体力条填充（约 44%）仲裁成 57。"""
+        task = DryRunTask(self._frame(57, 130), [self._pill_box("571130")])
+        mx, cands = task.stamina_candidates(task._texts, self.LEFT,
+                                           self.LEFT + self.TOTAL)
+        self.assertEqual(mx, 130)
+        self.assertIn(57, cands)
+        self.assertIn(71, cands)
+        self.assertEqual(task.top_bar(task._texts)["stamina"], 57)
+
+    def test_week_digit_glued_head(self):
+        """周数也粘在头上（`333115` = 33/115）：候选仍在，仲裁取 33。"""
+        task = DryRunTask(self._frame(33, 115), [self._pill_box("333115")])
+        self.assertEqual(task.top_bar(task._texts)["stamina"], 33)
+
+
 class QuickMatchGate(unittest.TestCase):
     """快速比赛：三选一/二选一必须先进比赛才处理（2026-10-28 用户反馈）。"""
 
@@ -1315,6 +1661,83 @@ class WeekendMapRules(unittest.TestCase):
         # 交给 handle_weekend：扭蛋流周五去步行街
         self.assertTrue(task.handle_weekend(texts))
         self.assertEqual(task.actions[-1][1], "步行街")
+
+    # ---------- 「扭蛋增强！」标签必须**贴在步行街上**（2026-11-01） ----------
+
+    # 实测真实地图帧（logs/events/1031-194957_handle_weekend.jpg，1549x871）：
+    #   标签「扭蛋增强」box=(597,669,225,71)  cx=0.457 cy=0.809
+    #   步行街          box=(810,722,126,50)  cx=0.564 cy=0.858
+    #   → Δcx=0.106（标签在左边）、Δcy=0.049（标签在上方）
+    # 10 张真实帧（1031-173714 / 1031-180755 / 1031-181353 / 1031-193340 /
+    # 1031-194957 / 1031-195001 / 1031-234532 / 1101-122549 / 1101-150917 /
+    # 1101-150921）几何一致，Δcx=0.105~0.107、Δcy=0.048~0.049。
+    # 换算到 1920x1080 的测试版式：标签 (710,829,279,88)、步行街 (1004,894,157,62)。
+    BOOST = box(710, 829, "扭蛋增强", 279, 88)
+    STREET = box(1004, 894, "步行街", 157, 62)
+
+    def _map_with_boost(self, boost_box=None, day="星期五"):
+        """地图 + 贴对位置的「扭蛋增强」标签。"""
+        texts = [box(30, 20, "第1周", 120, 40), box(200, 20, day, 130, 40),
+                 box(380, 16, "120/130", 210, 53),
+                 box(814, 461, "游戏厅", 148, 57), box(1538, 606, "公园", 102, 51),
+                 box(258, 748, "餐厅", 104, 60), self.STREET]
+        if boost_box is not None:
+            texts.append(boost_box)
+        return texts
+
+    def test_boost_label_next_to_street_is_detected(self):
+        """标签贴在步行街左上 → 认得出来。"""
+        task = self.styled("扭蛋流", self._map_with_boost(self.BOOST))
+        vb = task._venue_box(task._texts, "步行街")
+        self.assertTrue(task.venue_has_street_boost(task._texts, vb))
+
+    def test_boost_label_elsewhere_is_ignored(self):
+        """标签出现在**别处** → 不算数（原来只 match_text，全屏命中就误判）。
+
+        位置取地图右上角（远离步行街），模拟队友台词/别的说明文字。
+        """
+        far = box(1400, 200, "扭蛋增强", 279, 88)
+        task = self.styled("扭蛋流", self._map_with_boost(far))
+        vb = task._venue_box(task._texts, "步行街")
+        self.assertFalse(task.venue_has_street_boost(task._texts, vb))
+
+    def test_boost_label_on_right_of_street_is_ignored(self):
+        """标签在步行街**右边** → 不算数（判据要求在左上方）。"""
+        right = box(1200, 829, "扭蛋增强", 279, 88)
+        task = self.styled("扭蛋流", self._map_with_boost(right))
+        vb = task._venue_box(task._texts, "步行街")
+        self.assertFalse(task.venue_has_street_boost(task._texts, vb))
+
+    def test_boost_label_wrong_text_is_ignored(self):
+        """只有「扭蛋增强」/「扭蛋加强」算数；「零用钱+」不算。"""
+        task = self.styled("扭蛋流", self._map_with_boost(
+            box(710, 829, "零用钱+", 279, 88)))
+        vb = task._venue_box(task._texts, "步行街")
+        self.assertFalse(task.venue_has_street_boost(task._texts, vb))
+
+    def test_boost_label_still_forces_street_first(self):
+        """贴对了 → 仍然「不管钱和队友」直进步行街（行为不变）。"""
+        texts = self._map_with_boost(self.BOOST)
+        task = self.styled("扭蛋流", texts)
+        task.weekend_state()
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertEqual(task.actions[-1][1], "步行街")
+        self.assertTrue(any("不管队友，先进步行街" in m for m in task.logs),
+                        "应走「扭蛋增强 → 直进步行街」这条路")
+
+    def test_boost_label_elsewhere_does_not_force_street(self):
+        """贴错了 → **不**走「扭蛋增强」这条路。
+
+        注意：干跑任务里 frame 是全黑，`venue_has_mate` 会把两个地点都判成
+        「有队友」（黑色像素也满足 g<=b），所以这里不能断言最后点了哪里 ——
+        要断言的是**有没有走 boost 那条分支**（看日志）。
+        """
+        texts = self._map_with_boost(box(1400, 200, "扭蛋增强", 279, 88))
+        task = self.styled("扭蛋流", texts)
+        task.weekend_state()
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertFalse(any("不管队友，先进步行街" in m for m in task.logs),
+                         "标签不在步行街旁，不该走 boost 分支")
 
     def test_sunday_place_by_style(self):
         """周日地点：训练流→公园、商店流→餐厅、扭蛋流→步行街、小游戏流→游戏厅。"""
@@ -1743,7 +2166,7 @@ class StylePlanRules(unittest.TestCase):
                  box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
         task = FakeTask(texts)
         task._style = "扭蛋流"
-        task.try_speed_2x = lambda *a, **k: False   # 零帧永远判不出 2x，跳过那一拍
+        task.ensure_speed = lambda *a, **k: False   # 零帧永远判不出 2x，跳过那一拍
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "休息")
 
@@ -1755,7 +2178,7 @@ class StylePlanRules(unittest.TestCase):
         for style in ("训练流", "商店流", "扭蛋流"):
             task = FakeTask(texts)
             task._style = style
-            task.try_speed_2x = lambda *a, **k: False
+            task.ensure_speed = lambda *a, **k: False
             self.assertTrue(task.handle_training_day(texts), style)
             self.assertEqual(task.actions[-1][1], "训练", style)
 
@@ -2233,7 +2656,7 @@ class OutingOnTrainingDay(unittest.TestCase):
 
     def test_goes_out_before_training_once(self):
         task = FakeTask(self._texts())
-        task.try_speed_2x = lambda texts: False       # 倍速按钮靠像素判，测试里没有帧
+        task.ensure_speed = lambda texts: False       # 倍速按钮靠像素判，测试里没有帧
         self.assertTrue(task.handle_training_day(task._texts))
         self.assertEqual(task.actions[-1][1], "出行")
         # 同一天第二次进来：外出已经用过，不能再点出行（否则会打转）
@@ -2255,7 +2678,7 @@ class OutingOnTrainingDay(unittest.TestCase):
         """
         texts = self._dialog_texts()
         task = FakeTask(texts)
-        task.try_speed_2x = lambda texts: False
+        task.ensure_speed = lambda texts: False
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "今天可以出行哦！要不")
         self.assertFalse(task.weekend_state().get("outing_done"))
@@ -2268,7 +2691,7 @@ class OutingOnTrainingDay(unittest.TestCase):
         texts = ([t for t in self._texts() if t.name != "出行"]
                  + [box(1380, 750, "出", 52, 40), box(1440, 750, "行", 52, 40)])
         task = FakeTask(texts)
-        task.try_speed_2x = lambda texts: False
+        task.ensure_speed = lambda texts: False
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "出行")
 
@@ -2673,7 +3096,7 @@ class TalentStockEvent(unittest.TestCase):
                  box(380, 16, "92/130", 210, 53),
                  box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
         task = FakeTask(texts)
-        task.try_speed_2x = lambda *a, **k: False
+        task.ensure_speed = lambda *a, **k: False
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "训练")
 
@@ -2689,14 +3112,14 @@ class CaptainNameMatch(unittest.TestCase):
     """
 
     def test_middle_dot_and_rarity_prefix_ignored(self):
-        from src.tasks.ui.Defs import name_matches
+        from src.tasks.ui.labels import name_matches
         self.assertTrue(name_matches("亚理纱·贾斯敏", "SR-亚理纱贾斯敏"))
         self.assertTrue(name_matches("亚理纱·贾斯敏", "亚理纱贾斯敏"))
         self.assertTrue(name_matches("亚理纱", "SSR 亚理纱·贾斯敏"))
         self.assertTrue(name_matches("克拉丽丝·波洛", "克拉丽丝波洛"))
 
     def test_different_people_do_not_match(self):
-        from src.tasks.ui.Defs import name_matches
+        from src.tasks.ui.labels import name_matches
         self.assertFalse(name_matches("近江奏", "SR-亚理纱贾斯敏"))
         self.assertFalse(name_matches("", "亚理纱"))
         self.assertFalse(name_matches("亚理纱", ""))

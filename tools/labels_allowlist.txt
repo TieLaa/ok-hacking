@@ -1,0 +1,15 @@
+# 判据文案的棘轮白名单（tools/check_handlers.py:check_labels() 读它）
+#
+# 一行一条：`相对路径.py|按钮文案`，# 开头是注释。**只许缩短**。
+#
+# 规则：
+#   - 按钮（确定/确认/决定/下一步/关闭/取消/放弃）必须来自 src/tasks/ui/labels.py:BUTTONS，
+#     通过 self.click_button() / click_button_and_expect() 使用；
+#   - 这里的每一行都表示「这个文件还有一处没迁移」，迁完就把这一行删掉；
+#   - 加到 0 行（只剩注释）是目标状态，已经达成 —— 2026-11-01 全部迁移完毕。
+#
+# 历史（供以后判断要不要重开白名单）：迁移前是 19 处，分布在
+#   handlers/entry.py(5) handlers/match.py(5) handlers/weekend.py(6)
+#   handlers/popup.py(2) handlers/fishing.py(1)
+# 迁移方式：能直接点的用 click_button / click_button_and_expect；
+# 需要拿文本框做位置计算、或后面还有坐标兜底的，保留原逻辑但把文案换成 labels.BUTTONS["键名"]。

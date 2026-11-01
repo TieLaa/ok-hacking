@@ -61,7 +61,7 @@ class FishingHandlers:
         self.click(x, y, after_sleep=0.45)
         self.log_info(f"钓鱼场：选最贵的「{label}」"
                       "（价格读不到时按左→右递增取最右）")
-        if not self.click_text(("确定",), after_sleep=0.9, must=False):
+        if not self.click_button("confirm", after_sleep=0.9, must=False):
             self.click(int(self.width * 0.5), int(self.height * 0.885),
                        after_sleep=0.9)
         self.log_info("钓鱼场：确定")

@@ -409,7 +409,10 @@ class GirlsInteraction(BaseInteraction):
         win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0, int(scroll_amount) * 120, 0)
         self.mark_script_input()
 
-    def move(self, x, y, down_btn=0):
+    def move(self, x, y):
+        # 2026-11-01：删掉没用过的 `down_btn` 参数（vulture 报的唯一一处真死参数，
+        # 全仓无调用点传它）。其余 move_back / settle_time 是 ok 框架
+        # `interaction_methods/base.py` 的签名契约，必须留着 —— 见 .vulture_whitelist.py
         self.wait_for_user_idle()
         self.ensure_foreground()
         self._move_cursor(int(x), int(y))

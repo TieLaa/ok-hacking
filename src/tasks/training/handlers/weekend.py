@@ -15,12 +15,18 @@ from collections import deque
 import cv2
 import numpy as np
 
-from src.tasks.ui import Defs  # noqa: F401
+from src.tasks.ui import labels
 from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,
                                           WORK_STAMINA_COST)  # noqa: F401
 
 
 class WeekendHandlers:
+
+    # 扭蛋页「连续几拍读不到卡就放弃」的阈值。
+    # 2026-11-01 15:09 实跑：卡面文字先画出来、价格药丸后画出来，中间那一拍
+    # 旧判据（2 拍）正好卡在「卡面在、价格没有」这个中间态上 → 退出，白丢一次扭蛋。
+    # 现在放宽到 4 拍（≈3.2 秒），末尾还有「再等一拍 1.2 秒」的兜底。
+    GACHA_EMPTY_LIMIT = 4
 
     # 地点详情弹窗的「前往XXX」：公园点「划船」只是打开详情，还要再点这个。
     ACTIVITY_GO = re.compile(r"^前往(划船|野餐|散步|当服务员|桌游GM|游戏厅|商店|步行街|餐厅)")
@@ -95,8 +101,13 @@ class WeekendHandlers:
     ACTIVITY_CLOSE = (0.870, 0.195)
 
     def close_activity_detail(self, after_sleep=0.6):
-        """关掉地点详情弹窗、退回卡片页 —— 别直接退出地点，那样就没法改选另一张。"""
-        if self.click_text(("关闭", "取消", "返回"), after_sleep=after_sleep, must=False):
+        """关掉地点详情弹窗、退回卡片页 —— 别直接退出地点，那样就没法改选另一张。
+
+        退出类按钮走 `labels.BUTTONS["exit_hatch"]`（全等匹配，2026-11-01 统一）：
+        原来这里写的是 `click_text(("关闭","取消","返回"))`，那是**包含**匹配，
+        正文里出现「返回」两个字也会被点；改成全等之后认不出来还有下面的坐标兜底。
+        """
+        if self.click_button("exit_hatch", after_sleep=after_sleep, must=False):
             return True
         self.click(int(self.width * self.ACTIVITY_CLOSE[0]),
                    int(self.height * self.ACTIVITY_CLOSE[1]), after_sleep=after_sleep)
@@ -131,7 +142,7 @@ class WeekendHandlers:
         self.click_box(target, after_sleep=after_sleep)
         self.log_info(f"选择「{target.name}」")
 
-        confirm = self.find_text(("确定", "确认"))
+        confirm = self.find_text(labels.BUTTONS["confirm"])
         if confirm is not None:
             self.click_box(confirm, after_sleep=0.45)
             self.log_info(f"确定 @({confirm.x},{confirm.y})")
@@ -178,8 +189,11 @@ class WeekendHandlers:
         旧兜底坐标 (0.346w, 0.896h) 正好落在两个按钮中间的空白，
         连续 9 拍点不动 → 任务被判「连续 3 轮点不动」停止。
         这一页右上角 ↩ (0.957w, 0.047h) 实测有效，退回周末地图页。
+
+        退出类按钮同样走 `labels.BUTTONS["exit_hatch"]`（全等匹配）：两个页面各自
+        只出现其中一个词，合成一个集合不改行为；同屏出现时「关闭」优先。
         """
-        if self.click_text(("放弃", "取消", "关闭"), after_sleep=after_sleep, must=False):
+        if self.click_button("exit_hatch", after_sleep=after_sleep, must=False):
             return
         self.click(int(self.width * 0.957), int(self.height * 0.047), after_sleep=after_sleep)
 
@@ -191,7 +205,7 @@ class WeekendHandlers:
         2. 队友一样多 → 选**右边**那张（消耗精力的）；
         3. 精力不够右边那张 → 改选**左边**（不消耗精力）。
         """
-        if self.match_text(texts, Defs.RESTAURANT_TITLE) is None:
+        if self.match_text(texts, labels.RESTAURANT_TITLE) is None:
             return False
         self.mark_visited("餐厅")
         order = self.restaurant_order(texts)
@@ -221,12 +235,12 @@ class WeekendHandlers:
         """
         opts = self.texts_in_region(texts, "weekend_options")
         found = []
-        for name in Defs.RESTAURANT_OPTIONS:
+        for name in labels.RESTAURANT_OPTIONS:
             box = self.exact_text(opts, (name,)) or self.match_text(opts, (name,))
             if box is not None:
                 found.append(box)
         if not found:
-            return Defs.RESTAURANT_OPTIONS
+            return labels.RESTAURANT_OPTIONS
 
         stamina = self.top_bar(texts).get("stamina")
         blocked = self.blocked_activities()
@@ -285,7 +299,7 @@ class WeekendHandlers:
             s = t.name.replace(" ", "")
             if "精力" not in s:
                 continue
-            if any(k in s for k in Defs.GACHA_CLEAR_EXCLUDE) or "+" in s:
+            if any(k in s for k in labels.GACHA_CLEAR_EXCLUDE) or "+" in s:
                 continue
             if abs((t.y + t.height / 2) - (box.y + box.height / 2)) > box.height * 2.5:
                 continue
@@ -338,7 +352,7 @@ class WeekendHandlers:
                       if money is None or p is None or p <= money]
         if not affordable:
             self.log_warning(f"炒股：都没有买得起的（零用钱 {money}｜{detail}）→ 放弃")
-            self.click_text(("放弃",), after_sleep=0.6, must=False)
+            self.click_button("give_up", after_sleep=0.6, must=False)
             return True
         # 用户口径：买得起的里**有队友推荐（头顶气泡）优先**，同档价格高的优先。
         pick, price, marks = max(
@@ -348,7 +362,7 @@ class WeekendHandlers:
         cy = pick.y + self.height * 0.18
         self.click(int(cx), int(cy), after_sleep=0.6)
         self.log_info(f"炒股：零用钱 {money}｜{detail} → 选「{pick.name}」({price}){badge}")
-        if self.click_text(("确定",), after_sleep=0.8, must=False):
+        if self.click_button("confirm", after_sleep=0.8, must=False):
             self.log_info("炒股：确定")
         return True
 
@@ -437,7 +451,7 @@ class WeekendHandlers:
             self.log_info("炒股：没认出「卖出」→ 点底部黄色按钮兜底")
             return True
         if self.match_text(texts, "收益排名") is not None:
-            if self.click_text(("下一步",), after_sleep=0.7, must=False):
+            if self.click_button("next", after_sleep=0.7, must=False):
                 self.log_info("炒股：收益排名 → 下一步")
                 return True
         return False
@@ -447,7 +461,7 @@ class WeekendHandlers:
 
         实机（2026-10-26 debug 包）：三个**圆形图标**按钮，名字和效果都在图标下方
         （「划船 属性+」），页顶有「在公园干点什么好呢?」。
-        旧判据 `Defs.PARK_TITLE = ("在公园", ...)` 依赖「在公园」三个字，
+        旧判据 `labels.PARK_TITLE = ("在公园", ...)` 依赖「在公园」三个字，
         但实际文案是「在公园干点什么好呢?」整句 —— 整句 OCR 时「在公园」不是独立框，
         match_text 的子串匹配靠"整段拼接"兜底才能命中，命中后返回的是**最长的框**
         （整句话），click_box 会点到句子中间，什么都点不到 → 卡死。
@@ -457,17 +471,17 @@ class WeekendHandlers:
         """
         # 周末首页/地图上有「出行」按钮，公园内页没有（与 handle_shop 同一招）。
         # 2026-10-27 事故：地图页的对白「小澪奈总是吵着要去野餐…」包含「野餐」，
-        # Defs.PARK_TITLE 里的「野餐」直接把地图页判成公园内页 →
+        # labels.PARK_TITLE 里的「野餐」直接把地图页判成公园内页 →
         # mark_visited("公园") 后 handle_weekend 认为「都去过了」，
         # 反复点返回循环 9 拍，任务被判卡死停止。
         if self.match_text(texts, "出行") is not None:
             return False
-        if self.match_text(texts, Defs.PARK_TITLE) is None:
+        if self.match_text(texts, labels.PARK_TITLE) is None:
             return False
 
         if self.style != "训练流":
             pref = self.config.get("公园选项", "野餐")
-            order = (pref,) + tuple(x for x in Defs.PARK_OPTIONS if x != pref)
+            order = (pref,) + tuple(x for x in labels.PARK_OPTIONS if x != pref)
             ok = self.choose_option(texts, order)
             if ok:
                 self.mark_visited("公园")
@@ -490,7 +504,7 @@ class WeekendHandlers:
                 self.log_info("周六公园：划船（属性+，不再满体力吃野餐）")
 
         order = (st["park_choice"],) + tuple(
-            x for x in Defs.PARK_OPTIONS if x != st["park_choice"])
+            x for x in labels.PARK_OPTIONS if x != st["park_choice"])
         ok = self.choose_option(texts, order)
         if ok:
             self.mark_visited("公园")
@@ -590,7 +604,7 @@ class WeekendHandlers:
         self.click(int(self.width * 0.79), int(self.height * 0.84), after_sleep=0.8)
         self.log_info(f"商店：买「{pick['name']}」{pick['price']}（{pick['quality']}｜零用钱 {money}）")
 
-        confirm = self.find_text(("确定", "确认"), region_name="confirm_bar")
+        confirm = self.find_text(labels.BUTTONS["confirm"], region_name="confirm_bar")
         if confirm is not None:
             self.click_box(confirm, after_sleep=0.6)
             self.log_info("商店：确认购买")
@@ -617,6 +631,16 @@ class WeekendHandlers:
         self.log_info("商店：关闭")
 
     @staticmethod
+    def _gacha_prices_ready(cards):
+        """这组卡的价格都读到了吗？
+
+        2026-11-01 15:09：卡面先渲染、价格后渲染。价格是 None 时买不了
+        （买不起点「确定」会卡在扭蛋页反复点，见 handle_street 的注释），
+        所以价格没出来就不能算「卡片已稳定」。
+        """
+        return bool(cards) and all(c.get("price") is not None for c in cards)
+
+    @staticmethod
     def _gacha_signature(cards):
         """一组扭蛋卡的指纹：名字 + 价格 + 品质 + 队友标记。空组返回 None。
 
@@ -641,12 +665,19 @@ class WeekendHandlers:
         所以连续两次识别一致才认账；空结果继续等（旧版只处理了"空"这一种）。
         同一组卡确认过就不再重复等，避免每拍多花 1.6 秒；一直不稳时
         最后还会多等一拍 1.2 秒（见函数末尾），最多约 3.6 秒定不下来才放弃。
+
+        2026-11-01 15:09 新增：**价格还没渲染出来时不算「稳定」**。
+        卡面文字先画出来、价格数字后画出来，那一拍卡是「读到了但价格是 None」；
+        旧判据只看指纹（名字/价格/品质/队友），价格从 None 变成 80 这一下
+        会被当成「变了」→ 继续等；但反过来「两拍都是 None」就等于认账了，
+        于是拿不到价格、买不了。现在价格未出就**继续等**，直到价格出来。
         """
         cards = self.read_gacha_cards(texts)
         sig = self._gacha_signature(cards)
         prev_sig = getattr(self, "_gacha_sig", None)
         if sig and sig == prev_sig and time.monotonic() - getattr(self, "_gacha_at", 0.0) < 3.0:
-            return cards
+            if self._gacha_prices_ready(cards):
+                return cards
         last_cards, empty_streak = cards, 0
         for _ in range(3):
             self.sleep(0.8)
@@ -656,7 +687,7 @@ class WeekendHandlers:
                 pass
             nxt = self.read_gacha_cards(self._ocr_region() or [])
             nsig = self._gacha_signature(nxt)
-            if nsig and nsig == sig:
+            if nsig and nsig == sig and self._gacha_prices_ready(nxt):
                 if sig != prev_sig:
                     self.log_info("扭蛋：卡片已稳定（" + "、".join(
                         c["name"] for c in nxt) + "）")
@@ -666,8 +697,12 @@ class WeekendHandlers:
                 last_cards, empty_streak = nxt, 0
             else:
                 empty_streak += 1
-                if empty_streak >= 2:
-                    # 卡片彻底消失（页面被关掉/还在飞入）：不要把上一帧的中间态当真
+                if empty_streak >= self.GACHA_EMPTY_LIMIT:
+                    # 2026-11-01 15:09 实跑：卡面文字先画出来、价格数字后画出来，
+                    # 旧判据「连续两拍读不到卡就退出」正好卡在这个**中间态**上：
+                    # 19.5s 那拍卡面（训练增强/运控增加+++）已经在了，只是没有价格，
+                    # 于是被判成「页面是空的」→ 退出 → 白丢一次扭蛋。
+                    # 现在放宽到 4 拍（≈3.2 秒）；末尾还有「再等一拍 1.2 秒」的兜底。
                     self._gacha_sig, self._gacha_at = None, time.monotonic()
                     return []
             cards, sig = nxt, nsig
@@ -692,19 +727,25 @@ class WeekendHandlers:
         return last_cards
 
     def handle_street(self, texts):
-        """步行街扭蛋：只买金/紫，队友优先，体力低才允许清空精力的卡。
+        """步行街扭蛋：只买 彩/金/紫，同等先增强款再队友，体力低才允许清空精力的卡。
 
-        用户规则（2026-10-26）：
-        1. 只买黄色/紫色品质；蓝色、其他一律不买（宁可退出）；
-        2. 同品质有队友加成的优先；
+        用户规则（2026-10-26，2026-11-01 更新）：
+        1. 品质优先级 **彩色 > 金色 > 紫色**（彩色是训练等级提升后解锁的最高品质）；
+           蓝色、其他一律不买（宁可退出）；
+        2. 同等情况下**先「增强款」，再有队友加成的**（都相同才比价格）；
         3. 「消耗/清空精力」的卡：只有体力低于阈值（默认 30）才买；
         4. 没有合格卡就点右上角返回，不点确定。
 
         2026-10-26 事故：旧版只按 rank*10 打分，蓝卡也有 10 分，
         结果 72 体力买了「精力转换-意识（消耗所有精力）」，体力归 0，
         周日只能划船回 30。现在清空卡在体力够时必须排除。
+
+        2026-11-01 事故：彩色卡（`体能增加+++`，卡头是彩虹渐变）被
+        `card_quality_at` 按中位色相判成「紫」（彩虹带的中位色相正好落在紫区），
+        于是金卡 300 压过它 200 → 又买了金卡（用户：「中间的是彩色，你已经点错
+        了一次了」）。现在 `card_band_quality` 先认彩虹（彩），再退回单色判据。
         """
-        if self.match_text(texts, Defs.STREET_TITLE) is None:
+        if self.match_text(texts, labels.STREET_TITLE) is None:
             return False
         # 2026-10-31 实跑（野上泷额外周末，第3周星期五）：**周末地图**上步行街那条
         # 奖励提示这次写的是「扭蛋增强」（平时是「零用钱+」），STREET_TITLE 里的
@@ -714,15 +755,27 @@ class WeekendHandlers:
         # 地图上有 ≥2 个地点名，扭蛋页只有一个，用它区分；必须放在 mark_visited 之前，
         # 否则「步行街已去过」会被误记，回来以后就再也不进步行街了。
         if len([t for t in texts
-                if t.name.strip() in Defs.WEEKEND_PLACES]) >= 2:
+                if t.name.strip() in labels.WEEKEND_PLACES]) >= 2:
             return False
-        self.mark_visited("步行街")
         if not self.config.get("允许进步行街", True):
             self.log_info("步行街扭蛋：未开启，退出")
             self.leave_street()
             return True
 
         cards = self.settle_gacha_cards(texts)
+        # 2026-11-01 15:09 事故：`mark_visited("步行街")` 原来写在**读卡之前**，
+        # 于是「进步行街 → 没读到卡 → 退出」也算「今天来过步行街」，
+        # 回到地图只剩餐厅可去 → 白跑一趟外出（只赚了 110 零用钱）。
+        #
+        # 但**不能**简单地「没读到卡就不标记 visited」：那样回到地图时
+        # todo 里还有步行街 → 又点进去 → 又失败 → 无限循环。
+        # 所以分两件事：
+        #   - `visited`：今天**进过**步行街（进过就算来过，防止反复进）；
+        #   - `gacha_tried`：今天**试过**抽扭蛋（不管买没买成）。
+        # 地图上只按 `gacha_tried` 排除步行街（试过了就不再试），
+        # 「买没买成」交给 gacha_spent 决定要不要去餐厅打工。
+        self.mark_visited("步行街")
+        self._weekend.setdefault("gacha_tried", set()).add("步行街")
         if not cards:
             self.log_warning("扭蛋：三张卡都没认出来，退出不买")
             self.leave_street()
@@ -741,12 +794,17 @@ class WeekendHandlers:
         clear_limit = int(self.config.get("扭蛋清空体力阈值", 30))
         allow_clear = stamina is not None and stamina < clear_limit
 
+        # 品质优先级（配置项「扭蛋品质优先」，默认 彩色 > 金色 > 紫色，用户 2026-11-01）：
+        # 列表 = 从高到低的品质名，分数按位置给（第一位 400、第二位 300……），
+        # 间隔远大于同品质内的任何差别，保证「品质永远是第一权重」；
+        # 不在列表里的品质（蓝/其他）直接不当候选。
+        order = list(self.config.get("扭蛋品质优先") or ["彩", "金", "紫"])
+        base_of = {q: (len(order) - i) * 100 for i, q in enumerate(order)}
+
         def score(c):
-            # 2026-10-30 用户口径（扭蛋增强界面）：**品质 > 增强款 > 队友**。
-            # 金 300 / 紫 200 / 蓝 100 的间隔远大于后两项，保证「优先金/紫」；
-            # 同品质里先看卡片右上角「增强款」斜标签，再看左上角队友标记。
-            base = {"金": 300, "紫": 200, "蓝": 100}.get(c["quality"], 0)
-            s = base + (30 if c.get("enhanced") else 0) + (20 if c["mate"] else 0)
+            # 2026-11-01 用户口径：**品质优先级 彩色 > 金色 > 紫色**（彩色扭蛋是
+            # 训练等级提升后解锁的）。
+            s = base_of.get(c["quality"], 0)
             s += 1 if "+" in c["name"] else 0
             # 2026-10-27（用户截图 45/130 三选一）：「精力恢复++」
             # （立刻恢复90，之后每天30×4天，金卡+队友）和「运控增加++」
@@ -764,7 +822,13 @@ class WeekendHandlers:
                 # 清空卡只在体力低于阈值时买（这时是拿体力换属性）
                 if not allow_clear:
                     continue
-            elif c["quality"] not in ("金", "紫"):
+            elif c["quality"] not in base_of:
+                continue
+            # 读不到价格就不买：买不起时点「确定」游戏不扣钱、页面也不关，
+            # 旧代码会一直「选卡 → 确定 → 没反应」（2026-10-26 实测）。
+            # 2026-11-01 15:09：卡面先渲染、价格后渲染的那一拍价格是 None，
+            # 这时宁可退出等下一轮，也不能按「猜的价格」买。
+            if c["price"] is None:
                 continue
             # 买不起就跳过，看下一张（2026-10-26：零用钱 50、卡片 60，
             # 旧代码照样点确定 → 停留在扭蛋页反复点）。
@@ -777,22 +841,27 @@ class WeekendHandlers:
             f"{c['name']}({c['quality']}{'+队友' if c['mate'] else ''}"
             f"{'·增强' if c.get('enhanced') else ''}"
             f"{'·恢复' + str(c['recover']) if c.get('recover') else ''}"
-            f"{'·清空' if c['clear'] else ''}/{c['price']}币/{score(c)})" for c in cards)
+            f"{'·清空' if c['clear'] else ''}"
+            f"{'/' + str(c['price']) + '币' if c['price'] is not None else '/价格未出'}"
+            f"/{score(c)})" for c in cards)
         if not ok:
             self.log_info(f"扭蛋：{detail} → 没有可买的"
                           f"（零用钱 {money}，体力 {stamina}），退出")
             self.leave_street()
             return True
 
-        # 同分时的取舍（2026-10-31）：先「有队友」，再「便宜的」。
-        # 旧代码只按 score 取 max()，同分就等于「按 OCR 顺序取第一张 = 最左边」，
-        # 23:41 那次就是买了左边那张（用户：「又选择了左边的卡片」）。
-        best = max(ok, key=lambda c: (c["score"], c["mate"], -c["price"]))
+        # 同分时的取舍（用户 2026-11-01：「同分排序 增强款 > 队友」，都相同再比价格）：
+        # score（品质/恢复/名字）打平以后，先「增强款」，再「有队友」，最后「便宜的」。
+        # 2026-10-30 的老口径就是这个顺序；这里只是把它从 score 挪到同分比较里，
+        # 免得「增强款 +30 / 队友 +20」把恢复精力的加成压掉。
+        best = max(ok, key=lambda c: (c["score"], bool(c.get("enhanced")),
+                                      c["mate"], -c["price"]))
         self.click(best["x"], best["y"], after_sleep=0.5)
         self.log_info(f"扭蛋：{detail} → 选「{best['name']}」"
-                      f"（{best['price']}币，零用钱 {money}，体力 {stamina}）")
+                      f"（{best['quality']}，{best['price']}币，"
+                      f"零用钱 {money}，体力 {stamina}）")
 
-        if self.click_text(("确定",), after_sleep=0.8, must=False):
+        if self.click_button("confirm", after_sleep=0.8, must=False):
             self.log_info("扭蛋：确定")
             # 今天花过钱了：扭蛋流周末不必再去餐厅打工（flow.weekend_priority 用）
             self.weekend_state()["gacha_spent"] = True
@@ -821,15 +890,15 @@ class WeekendHandlers:
         付完钱小游戏会**自己打完**（探针实测：零用钱 219→155，之后走普通剧情/结算），
         后续交给通用 handler 推进。
         """
-        if self.match_text(texts, Defs.ARCADE_TITLE) is None:
+        if self.match_text(texts, labels.ARCADE_TITLE) is None:
             return False
         self.mark_visited("游戏厅")
-        skip = self.match_text(self.texts_in_region(texts, "weekend_options"), Defs.ARCADE_SKIP)
+        skip = self.match_text(self.texts_in_region(texts, "weekend_options"), labels.ARCADE_SKIP)
         if skip is None:
-            skip = self.match_text(texts, Defs.ARCADE_SKIP)
+            skip = self.match_text(texts, labels.ARCADE_SKIP)
         if skip is not None:
             self.click_box(skip, after_sleep=0.4)
-            confirm = self.match_text(self._ocr_region("confirm_bar"), Defs.CONFIRM_TEXTS)
+            confirm = self.match_text(self._ocr_region("confirm_bar"), labels.CONFIRM_TEXTS)
             if confirm is not None:
                 self.click_box(confirm, after_sleep=0.45)
             self.log_info("游戏厅：跳过已三星小游戏")
@@ -918,7 +987,7 @@ class WeekendHandlers:
             if money >= price:
                 pick = c
                 break
-        confirm = self.exact_text(texts, ("确定",))
+        confirm = self.exact_text(texts, labels.BUTTONS["confirm"])
         if pick is not None and confirm is not None:
             if self.buy_stalled("游戏厅", money, (pick["attr"], pick["price"])):
                 self.log_warning(
@@ -1014,6 +1083,48 @@ class WeekendHandlers:
                 return True
         return False
 
+    # 「扭蛋增强！」彩色爆炸标签与「步行街」名字框的相对位置（比例）。
+    # 实测 10 张真实地图帧（logs/events/1031-173714 / 1031-194957 / 1101-150917 等，
+    # 1549x871）几何高度一致：
+    #   标签 box=(597,669,225,71)  cx=0.457 cy=0.809
+    #   步行街 box=(810,722,126,50) cx=0.564 cy=0.858
+    #   → Δcx=0.105~0.107（标签在名字**左边**）、Δcy=0.048~0.049（标签在名字**上方**）
+    # 所以判「标签在步行街名字的左上方」：Δcx ≤ 0.20 且 Δcy ≤ 0.12，
+    # 并且标签中心必须在名字中心的**左边**（tcx < cx）。
+    STREET_BOOST_DX = 0.20
+    STREET_BOOST_DY = 0.12
+
+    def venue_has_street_boost(self, texts, label_box):
+        """步行街名字框的**左上方**有没有「扭蛋增强！」标签。
+
+        2026-11-01 修：原来只 `match_text(texts, ("扭蛋增强","扭蛋加强"))` ——
+        全屏出现这四个字就生效，不看它贴在哪。于是别处只要出现同样的字
+        （比如队友台词、别的界面的说明文字），就会误判成「步行街有加成」
+        → 不管钱和队友直进步行街。
+
+        现在连**位置**一起判（和 `venue_on_discount` 同一套路）：
+        标签必须贴着步行街名字的左上方（Δcx ≤ 0.20、Δcy ≤ 0.12、且在左边）。
+        实测 10 张真实帧的 Δcx=0.105~0.107 / Δcy=0.048~0.049，阈值留了 2 倍余量。
+        """
+        if label_box is None:
+            return False
+        cx = label_box.x + label_box.width / 2
+        cy = label_box.y + label_box.height / 2
+        for t in texts or []:
+            name = t.name.strip()
+            if not any(k in name for k in labels.STREET_BOOST_TEXTS):
+                continue
+            tcx = t.x + t.width / 2
+            tcy = t.y + t.height / 2
+            if tcx >= cx:                      # 必须在名字左边
+                continue
+            if abs(tcx - cx) / self.width > self.STREET_BOOST_DX:
+                continue
+            if abs(tcy - cy) / self.height > self.STREET_BOOST_DY:
+                continue
+            return True
+        return False
+
     def _venue_box(self, texts, place):
         """地点名对应的文本框（整词优先，其次 ≤4 字的短框）。"""
         box = self.exact_text(texts, (place,))
@@ -1059,7 +1170,9 @@ class WeekendHandlers:
         if mode == "扭蛋流":
             # 2026-10-30 用户截图（第5周周五）：步行街上方出现彩色爆炸标签
             # 「扭蛋增强！」时，**不管有没有队友都先进步行街**。
-            if self.match_text(texts, ("扭蛋增强", "扭蛋加强")):
+            # 2026-11-01：连位置一起判（`venue_has_street_boost`）——
+            # 这个标签只贴在步行街左上角，别处出现同样字眼不算。
+            if self.venue_has_street_boost(texts, self._venue_box(texts, "步行街")):
                 self.log_info("周末地点：步行街有「扭蛋增强！」"
                               "→ 不管队友，先进步行街")
                 return ["步行街"] + [p for p in places if p != "步行街"]
@@ -1124,7 +1237,7 @@ class WeekendHandlers:
         # 只靠地点名会把首页当地图：点中台词 → 误 mark_visited → todo 空 → 点右上角。
         if self.match_text(texts, "出行") is not None:
             return False
-        if not self.match_text(texts, Defs.WEEKEND_PLACES):
+        if not self.match_text(texts, labels.WEEKEND_PLACES):
             return False
         st = self.weekend_state()
         visited = st.setdefault("visited", set())
@@ -1136,6 +1249,13 @@ class WeekendHandlers:
         # 今天已经去过的地方不再进：游戏厅没有可跳过的小游戏时会退回地图，
         # 不记录「已去过」就会来回进出游戏厅（2026-10-26 实训）。
         todo = [p for p in places if p not in visited]
+        # 2026-11-01 15:09：步行街**试过**（不管买没买成）就不再进第二次。
+        # 只按 `visited` 排除不够：买不到时如果不记 visited，会出现
+        # 「进步行街 → 失败 → 回地图 → 又点步行街」的无限循环。
+        # 买没买成由 `gacha_spent` 决定（买成了就不去餐厅打工，没买成就去）。
+        tried = st.setdefault("gacha_tried", set())
+        if "步行街" in tried and "步行街" in todo:
+            todo.remove("步行街")
         if not todo:
             # 地点都去过：停在周末地图上什么都不会发生（2026-10-26 卡死：
             # 地图被 story_arrow 当成剧情页连点 ▼，反复 50 秒）。

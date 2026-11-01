@@ -129,8 +129,8 @@ class _Actions(MonitorActions):
     def toggle_capture(self):
         self.tab.toggle_capture()
 
-    def toggle_run(self):
-        self.tab.toggle_run()
+    def toggle_connection(self):
+        self.tab.toggle_connection()
 
     def set_skill(self, key, value):
         self.tab.set_skill(key, value)
@@ -138,20 +138,8 @@ class _Actions(MonitorActions):
     def set_quick_match(self, enabled):
         self.tab.set_quick_match(enabled)
 
-    def set_auto_training(self, enabled):
-        self.tab.set_auto_training(enabled)
-
-    def start_auto_training(self):
-        self.tab.start_auto_training()
-
-    def stop_auto_training(self):
-        self.tab.stop_auto_training()
-
-    def pause_current(self):
-        self.tab.pause_current()
-
-    def stop_current(self):
-        self.tab.stop_current()
+    def toggle_auto_training(self):
+        self.tab.toggle_auto_training()
 
 
 class MonitorTab(CustomTab):
@@ -434,7 +422,7 @@ class MonitorTab(CustomTab):
         if name:
             try:
                 from src.tasks.training.constants import STYLE_BY_NAME
-                from src.tasks.ui.Defs import name_matches
+                from src.tasks.ui.labels import name_matches
                 for full, style in STYLE_BY_NAME.items():
                     if name_matches(name, full):
                         return style

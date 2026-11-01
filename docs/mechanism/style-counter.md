@@ -55,4 +55,4 @@
 |---|---|
 | `docs/roster/ssr_roster.json` | 18 个 SSR：`style` / `counters` / `countered_by` |
 | `tools/collect_ssr.py` | `style_of()` 按名字右侧图标取色判风格 |
-| `src/tasks/training/parsers.py` | `card_quality_at()` 同一套色相阈值（扭蛋/游戏厅卡片品质） |
+| `src/tasks/training/parsers.py` | `card_quality_at()` 同一套色相阈值（扭蛋/游戏厅卡片品质）；扭蛋卡头另外先认**彩虹**（`band_is_rainbow`，2026-11-01 彩色扭蛋） |

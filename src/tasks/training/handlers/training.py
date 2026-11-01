@@ -9,7 +9,7 @@ import time
 
 from ok.feature.Box import Box
 
-from src.tasks.ui import Defs  # noqa: F401
+from src.tasks.ui import labels
 
 
 class TrainingHandlers:
@@ -45,10 +45,10 @@ class TrainingHandlers:
         """
         if self.match_text(texts, "训练计划") is not None:
             return False
-        if self.match_text(texts, Defs.VACATION_TEXTS) is None:
+        if self.match_text(texts, labels.VACATION_TEXTS) is None:
             return False
 
-        confirm = self.match_text(self._ocr_region("confirm"), Defs.CONFIRM_TEXTS)
+        confirm = self.match_text(self._ocr_region("confirm"), labels.CONFIRM_TEXTS)
         if confirm is not None:
             self.click_box(confirm, after_sleep=0.5)
             self.log_info("度假：决定")
@@ -108,7 +108,7 @@ class TrainingHandlers:
             return False
         # 度假/海边合宿页也有「星期 + 休息」，但左上角不是日历：
         # 2026-10-29 实跑 16:41 就在度假页点了左上角（什么都没发生，白烧一次机会）。
-        if self.match_text(texts, Defs.VACATION_TEXTS) is not None:
+        if self.match_text(texts, labels.VACATION_TEXTS) is not None:
             return False
         if (self.match_text(texts, "星期") is None
                 or self.match_text(texts, "休息") is None):
@@ -246,7 +246,7 @@ class TrainingHandlers:
           训练时触发属性暴击 —— 这是最高优先级的加分项。
         """
         subjects = self.texts_in_region(texts, "subject_list")
-        if self.match_text(subjects, Defs.TRAINING_SUBJECTS) is None:
+        if self.match_text(subjects, labels.TRAINING_SUBJECTS) is None:
             return False
         # 训练科目页铁定有「失败率」；商店右栏也有「防守秘籍+/防守+40」，
         # 只按科目名匹配会把商店当成科目页（实训 2026-10-26，400 步全耗在商店里）。
@@ -261,7 +261,7 @@ class TrainingHandlers:
 
         # 已经点过「决定」但界面还没切走：补点决定，别重新探测一遍
         if time.monotonic() - getattr(self, "_subject_confirmed_at", 0) < 2.0:
-            if self.click_text(("决定",), after_sleep=0.6, must=False):
+            if self.click_button("decide", after_sleep=0.6, must=False):
                 return True
 
         fail = self.read_fail_rate(texts)
@@ -370,7 +370,7 @@ class TrainingHandlers:
             if box is not None:
                 self.click_box(box, after_sleep=0.45)
 
-        if not self.click_text(("决定",), after_sleep=0.8, must=False):
+        if not self.click_button("decide", after_sleep=0.8, must=False):
             box = self.find_subject_box(name)
             if box is not None:
                 self.click_box(box, after_sleep=0.6)
@@ -508,8 +508,8 @@ class TrainingHandlers:
         if self.match_text(texts, "加强训练") is None:
             return False
 
-        rates = [t for t in texts if Defs.PERCENT_RE.match(t.name.strip())]
-        gains = [t for t in texts if Defs.GAIN_RE.match(t.name.strip())]
+        rates = [t for t in texts if labels.PERCENT_RE.match(t.name.strip())]
+        gains = [t for t in texts if labels.GAIN_RE.match(t.name.strip())]
         if not rates:
             # 2026-10-30：这一版加强训练是**文字效果**（「训练等级提升 / 精力提升+30」），
             # 没有百分比。以前直接点「确定」= 吃默认（正好是回精力那张）。
@@ -525,10 +525,10 @@ class TrainingHandlers:
                               + "｜".join(f"{c['label']}={c['score']:.0f}"
                                           for c in cards)
                               + f" → 选「{best['label']}」")
-                self.click_text(("确定",), after_sleep=0.6, must=False)
+                self.click_button("confirm", after_sleep=0.6, must=False)
                 return True
             # 实在认不出卡片：不盲点卡片，先按默认选择点「确定」，下一拍再判
-            self.click_text(("确定",), must=False)
+            self.click_button("confirm", must=False)
             return True
 
         def cluster(items, tol=0.08):
@@ -554,14 +554,14 @@ class TrainingHandlers:
         for cx, group in rate_cols:
             # 同一列里取字号最大的那个（大号才是卡片主数字）
             rate_box = max(group, key=lambda b: b.height)
-            p = int(Defs.PERCENT_RE.match(rate_box.name.strip()).group(1))
+            p = int(labels.PERCENT_RE.match(rate_box.name.strip()).group(1))
             gain = None
             if gain_cols:
                 _gcx, ggroup = min(gain_cols, key=lambda c: abs(c[0] - cx))
                 if abs(_gcx - cx) < 0.20:
                     gain_box = max(ggroup, key=lambda b: b.height)
                     gain = gain_box
-            v = int(Defs.GAIN_RE.match(gain.name.strip()).group(1)) if gain else p
+            v = int(labels.GAIN_RE.match(gain.name.strip()).group(1)) if gain else p
             picks.append((v * p / 100.0, v, p, cx))
         if not picks:
             return False
@@ -580,7 +580,7 @@ class TrainingHandlers:
         # 点**卡片正中**：只点成功率文字框（在卡片顶部）实测会落在两卡之间偏上的位置
         # （用户 2026-10-27 录屏：两张卡中间出现了一次多余点击）。
         self.click(int(card_cx * self.width), int(self.height * 0.5), after_sleep=0.35)
-        self.click_text(("确定",), after_sleep=0.6)
+        self.click_button("confirm", after_sleep=0.6)
         detail = "  ".join(f"{pp}%/+{vv}={e:.0f}" for e, vv, pp, _cx in picks)
         self.log_info(f"加强训练：{detail} → 选 {p}%/+{v}")
         return True

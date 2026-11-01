@@ -16,6 +16,7 @@ from ok import BaseTask, og
 
 from src.tasks.attempt import AttemptSupport
 from src.tasks.ui import Defs
+from src.tasks.ui import labels
 
 
 class BaseGirlsTask(AttemptSupport, BaseTask):
@@ -287,14 +288,54 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
     # ---------- 文字 ----------
 
     def _ocr_region(self, region_name=None, box=None, frame=None):
-        """对某一帧做 OCR。传 frame 就只认这一帧（和存证图保持同一时刻）。"""
+        """对某一帧做 OCR。传 frame 就只认这一帧（和存证图保持同一时刻）。
+
+        返回前先滤掉「顶栏图标被读成的假汉字」（见 `drop_icon_noise`）。
+        """
         if box is None and region_name:
             box = self.box_of_screen(*Defs.region(region_name))
         try:
-            return self.ocr(box=box, frame=frame) or []
+            return self.drop_icon_noise(self.ocr(box=box, frame=frame) or [])
         except Exception as e:
             self.log_debug(f"ocr failed: {e}")
             return []
+
+    def drop_icon_noise(self, texts):
+        """丢掉顶栏图标被 OCR 读成的假汉字：`早三 / 昆三 / 数目三 / 教早三 …`。
+
+        用户 2026-11-01（两次）：「那不是字，是**历史记录**和**菜单**两个图标」。
+        OCR 会把它们硬读成 2~4 个汉字，置信度只有 0.50~0.80，全仓库累计上万次，
+        而且会把「整段拼接」类判据（`match_text` 找子串）搞脏。
+
+        判据两条一起用，避免误伤真文本（三分威 / 三张卡 / 事件三选一 / 三倍经 / 降序三）：
+          1) 整串匹配 `labels.ICON_NOISE_RE`（`^[战成议数…]{0,3}三(色|包|星)?$`）；
+          2) 并且「落在右上角图标带里」或「置信度 < 0.90」。
+        过滤点选在 `_ocr_region`（全项目唯一的 OCR 出口）：
+        handler、`_tick_texts`、存证 dumps 里的 `ocr.txt` 就都干净了。
+        """
+        if not texts:
+            return texts
+        x1, x2, y1, y2 = Defs.ICON_NOISE_BAND
+        out = []
+        dropped = 0
+        for t in texts:
+            s = (getattr(t, "name", "") or "").replace(" ", "")
+            if s and labels.ICON_NOISE_RE.match(s):
+                cx = (t.x + t.width / 2) / max(self.width, 1)
+                cy = (t.y + t.height / 2) / max(self.height, 1)
+                in_band = x1 <= cx <= x2 and y1 <= cy <= y2
+                low_conf = getattr(t, "confidence", 1.0) < Defs.ICON_NOISE_CONF
+                if in_band or low_conf:
+                    dropped += 1
+                    continue
+            out.append(t)
+        if dropped:
+            # 只在**数量变了**时打一行（每拍都打就变回噪声了）
+            key = (dropped, len(out))
+            if getattr(self, "_icon_noise_key", None) != key:
+                self._icon_noise_key = key
+                self.log_debug(f"OCR 噪声：已丢掉 {dropped} 个图标假汉字（历史记录/菜单）")
+        return out
 
     # 大厅子菜单页（强化 / 招募 / 卡池…）：玩家自己点进去的界面，**任务不该动它们**。
     # 2026-10-28 用户反馈：跑着任务时在大厅点进「强化」，脚本一直替他点升级卡；
@@ -415,7 +456,7 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         if not s or len(s) > 6:
             return False
         up = s.upper()
-        return any(up.startswith(w.upper()) for w in Defs.DECOR_WORDS)
+        return any(up.startswith(w.upper()) for w in labels.DECOR_WORDS)
 
     def find_text(self, names, region_name=None, box=None):
         """找文字并返回**真实文本框**。
@@ -449,6 +490,69 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         self.click_box(target, after_sleep=after_sleep)
         self.log_info(f"点击「{target.name}」")
         return True
+
+    def click_button(self, key, texts=None, after_sleep=0.6, must=True):
+        """点一个**按钮**：`labels.BUTTONS[key]` + 全等匹配 + 点真实文本框。
+
+        为什么必须有这条唯一入口（2026-11-01）：
+            全仓 188 个文本匹配调用点里 153 处把按钮文案写死在调用处，同一个「确定」
+            在 A 页用 `exact_text`（全等）、在 B 页用 `click_text`（包含）——
+            10-26「点休息 → 确认框 → 点到对话框标题『休息』」、
+            10-25「找决定命中正文『…决定通过…』」都是这么来的。
+            集中表没有入口就只是个常量池，所以「数据 + 动作」绑在这里。
+
+        规则：按钮用本方法（全等）；判断「在不在这一页」用 `match_text`（包含）。
+        key 传字符串查 `labels.BUTTONS`；也可以直接传一串文案（临时/实验用，仍走全等）。
+        返回 True 表示点到了。
+
+        注意 `must`：按钮认不出来是否要 `log_warning`。要不要兜底由调用处决定
+        （有些页面认不到按钮时可以退回坐标点击，见 weekend.close_activity_detail）。
+        """
+        names = labels.BUTTONS[key] if isinstance(key, str) else tuple(key)
+        pool = self._ocr_region() if texts is None else texts
+        target = self.exact_text(pool, names)
+        if target is None and isinstance(key, str) and key in labels.OCR_LOSSY:
+            # 掉字兜底（只给 OCR_LOSSY 里声明过的键）：OCR 把「下一步」读成「下一」时
+            # 全等必然失败，这里按前缀 + 长度上限找，并留一条 warning 便于复盘。
+            prefix, max_len = labels.OCR_LOSSY[key]
+            target = next((t for t in pool
+                           if t.name.strip().startswith(prefix)
+                           and len(t.name.strip()) <= max_len), None)
+            if target is not None:
+                self.log_warning(f"按钮「{names[0]}」可能掉字，按前缀「{prefix}」兜底："
+                                 f"读到的是「{target.name.strip()}」")
+        if target is None:
+            if must:
+                self.log_warning(f"没找到按钮「{names[0]}」（BUTTONS[{key}]）")
+            return False
+        self.click_box(target, after_sleep=after_sleep)
+        self.log_info(f"点击按钮「{target.name.strip()}」")
+        return True
+
+    def click_button_and_expect(self, key, expect, texts=None, timeout=8.0):
+        """点一个按钮，然后等「下一页该出现的文字」出现（`click_and_expect` 的按钮版）。
+
+        为什么单独一个方法：入口流程里「点下一步 → 等选择队友」有 4 处，
+        以前都写成 `click_text_and_expect(self._ocr_region(), "下一步", (...))`，
+        那是**包含**匹配；现在统一走 labels.BUTTONS + 全等，掉字时由 OCR_LOSSY 兜底。
+        """
+        names = labels.BUTTONS[key] if isinstance(key, str) else tuple(key)
+        pool = self._ocr_region() if texts is None else texts
+        target = self.exact_text(pool, names)
+        if target is None and isinstance(key, str) and key in labels.OCR_LOSSY:
+            prefix, max_len = labels.OCR_LOSSY[key]
+            target = next((t for t in pool
+                           if t.name.strip().startswith(prefix)
+                           and len(t.name.strip()) <= max_len), None)
+            if target is not None:
+                self.log_warning(f"按钮「{names[0]}」可能掉字，按前缀「{prefix}」兜底："
+                                 f"读到的是「{target.name.strip()}」")
+        if target is None:
+            self.log_warning(f"没找到按钮「{names[0]}」（BUTTONS[{key}]）")
+            return False
+        return self.click_and_expect(int(target.x + target.width / 2),
+                                     int(target.y + target.height / 2),
+                                     expect, timeout=timeout)
 
     def click_and_expect(self, x, y, expect, timeout=5.0, poll=0.5):
         """点一下，然后等「下一页该出现的文字」出现。
@@ -508,9 +612,9 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         joined = " ".join(t.name for t in texts)
         state = {"week": None, "day": None, "stamina": None, "stamina_max": None, "coin": None}
 
-        if m := Defs.WEEK_RE.search(joined.replace(" ", "")):
+        if m := labels.WEEK_RE.search(joined.replace(" ", "")):
             state["week"] = int(m.group(1))
-        if m := Defs.DAY_RE.search(joined.replace(" ", "")):
+        if m := labels.DAY_RE.search(joined.replace(" ", "")):
             state["day"] = "日" if m.group(1) == "天" else m.group(1)
 
         best = None
@@ -518,7 +622,7 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
             name = t.name.replace(" ", "")
             if "/" not in name:
                 continue
-            if not (m := Defs.STAMINA_RE.search(name)):
+            if not (m := labels.STAMINA_RE.search(name)):
                 continue
             digits, mx = m.group(1), int(m.group(2))
             cur = int(digits)
@@ -654,12 +758,12 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
 
     def dismiss_popup(self):
         """关掉公告/领奖/月卡这类弹窗。返回是否处理了。"""
-        if self.click_text(Defs.POPUP_TEXTS, "dialog", after_sleep=0.8, must=False):
+        if self.click_text(labels.POPUP_TEXTS, "dialog", after_sleep=0.8, must=False):
             return True
         return False
 
     def in_weekend_map(self):
-        return bool(self.find_text(Defs.WEEKEND_PLACES[:2], "weekend_map"))
+        return bool(self.find_text(labels.WEEKEND_PLACES[:2], "weekend_map"))
 
     def in_prepare_page(self):
         return bool(self.find_text(("跳过比赛", "前往比赛"), "result_page"))

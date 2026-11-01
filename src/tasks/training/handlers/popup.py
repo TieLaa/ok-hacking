@@ -15,7 +15,7 @@ from collections import deque
 import cv2
 import numpy as np
 
-from src.tasks.ui import Defs  # noqa: F401
+from src.tasks.ui import labels
 from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 
 
@@ -27,11 +27,11 @@ class PopupHandlers:
         必须排在 handle_popup 之前。旧逻辑把「取消」当通用弹窗关闭词，
         结果点了休息→确认框→点取消→再点休息，永远休息不了（实训 2026-10-26）。
         """
-        if self.match_text(texts, Defs.REST_CONFIRM_TEXTS) is None:
+        if self.match_text(texts, labels.REST_CONFIRM_TEXTS) is None:
             return False
         # 按钮是 [取消] [确认]；**不能**整词匹配「休息」——左上角标题就叫「休息」，
         # 点了等于点对话框标题，什么都不发生（2026-10-26 实训卡死）。
-        target = self.exact_text(texts, ("确定", "确认"))
+        target = self.exact_text(texts, labels.BUTTONS["confirm"])
         if target is None:
             bottom = [t for t in texts
                       if t.name.strip() == "休息"
@@ -59,7 +59,7 @@ class PopupHandlers:
             wipe = self.exact_text(texts, ("删档",))
             if wipe is not None:
                 self.click_box(wipe, after_sleep=0.9)
-                confirm = self.exact_text(self._ocr_region(), ("确定", "确认"))
+                confirm = self.exact_text(self._ocr_region(), labels.BUTTONS["confirm"])
                 if confirm is not None:
                     self.click_box(confirm, after_sleep=0.9)
                 self.log_info("训练确认：删档 → 开新的一局")

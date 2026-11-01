@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 from src.tasks.ui import Defs  # noqa: F401
+from src.tasks.ui import labels
 from src.tasks.ui import topbar
 from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 
@@ -174,7 +175,7 @@ class MatchHandlers:
             self.click_box(nxt_match, after_sleep=0.6)
             self.log_info("赛程：下一场")
             return True
-        if self.match_text(texts, (Defs.RESULT_TITLE_RE,)) is None:
+        if self.match_text(texts, (labels.RESULT_TITLE_RE,)) is None:
             return False
         nxt = self.match_text(texts, "下一步")
         if nxt is not None:
@@ -238,9 +239,9 @@ class MatchHandlers:
 
         只在「训练日主界面 / 赛前准备」这两个确定安全的时机调用，避免在结算页、商店页乱点顶栏。
         """
-        if self.match_text(texts, Defs.WEEK_RE) is None:
+        if self.match_text(texts, labels.WEEK_RE) is None:
             return False
-        week_m = Defs.WEEK_RE.search("".join(t.name for t in texts).replace(" ", ""))
+        week_m = labels.WEEK_RE.search("".join(t.name for t in texts).replace(" ", ""))
         week = int(week_m.group(1)) if week_m else None
 
         label, at_max, off = self.speed_level(texts)
@@ -428,7 +429,7 @@ class MatchHandlers:
         # **必须整词**：弹窗正文「成为注册球员后…」里的「注册球员」不算，
         # 否则会点在弹窗背后的「下一步」（2026-10-28 18:17 空烧 890 拍）。
         if self.exact_text(texts, ("注册球员", "球员登录", "签约", "入部申请")) is not None:
-            target = self.exact_text(texts, ("下一步",))
+            target = self.exact_text(texts, labels.BUTTONS["next"])
             if target is None:
                 # OCR 偶尔把「下一步」读成「下一」（丢字），按前缀兜底
                 target = next((t for t in texts
@@ -507,8 +508,8 @@ class MatchHandlers:
 
         # 5) 更新最高队伍等级弹窗：关闭
         if (self.match_text(texts, "更新最高队伍等级") is not None
-                and self.exact_text(texts, ("关闭",)) is not None):
-            target = self.exact_text(texts, ("关闭",))
+                and self.exact_text(texts, labels.BUTTONS["close"]) is not None):
+            target = self.exact_text(texts, labels.BUTTONS["close"])
             self.click_box(target, after_sleep=0.6)
             self._register_stage = "closed"
             self.log_info("注册球员 5/6：关闭升级弹窗")
@@ -630,7 +631,7 @@ class MatchHandlers:
             # 等拿到真帧再按证据加。
             gem = 1 if self.skill_card_item_gem(cx_of(i), cy_of(i)) else 0
             score = gem * 100 + quality * 10 + has_pref
-            detail.append(f"{i + 1}:{Defs.QUALITY_LABEL[quality]}/标签{has_pref}"
+            detail.append(f"{i + 1}:{labels.QUALITY_LABEL[quality]}/标签{has_pref}"
                           f"/道具{gem}({getattr(self, '_gem_ratio', 0):.3f})")
             if score > best_score:
                 best_idx, best_score, best_quality = i, score, quality
@@ -639,7 +640,7 @@ class MatchHandlers:
 
         cx, cy = Defs.SKILL_CARDS[best_idx]
         self.click(int(self.width_of_screen(cx)), int(self.height_of_screen(cy)), after_sleep=0.4)
-        confirm = self.find_text(("确定", "确认"))
+        confirm = self.find_text(labels.BUTTONS["confirm"])
         if confirm is not None:
             self.click_box(confirm, after_sleep=0.5)
             self.log_info("技能：确定")
@@ -653,7 +654,7 @@ class MatchHandlers:
             gained = {"color": 0, "gold": 0, "white": 0}
         gained[key] = int(gained.get(key, 0)) + 1
         self.info["skill_gained"] = gained
-        self.info["skill_last"] = Defs.QUALITY_LABEL.get(best_quality, "白")
+        self.info["skill_last"] = labels.QUALITY_LABEL.get(best_quality, "白")
         self.log_info(
             f"技能+1（{self.info['skill_last']}）本局累计："
             f"彩{gained['color']} 金{gained['gold']} 白{gained['white']}")
@@ -808,7 +809,7 @@ class MatchHandlers:
                                    "当服务员", "桌游", "扭蛋")) is not None:
             return False
         # 周末地图：地点名是导航，不是选项（2026-10-26 把「游戏厅/公园」当选项点了）。
-        if len([t for t in texts if t.name.strip() in Defs.WEEKEND_PLACES]) >= 2:
+        if len([t for t in texts if t.name.strip() in labels.WEEKEND_PLACES]) >= 2:
             return False
         # 训练科目页也有黄色卡片（器材卡）和底部属性面板，但它们不是选项。
         # 科目页必有「失败率」，并且「决定」是**独立的按钮框**（实训 2026-10-26）。
@@ -817,7 +818,7 @@ class MatchHandlers:
         # 把事件页当成科目页直接 return False，结果 3 次点屏幕中央没反应、卡死停止。
         if self.match_text(texts, "失败率") is not None:
             return False
-        if self.exact_text(texts, ("决定",)) is not None:
+        if self.exact_text(texts, labels.BUTTONS["decide"]) is not None:
             return False
         if self.match_text(texts, ("上新时间", "能力详情")) is not None:
             return False
@@ -992,7 +993,7 @@ class MatchHandlers:
             name_box = max(names, key=lambda t: t.height) if names else None
             name = name_box.name.strip() if name_box else "?"
             ev = self._effect_ev(effects)
-            attrs = any(any(a in t.name for a in Defs.TRAINING_SUBJECTS)
+            attrs = any(any(a in t.name for a in labels.TRAINING_SUBJECTS)
                         for t in effects)
             # 「纯回精力」= 只补体力、不加任何六维属性。带属性的（「精力+10，投射+5」）不算，
             # 否则会把好选项也一起排除掉。

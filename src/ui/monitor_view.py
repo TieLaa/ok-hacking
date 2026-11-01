@@ -666,7 +666,7 @@ class MonitorView(QWidget):
         # 表里写「亚理纱·贾斯敏」），再按归一化后的包含关系找一遍，
         # 否则下拉框会空着/跳回第一个，看着像「没匹配上」。
         try:
-            from src.tasks.ui.Defs import name_matches
+            from src.tasks.ui.labels import name_matches
         except Exception:  # noqa: BLE001
             return -1
         for i in range(len(combo.items)):

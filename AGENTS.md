@@ -24,6 +24,14 @@
 
 - 业务代码只放 `src/tasks/training/`（flow / parsers / scoring / handlers），`tools/` 只放运维脚本，禁止写游戏业务判据。细则见 `docs/ENGINEERING.md`。
 - 改 handler 判据或顺序后必须跑 `python tools/check_handlers.py --cache`，exit 0 才能提交；新截图先 `--update-expected` 再人工确认。
+- **跑 Python 命令前固定 UTF-8 环境。** 本机系统码页是 936（GBK），且 `pwsh -NoProfile`（OpenCode 等工具以此启动）不读 `$PROFILE`。Python 的 stdout 一旦是管道就按 CP936 编码，`check_handlers.py` 里的 `✓` 会抛 `UnicodeEncodeError` 让脚本 exit 1——**判据其实没坏，是打印字符崩的**，别误判成回归失败。非交互调用前先设：
+
+  ```powershell
+  $env:PYTHONUTF8 = "1"
+  [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+  ```
+
+  本机交互式终端的同等设置已在 `$PROFILE` 里，这一条只覆盖非交互和跨机场景。
 - **MCP 开发循环**（ok-script 2.0.16+）：改已注册任务用 `list_tasks` → 原地改源码 → `reload_tasks(task_ids)` → 用 `tools/mcp/probe.py` / `training.py` 验证，不要重启 GUI。任务类必须保持 `reset_to_start` / `verify_start_state` 可用（`src/tasks/attempt.py`），业务逻辑不复制进 harness。流程见 `docs/MCP_DEV.md`。
 - 踩到新坑时，把「下次该怎么说」补进 `docs/PROMPT_PLAYBOOK.md`，不要只改代码。
 
