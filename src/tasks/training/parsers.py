@@ -31,6 +31,37 @@ from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,  # noqa: F4
 # 所以两者都取 0.20 作下限，金框再加「明显高于其它行中位数」这一条。
 GOLD_RING_MIN = 0.20
 GOLD_RING_FACTOR = 2.0
+# 金框像素的**颜色**判据（2026-11-02，用户报「最后一个意识有金框没识别到」）。
+#
+# 事故复盘（最后一局 23:59:57，日志原文）：
+#     科目金框：意识 占比 0.274，其它行中位数 0.229
+#     探测「意识」：… 金框 0 …
+# 绝对门限 0.20 其实**已经过了**（0.274 > 0.20），是被「必须 > 2×其它行中位数」
+# 这条相对判据挡掉的：0.229 × 2 = 0.458 > 0.274。
+#
+# 为什么会冒出 0.229 这么高的基线？度假页（第 4 周海边合宿那套界面）里
+# **科目按钮本身就是橙黄色的 MAX 按钮**，采样区整块命中橙色，
+# 把「其它行中位数」抬到了 0.229 —— 这时候「2 倍基线」这条间接判据就必然误杀。
+#
+# 正解是**按颜色分开**，而不是靠基线比大小。离线统计（441 张存证帧 / 2422 个科目行，
+# scripts 见 logs/_eval_final.py）：
+#     橙黄按钮体 RGB≈(255,171,93)  H=13~21  S≈125~175
+#     真金框       RGB≈(255,225,95)  H=18~31  S≈135~235
+# G 通道分得最开：按钮体 G≈171，真金框 G≈221~227。
+# 所以金色像素额外要求 **G >= 200**（把橙黄的 171 挡在门外），
+# 色相下限收到 18（真金框像素的 98% 都在 H>=18）。
+#
+# 效果（同一批 2422 行）：
+#     现行 hue>=8          → ratio>0.20 的行 295 行，基线中位数最大 0.218
+#     改后 hue>=18 & G>=200 → ratio>0.20 的行 4 行（**全是已知真金框**），
+#                            基线中位数最大 0.071，噪声上界 0.114
+# 绝对门限仍是 0.20（真金框在新口径下是 0.219~0.284）。
+GOLD_PIX_HUE_MIN = 18
+GOLD_PIX_G_MIN = 200
+# 「整页大多数科目行都过绝对门限」→ 判定为界面整体偏色（不是某一科目的金框）。
+# 取 max(2, 行数//2)：6 个科目时需要 ≥3 行同时过门限才算「整页都这样」。
+# 单行/双行同时有金框是正常情况（每个科目各自升级），不能因此误杀。
+GOLD_PAGE_WIDE_MIN = 2
 # 彩框（2026-10-31 两次重标定，见 has_crit_border 的 docstring）：
 #   ① 采样半窗 0.060h → 0.050h：旧半窗下噪声行（选中态/图标）能到 0.15~0.23，
 #      与门限 0.20 重叠，日志里凭空多出一个彩框；收到 0.050h 后同一批存盘帧是
@@ -57,7 +88,7 @@ RAINBOW_BAND_MIN_BINS = 3
 RAINBOW_BAND_BIN_FRAC = 0.10
 RAINBOW_BAND_MAX_TOP = 0.70
 # 代码版本戳（run() 会打到日志里）：排查「改完不生效」时一眼看出跑的是哪份代码
-CODE_VERSION = "2026-11-01b"
+CODE_VERSION = "2026-11-02a"
 
 
 def ring_is_border(ratio, baseline=None, floor=GOLD_RING_MIN,
@@ -1207,6 +1238,13 @@ class TrainingParsersMixin:
         旧门限 0.10 把整批高亮都当成了金框（21 次选科目报了 13 次，用户指出
         「刚才没有金框」）。真彩虹框同一套环形采样是 0.333，0.20 能把
         「选中高亮」和「真外圈」分开；倍数条件同步抬到 2.0。
+
+        2026-11-02 修订（用户：「刚才最后一次的训练，最后一个意识有金框，没识别到」）：
+        上面那条「2 倍基线」的相对判据**在度假页会误杀真金框** ——
+        那一局「意识」占比 0.274 已过绝对门限，却因为基线被橙黄按钮抬到 0.229
+        （需要 ≥0.458）被判成无框。改成**按颜色分开**：
+        金色像素额外要求 G>=200（橙黄按钮体 G≈171，真金框 G≈221+）、
+        色相下限 18。详见 GOLD_PIX_HUE_MIN / GOLD_PIX_G_MIN 的注释。
         """
         frame = self.frame
         if frame is None:
@@ -1247,7 +1285,12 @@ class TrainingParsersMixin:
                 return 0.0
             hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
             hue, sat, val = cv2.split(hsv)
-            gold = (sat > 110) & (val > 150) & (hue >= 8) & (hue <= 42)
+            blue, green, _red = cv2.split(roi)
+            # 颜色判据见 GOLD_PIX_HUE_MIN / GOLD_PIX_G_MIN 的注释：
+            # 橙黄按钮体 G≈171，真金框 G≈221+，用 G 通道把两者分开。
+            gold = ((sat > 110) & (val > 150)
+                    & (hue >= GOLD_PIX_HUE_MIN) & (hue <= 42)
+                    & (green >= GOLD_PIX_G_MIN))
             ring = np.zeros(roi.shape[:2], dtype=bool)
             ring[:t_ring, :] = True
             ring[-t_ring:, :] = True
@@ -1259,14 +1302,29 @@ class TrainingParsersMixin:
         others = sorted(ring_gold_ratio(s.y + s.height / 2)
                         for s in subjects if s is not target)
         baseline = others[len(others) // 2] if others else 0.0
+        # 过绝对门限的行数（用来识别「整页都这个色」的情况）
+        over = [v for v in ([ratio] + others) if v > GOLD_RING_MIN]
+        # 2026-11-02 改判据：主判据改成**绝对门限 + 颜色**（见 GOLD_PIX_* 注释）。
+        # 「2 倍基线」这条相对判据降级成**兜底**：只有当整页大多数科目行都同时
+        # 过了绝对门限时，才认为这是「界面本身就这样」（例如度假页橙黄按钮），
+        # 而不是真金框。
+        # 为什么不能继续拿基线当主判据：① 度假页把基线抬到 0.229 → 误杀真金框
+        # （本次事故）；② 金框是**逐科目独立**的，物理上可能两行同时有金框，
+        # 那时中位数也跟着升高，又会误杀。两条都指向「别拿基线比大小」。
+        page_wide = len(over) >= max(GOLD_PAGE_WIDE_MIN, len(subjects) // 2)
         # 2026-10-29：金框在度假页也漏识别，占比与基线一直打出来（校准用）
         # 2026-11-01：`quiet=True` 原来是个**失效开关** —— 训练日选科目的候选扫描
         # （training.py:has_gold_border(..., quiet=True)）传了 True，函数体却从没读过它，
         # 于是 6 个科目×每拍的校准日志照刷。现在真的静音。
         if not quiet:
             self.log_debug(f"科目金框：{target.name.strip()} 占比 {ratio:.3f}，"
-                           f"其它行中位数 {baseline:.3f}")
-        return ring_is_border(ratio, baseline)
+                           f"其它行中位数 {baseline:.3f}，过门限 {len(over)}/{len(subjects)}")
+        if ratio <= GOLD_RING_MIN:
+            return False
+        if page_wide:
+            # 整页都过门限：不是「某一科目的金框」，是界面整体偏色
+            return False
+        return True
 
     def has_crit_border(self, texts=None, subject=None, quiet=False):
         """科目按钮外圈有没有彩虹边框（= 有满经验器材，训练会暴击）。
