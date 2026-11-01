@@ -612,38 +612,13 @@ class TrainingFlowMixin:
         return True
 
     def weekend_priority(self, day=None, st=None):
-        """今天该去的地点（顺序 = 优先级，前一个走完才轮到下一个）。
+        """今天该去的地点（有序）。
 
-        用户 2026-10-29 口径（见 docs/RULES.md 第 1 节）：
-        - 周六：训练流原设定（步行街 → 游戏厅 → 公园）；其他流派都去餐厅打工；
-        - 周日：训练流→公园、商店流→餐厅、扭蛋流→步行街→餐厅、小游戏流→游戏厅→餐厅。
-
-        「商店」是周末首页的按钮、不是地图上的地点，这里要过滤掉；
-        步行街 / 游戏厅仍是显式开关（没验证过内页，先别默认乱进）。
+        **判断已搬到 `training/places/map.py`**（地图 = 决策模块）：
+        行程表、扭蛋流的「先抽扭蛋再打工」、两个开关过滤都在那里。
+        这里保留旧名，让现有调用点不用改。
         """
-        if st is None:
-            st = self.day_state()
-        if day is None:
-            day = (st.get("date") or (None, None))[1]
-        # 读不到星期时按周六那一行兜底（每个流派都有定义）
-        places = list(WEEKEND_PLAN.get((day, self.style))
-                      or WEEKEND_PLAN.get(("六", self.style))
-                      or ["公园"])
-        # 2026-10-30 用户口径：扭蛋流（默认带野上泷，周五也有额外周末）先抽扭蛋，
-        # **今天没消费**才再去餐厅打工；已经买到东西就不去了。
-        if self.style == "扭蛋流" and day in ("五", "六", "日"):
-            places = ["步行街"]
-            if not st.get("gacha_spent"):
-                places.append("餐厅")
-        places = [p for p in places if p != "商店"]
-        if not self.config.get("允许进游戏厅"):
-            places = [p for p in places if p != "游戏厅"]
-        if not self.config.get("允许进步行街"):
-            places = [p for p in places if p != "步行街"]
-        # 兜底：开关全关/表里没这个组合时总得花掉一天，退化去公园。
-        if not places:
-            places = ["公园"]
-        return places
+        return self.today_places(day, st)
 
     def rest_threshold(self, day=None):
         """今天「精力低于多少就休息」。

@@ -413,8 +413,21 @@ def check_places():
         path = os.path.join(places_dir, f)
         src = open(path, encoding="utf-8").read()
         tree = ast.parse(src, filename=path)
+        # docstring 里说明「为什么」是**需要**写的（记录了具体事故），
+        # 所以只查**代码里真正用到的字符串**，不看文档。
+        docstrings = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                 ast.AsyncFunctionDef)):
+                body = getattr(node, "body", None)
+                if body and isinstance(body[0], ast.Expr) \
+                        and isinstance(body[0].value, ast.Constant) \
+                        and isinstance(body[0].value.value, str):
+                    docstrings.add(id(body[0].value))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if id(node) in docstrings:
                 continue
             text = node.value
             # 地点模块之间不许提别的地点名
@@ -428,7 +441,8 @@ def check_places():
                         f"地点模块之间不许互相知道（该由地图模块决定去哪个）")
     print("-" * 96)
     print(f"地点模块：跨地点引用 {len(problems)} 处"
-          f"（已归属 {len(owners)} 个地点模块）")
+          f"（已归属 {len(owners)} 个地点模块；决策模块 map.py 不算地点，"
+          f"它**就是**知道所有地点的那一层）")
     for p in problems:
         print("  ✗ " + p)
     return problems

@@ -1818,6 +1818,137 @@ class ConfigSpecRules(unittest.TestCase):
                       "json 里要有它（GUI 才能配上）")
 
 
+class PlaceModulesRules(unittest.TestCase):
+    """地点模块：每个地点只管自己的判断（2026-11-01 架构第 3 步）。
+
+    地点模块**只给判断，不点击**；互相之间不许知道对方
+    （「今天该去哪」是地图模块的职责）。
+    """
+
+    def test_all_five_places_have_modules(self):
+        """5 个地点 + 1 个决策模块（地图）都有独立模块。"""
+        from src.tasks.training import places
+        for name in ("StreetPlace", "RestaurantPlace", "ParkPlace",
+                     "ArcadePlace", "ShopPlace", "MapPlace"):
+            self.assertTrue(hasattr(places, name), name)
+
+    def test_each_place_declares_its_own_name(self):
+        """每个地点模块声明自己的地名（门禁靠它识别归属）。"""
+        from src.tasks.training.places import (arcade, park, restaurant, shop,
+                                              street)
+        self.assertEqual(street.PLACE, "步行街")
+        self.assertEqual(restaurant.PLACE, "餐厅")
+        self.assertEqual(park.PLACE, "公园")
+        self.assertEqual(arcade.PLACE, "游戏厅")
+        self.assertEqual(shop.PLACE, "商店")
+
+    def test_park_order_by_style_and_day(self):
+        """公园：训练流周日看体力，其它流派用配置项。"""
+        task = FakeTask([box(30, 20, "第1周", 120, 40), box(200, 20, "星期日", 130, 40),
+                         box(380, 16, "20/130", 210, 53)])
+        task._style = "训练流"
+        task.weekend_state()
+        order = task.park_order(task._texts, "训练流", day="日")
+        self.assertEqual(order[0], "野餐")      # 体力 20 < 60 → 野餐补精力
+
+        task2 = FakeTask([box(30, 20, "第1周", 120, 40), box(200, 20, "星期日", 130, 40),
+                          box(380, 16, "120/130", 210, 53)])
+        task2._style = "训练流"
+        task2.weekend_state()
+        order2 = task2.park_order(task2._texts, "训练流", day="日")
+        self.assertEqual(order2[0], "划船")      # 体力够 → 划船（属性+）
+
+        task3 = FakeTask([box(30, 20, "第1周", 120, 40), box(200, 20, "星期日", 130, 40)])
+        task3._style = "扭蛋流"
+        order3 = task3.park_order(task3._texts, "扭蛋流", day="日")
+        self.assertEqual(order3[0], "野餐")      # 其它流派用配置项（默认野餐）
+
+    def test_arcade_picks_free_card_first(self):
+        """游戏厅：免费（0 元）的卡优先拿（钱读不到也能买）。"""
+        from src.tasks.training.places.arcade import ArcadePlace
+        cards = [
+            {"attr": "投射", "hi": 100, "box": None, "auto": True, "price": 80,
+             "quality": "金", "hue": 0, "sat": 0, "mate": False},
+            {"attr": "弹跳", "hi": 70, "box": None, "auto": True, "price": 0,
+             "quality": "紫", "hue": 0, "sat": 0, "mate": False},
+        ]
+        task = FakeTask([])
+        pick, reason = task.pick_arcade_card(cards, money=None)
+        self.assertEqual(pick["attr"], "弹跳")
+        self.assertIn("免费", reason)
+
+    def test_arcade_skips_blue_cards(self):
+        """游戏厅：只买「自动」+ 金/紫（蓝卡不买）。"""
+        cards = [
+            {"attr": "投射", "hi": 100, "box": None, "auto": True, "price": 80,
+             "quality": "蓝", "hue": 0, "sat": 0, "mate": False},
+        ]
+        task = FakeTask([])
+        pick, reason = task.pick_arcade_card(cards, money=500)
+        self.assertIsNone(pick)
+        self.assertIn("没有", reason)
+
+    def test_arcade_prefers_teammate_card(self):
+        """游戏厅：有队友的优先（2026-10-29 口径）。"""
+        cards = [
+            {"attr": "投射", "hi": 100, "box": None, "auto": True, "price": 80,
+             "quality": "金", "hue": 0, "sat": 0, "mate": False},
+            {"attr": "弹跳", "hi": 70, "box": None, "auto": True, "price": 60,
+             "quality": "金", "hue": 0, "sat": 0, "mate": True},
+        ]
+        task = FakeTask([])
+        pick, _ = task.pick_arcade_card(cards, money=500)
+        self.assertEqual(pick["attr"], "弹跳")     # 队友优先（尽管奖励上限低）
+
+    def test_shop_pick_by_policy(self):
+        """商店：按「购买策略」选。"""
+        items = [
+            {"name": "器材手册", "price": 60, "quality": "紫", "x": 100, "y": 100},
+            {"name": "训练手册", "price": 100, "quality": "金", "x": 100, "y": 200},
+            {"name": "旧货", "price": 45, "quality": "蓝", "x": 100, "y": 300},
+        ]
+        task = FakeTask([])
+        pick, _ = task.pick_shop_item(items, 500, "只买金和紫")
+        self.assertEqual(pick["quality"], "金")
+        pick2, _ = task.pick_shop_item(items, 500, "只买器材手册+")
+        self.assertEqual(pick2["name"], "器材手册")
+        pick3, reason3 = task.pick_shop_item(items, 500, "不买")
+        self.assertIsNone(pick3)
+        self.assertIn("不买", reason3)
+
+    def test_shop_free_item_first(self):
+        """商店：免费商品优先拿（钱读不到也能拿）。"""
+        items = [
+            {"name": "训练手册", "price": 100, "quality": "金", "x": 100, "y": 100},
+            {"name": "赠品", "price": 0, "quality": "蓝", "x": 100, "y": 200},
+        ]
+        task = FakeTask([])
+        pick, _ = task.pick_shop_item(items, None, "只买金和紫")
+        self.assertEqual(pick["name"], "赠品")
+
+    def test_map_knows_all_places(self):
+        """地图模块是**决策层** —— 它知道所有地点（地点模块不许知道别的）。"""
+        from src.tasks.training.places.map import MapPlace
+        self.assertTrue(hasattr(MapPlace, "today_places"))
+        self.assertTrue(hasattr(MapPlace, "prefer_mate_venue"))
+        self.assertTrue(hasattr(MapPlace, "weekend_map_page"))
+
+    def test_handlers_are_now_thin(self):
+        """handler 只做「认页面 → 问模块 → 照它说的做」。
+
+        判据：handler 里不该再有「买哪张卡」「选哪个选项」的判断逻辑，
+        那些应该在 places/ 的模块里。
+        """
+        import os
+        import re
+        path = os.path.join("src", "tasks", "training", "handlers", "weekend.py")
+        src = open(path, encoding="utf-8").read()
+        # 这些判断逻辑应该已经搬进 places/
+        for moved in ("def restaurant_order(", "def option_selectable(",
+                      "def card_stamina_cost(", "def prefer_mate_venue("):
+            self.assertNotIn(moved, src, "%s 还在 handler 里" % moved)
+
+
 class InteractionsRules(unittest.TestCase):
     """通用交互层：跨地点复用的动作，**零地点知识**。
 

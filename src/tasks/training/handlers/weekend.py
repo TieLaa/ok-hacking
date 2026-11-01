@@ -161,7 +161,7 @@ class WeekendHandlers:
         2. 队友一样多 → 选**右边**那张（消耗精力的）；
         3. 精力不够右边那张 → 改选**左边**（不消耗精力）。
         """
-        if self.match_text(texts, labels.RESTAURANT_TITLE) is None:
+        if not self.restaurant_page(texts):
             return False
         self.mark_visited("餐厅")
         order = self.restaurant_order(texts)
@@ -171,101 +171,6 @@ class WeekendHandlers:
             self.exit_page()
             return True
         return self.choose_option(texts, order)
-
-    def restaurant_order(self, texts):
-        """打工两张卡的点击顺序：**能选的优先** → 队友多 → 右边（耗精力）。
-
-        判据（用户 2026-10-29）：
-        - 先看这张卡现在**能不能选**（`option_selectable`）：界面提示不可用、
-          或精力不够它标的消耗 → 不可选；
-        - 可选的两张里：队友多（卡片左上角的小头像数）优先，一样多选右边；
-        - 都不可选就按「右边优先」原样返回，让游戏自己拦（下一拍会重判）。
-        右边那张默认按 `WORK_STAMINA_COST`（25）算消耗、左边按 0（不消耗），
-        卡片上写明消耗时以卡片为准。
-
-        2026-10-31 补两条：
-        - 精力取**整帧 OCR**（`top_bar(texts)`）。裁剪顶栏重 OCR 会丢斜杠，
-          stamina 恒为 None，这条规则等于没实现（餐厅实跑：23/130 仍去点 25 的卡）；
-        - `blocked_activities()`：详情弹窗说过「精力不足」或「前往」点不动的卡，
-          今天不再选（`logs` 里会打出来）。
-        """
-        opts = self.texts_in_region(texts, "weekend_options")
-        found = []
-        for name in labels.RESTAURANT_OPTIONS:
-            box = self.exact_text(opts, (name,)) or self.match_text(opts, (name,))
-            if box is not None:
-                found.append(box)
-        if not found:
-            return labels.RESTAURANT_OPTIONS
-
-        stamina = self.top_bar(texts).get("stamina")
-        blocked = self.blocked_activities()
-        icons = self.find_teammate_icons(0.0, 1.0)
-        scored = [(self.mates_on_card(b, icons), b) for b in found]
-        scored.sort(key=lambda pair: (-pair[0], -pair[1].x))   # 队友多 → 右边
-        ranked = [b for _n, b in scored]
-        left = [b for b in ranked if b.name.strip() not in blocked]
-        if not left:
-            self.log_warning(f"餐厅：{sorted(blocked)} 今天都点不动，没有可选的卡")
-            return ()
-        right = max(found, key=lambda b: b.x)
-        usable = [b for b in left
-                  if self.option_selectable(
-                      b, texts, stamina,
-                      WORK_STAMINA_COST if b is right else 0)]
-        detail = "、".join(
-            f"{b.name}={n}人{'' if b in usable else '（不可选）'}" for n, b in scored)
-        self.log_info(f"餐厅：{detail}｜精力 {stamina}"
-                      f"｜今天点不动的 {sorted(blocked) or '无'} → "
-                      + ("按可选/队友多/右边选" if usable else "都不可选，按右边优先试"))
-        return tuple(b.name for b in (usable or left))
-
-    def option_selectable(self, box, texts, stamina=None, default_cost=0):
-        """这张打工卡现在能不能选。
-
-        两个判据都来自界面，而不是硬写一个精力门槛：
-        1. 卡片附近写明「精力不足 / 无法选择 / 不可」→ 不可选；
-        2. 卡片自己标了消耗（`精力-30`）时，当前精力不够它 → 不可选；
-           卡片没写消耗时按 `default_cost` 估（右边 = `WORK_STAMINA_COST` 25，
-           左边 = 0，因为不耗精力的是左边那张）。
-        """
-        if box is None:
-            return False
-        for t in texts:
-            s = t.name.replace(" ", "")
-            if not any(k in s for k in ("不足", "不可", "无法")):
-                continue
-            if abs((t.y + t.height / 2) - (box.y + box.height / 2)) < box.height * 2.5:
-                return False
-        cost = self.card_stamina_cost(box, texts)
-        if cost is None:
-            cost = default_cost
-        return stamina is None or stamina >= cost
-
-    def card_stamina_cost(self, box, texts):
-        """卡片上写的精力消耗（「精力-20」/「消耗20精力」），读不到返回 None。
-
-        「精力+30」「精力恢复20」这类是**收益**不是消耗，必须排除 ——
-        否则会给一张回精力的卡判出「要花 30 精力」，把好选项挡掉。
-        """
-        if box is None:
-            return None
-        best = None
-        for t in texts:
-            s = t.name.replace(" ", "")
-            if "精力" not in s:
-                continue
-            if any(k in s for k in labels.GACHA_CLEAR_EXCLUDE) or "+" in s:
-                continue
-            if abs((t.y + t.height / 2) - (box.y + box.height / 2)) > box.height * 2.5:
-                continue
-            if abs((t.x + t.width / 2) - (box.x + box.width / 2)) > box.width * 1.2:
-                continue
-            m = (re.search(r"精力\D{0,3}(\d{1,3})", s)
-                 or re.search(r"(\d{1,3})\D{0,3}精力", s))
-            if m:
-                best = int(m.group(1))
-        return best
 
 
     STOCK_TITLE = "请选择你要投资的股票"
@@ -425,42 +330,9 @@ class WeekendHandlers:
         现在改成：标题只当**判据**（有「公园」相关字样 + 有三个圆形选项就处理），
         实际点击永远走选项文字框（散步/划船/野餐）。
         """
-        # 周末首页/地图上有「出行」按钮，公园内页没有（与 handle_shop 同一招）。
-        # 2026-10-27 事故：地图页的对白「小澪奈总是吵着要去野餐…」包含「野餐」，
-        # labels.PARK_TITLE 里的「野餐」直接把地图页判成公园内页 →
-        # mark_visited("公园") 后 handle_weekend 认为「都去过了」，
-        # 反复点返回循环 9 拍，任务被判卡死停止。
-        if self.match_text(texts, "出行") is not None:
+        if not self.park_page(texts):
             return False
-        if self.match_text(texts, labels.PARK_TITLE) is None:
-            return False
-
-        if self.style != "训练流":
-            pref = self.config.get("公园选项")
-            order = (pref,) + tuple(x for x in labels.PARK_OPTIONS if x != pref)
-            ok = self.choose_option(texts, order)
-            if ok:
-                self.mark_visited("公园")
-            return ok
-
-        st = self.day_state()
-        day = st["date"][1] if st["date"] else None
-        if st.get("park_choice") is None:
-            if day == "日":
-                stamina = self.top_bar(texts).get("stamina")
-                threshold = int(self.config.get("周末野餐阈值"))
-                if stamina is not None and stamina < threshold:
-                    st["park_choice"] = "野餐"
-                    self.log_info(f"周日体力 {stamina} < {threshold} → 野餐补精力")
-                else:
-                    st["park_choice"] = "划船"
-                    self.log_info(f"周日体力 {stamina} ≥ {threshold} → 划船（属性+）")
-            else:
-                st["park_choice"] = "划船"
-                self.log_info("周六公园：划船（属性+，不再满体力吃野餐）")
-
-        order = (st["park_choice"],) + tuple(
-            x for x in labels.PARK_OPTIONS if x != st["park_choice"])
+        order = self.park_order(texts, self.style)
         ok = self.choose_option(texts, order)
         if ok:
             self.mark_visited("公园")
@@ -481,12 +353,7 @@ class WeekendHandlers:
         所以这里一拍只买**一件**：买完不关店，下一拍重新 OCR 再决定；
         金紫买不起了 / 钱花光了才关店，并把这一天标记为「今天逛过了」。
         """
-        # 周末首页也有「商店」两个字，但同时有「出行」，那是按钮不是商店页
-        if self.match_text(texts, "出行") is not None:
-            return False
-        if self.match_text(texts, "商店") is None:
-            return False
-        if self.match_text(texts, ("上新时间", "剩余", "能力详情")) is None:
+        if not self.shop_page(texts):
             return False
 
         # 确认真的进到商店页了才记「今天逛过」。比赛日点入口可能点空
@@ -495,57 +362,18 @@ class WeekendHandlers:
 
         policy = self.config.get("购买策略")
         money = self.read_money(texts)
-        items = self.read_shop_items(texts)
-        # 免费商品（白神时久：每天多一件 0 元商品）：不花零用钱，
-        # 余额不够、甚至钱读不到时都应该拿。
-        free = [i for i in items if i["price"] == 0]
+        items = self.shop_items(texts)
         self.log_info("商店：" + "、".join(
             f"{i['name']}({i['price']}/{i['quality']})" for i in items)
             + f"｜零用钱 {money}｜策略 {policy}"
             + ("｜赛前清空" if self._shop_spend_all else ""))
 
-        # 2026-10-29 用户口径：**钱够就买金/紫**。旧版这里还有一道
-        # 「零用钱 < 商店进店余额(300) 就不买」的门槛，跟这条直接冲突
-        # （实跑：120 零用钱、店里有 100 的紫卡，被门槛拦掉），已删除。
-        # 买不起任何东西的分支在下面（没有可买的金/紫 → 关店）。
-        if policy == "不买":
-            self.log_info("商店：策略是只逛不买，退出")
+        pick, reason = self.pick_shop_item(items, money, policy,
+                                          spend_all=self._shop_spend_all)
+        if pick is None:
+            self.log_info(f"商店：{reason}，关店")
             self.finish_shop(texts)
             return True
-
-        affordable = free + [i for i in items
-                             if i["price"] > 0 and money is not None and i["price"] <= money]
-        if not affordable:
-            self.log_info("商店：没有买得起的商品了，关店"
-                          + ("（零用钱读不到，不盲买）" if money is None else ""))
-            self.finish_shop(texts)
-            return True
-
-        if free:
-            # 免费优先：0 元不花钱，品质只影响先拿哪张
-            order = {"金": 2, "紫": 1}
-            pick = max(free, key=lambda i: (order.get(i["quality"], 0), -i["y"]))
-        elif policy == "只买金和紫":
-            pool = [i for i in affordable if i["quality"] in ("金", "紫")]
-            if self._shop_spend_all and not pool:
-                # 赛前一天：金紫买完了，剩下的钱继续买别的，反正带不走
-                pool = affordable
-                self.log_info("赛前清空：金紫已买完，继续买剩余商品")
-            if not pool:
-                self.log_info("商店：没有买得起的金/紫商品，关店")
-                self.finish_shop(texts)
-                return True
-            pick = max(pool, key=lambda i: (1 if i["quality"] == "金" else 0, i["price"]))
-        elif policy == "只买器材手册+":
-            pool = [i for i in affordable if "器材手册" in i["name"]]
-            if not pool:
-                self.log_info("商店：没有器材手册，关店")
-                self.finish_shop(texts)
-                return True
-            pick = max(pool, key=lambda i: i["price"])
-        else:
-            pick = max(affordable, key=lambda i: (
-                1 if "器材手册" in i["name"] else 0, i["price"]))
 
         if self.buy_stalled("商店", money, (pick["name"], pick["price"]),
                             counter=self.buy_counter("商店")):
@@ -768,12 +596,10 @@ class WeekendHandlers:
         付完钱小游戏会**自己打完**（探针实测：零用钱 219→155，之后走普通剧情/结算），
         后续交给通用 handler 推进。
         """
-        if self.match_text(texts, labels.ARCADE_TITLE) is None:
+        if not self.arcade_page(texts):
             return False
         self.mark_visited("游戏厅")
-        skip = self.match_text(self.texts_in_region(texts, "weekend_options"), labels.ARCADE_SKIP)
-        if skip is None:
-            skip = self.match_text(texts, labels.ARCADE_SKIP)
+        skip = self.arcade_skip(texts)
         if skip is not None:
             self.click_box(skip, after_sleep=0.4)
             confirm = self.match_text(self._ocr_region("confirm_bar"), labels.CONFIRM_TEXTS)
@@ -782,91 +608,21 @@ class WeekendHandlers:
             self.log_info("游戏厅：跳过已三星小游戏")
             return True
 
-        if not self.config.get("游戏厅付费"):
+        if not self.arcade_paid_enabled():
             self.log_info("游戏厅：未开启付费，退出")
             self.exit_page()
             return True
 
         money = self.read_money(texts)
-        icons = self.find_teammate_icons(0.0, 1.0)
-        cards = []
-        for t in texts:
-            m = re.search(r"(投射|弹跳|防守|体能|运控|意识)\s*(\d+)\s*[~～]\s*(\d+)",
-                          t.name)
-            if m is None:
-                continue
-            cx = t.x + t.width / 2
-            band = self.width * 0.12
-            auto = any(o.name.strip() == "自动"
-                       and abs((o.x + o.width / 2) - cx) < band
-                       and o.y < t.y for o in texts)
-            # 价格：**打折时会出现两个数字并且位置会偏**（用户 2026-10-27），
-            # 所以不用固定坐标，扫「奖励下方 0.30h、同一列」的所有数字取最小值
-            # （= 折后价）。OCR 还会把原价和现价粘成一个长串（「10080」），
-            # 这种按 3 位切回来。
-            prices = []
-            for d in texts:
-                v = d.name.strip()
-                if not v.isdigit():
-                    continue
-                if abs((d.x + d.width / 2) - cx) > band:
-                    continue
-                if not (t.y < d.y < t.y + self.height * 0.30):
-                    continue
-                if len(v) <= 3:
-                    prices.append(int(v))
-                elif len(v) in (5, 6):
-                    for k in range(0, len(v) - 2, 3):
-                        prices.append(int(v[k:k + 3]))
-            price = min(prices) if prices else None
-            # 品质：取卡片「名字那一行 → 奖励那一行」之间的底色（用户 2026-10-27：
-            # 只买金/紫，蓝卡和白卡不买）。名字框在同一列、奖励上方。
-            name_box = next((o for o in texts
-                             if o.name.strip() == m.group(1)
-                             and abs((o.x + o.width / 2) - cx) < band
-                             and o.y < t.y), None)
-            y1f = ((name_box.y / self.height) if name_box is not None
-                   else t.y / self.height - 0.10)
-            q, qh, qs = self.card_quality_at(cx / self.width, y1f,
-                                             t.y / self.height)
-            # 队友：卡片上方/左上挂的橙色小头像（和餐厅打工同一套判据）。
-            # 2026-10-29 实跑：中间那张带队友的卡没被选中 —— 旧逻辑只看奖励上限。
-            mate = self.mates_on_card(t, icons) > 0
-            cards.append({"attr": m.group(1), "hi": int(m.group(3)),
-                          "box": t, "auto": auto, "price": price,
-                          "quality": q, "hue": qh, "sat": qs, "mate": mate})
-            self.log_debug(f"游戏厅卡片：{m.group(1)} 奖励{m.group(2)}~{m.group(3)}"
-                           f" 自动={auto} 队友={mate} 品质={q}(H={qh:.0f} S={qs:.0f})"
-                           f" 价格={price}")
-
-        ok_cards = [c for c in cards if c["auto"] and c["quality"] in ("金", "紫")]
-        if not ok_cards:
-            self.log_warning("游戏厅：没有「自动」+ 金/紫的小游戏（"
-                             + "、".join(f"{c['attr']}/{c['quality']}"
-                                        f"{'/自动' if c['auto'] else ''}"
-                                        for c in cards) + "），退出")
+        cards = self.arcade_cards(texts)
+        pick, reason = self.pick_arcade_card(cards, money)
+        if pick is None:
+            self.log_warning(f"游戏厅：{reason}，退出")
             self.exit_page()
             return True
-        auto_cards = ok_cards
 
-        # 有队友的优先，其余按奖励上限从高到低（2026-10-29 口径）
-        auto_cards.sort(key=lambda c: (0 if c["mate"] else 1, -c["hi"]))
-        pick = None
-        for c in auto_cards:
-            price = c["price"]
-            if price == 0:
-                # 免费小游戏（白神时久那类 0 元商品）：不花钱，钱读不到也能买
-                pick = c
-                break
-            if price is None:
-                continue                    # 价格读不到：不猜
-            if money is None:
-                continue                    # 钱读不到就不买，盲买就是 2026-10-29 的死循环
-            if money >= price:
-                pick = c
-                break
         confirm = self.exact_text(texts, labels.BUTTONS["confirm"])
-        if pick is not None and confirm is not None:
+        if confirm is not None:
             if self.buy_stalled("游戏厅", money, (pick["attr"], pick["price"]),
                                 counter=self.buy_counter("游戏厅")):
                 self.log_warning(
@@ -886,12 +642,7 @@ class WeekendHandlers:
                           "等它自己打完")
             return True
 
-        if money is None:
-            self.log_warning("游戏厅：零用钱读不到，先不买（避免盲买）→ 退出")
-        elif all(c["price"] is None for c in auto_cards):
-            self.log_warning("游戏厅：卡片价格都没读出来，先不买（不猜）→ 退出")
-        else:
-            self.log_warning(f"游戏厅：带「自动」的都买不起（零用钱 {money}），退出")
+        self.log_warning("游戏厅：没有「确定」按钮 → 退出")
         self.exit_page()
         return True
 
@@ -970,104 +721,6 @@ class WeekendHandlers:
                 return True
         return False
 
-    def _venue_box(self, texts, place):
-        """地点名对应的文本框（整词优先，其次 ≤4 字的短框）。"""
-        box = self.exact_text(texts, (place,))
-        if box is not None:
-            return box
-        return next((t for t in texts
-                     if place in t.name and len(t.name.strip()) <= 4), None)
-
-    def prefer_mate_venue(self, texts, places, day=None):
-        """训练流周六：步行街 / 游戏厅 二选一（买扭蛋/玩小游戏当天就结束）。
-
-        用户 2026-10-30 口径，优先级：
-        1. **只有一个有队友** → 去有队友的；
-        2. **都有队友** → 再比**打折**（地点名左边橙色「打折！」爆炸标签），只有一个打折就去那个；
-        3. **都没队友、但只有一个在打折** → 去打折的（2026-10-30 用户实机补充）；
-        4. 其他情况（都没队友也没打折 / 都打折）→ 保持原顺序
-           （步行街 → 游戏厅 → 公园）。
-
-        队友气泡判据见 BaseGirlsTask.venue_has_mate（深藏青色块）；
-        打折判据见 venue_on_discount（OCR 文本 + 名字左侧）。
-        """
-        if day == "六" and self.style == "训练流":
-            pair = [p for p in places if p in ("步行街", "游戏厅")]
-            mode = "训练流"
-        elif self.style == "扭蛋流" and day in ("五", "六", "日"):
-            # 野上泷（默认带）：周五额外周末也走同一套
-            pair = [p for p in places if p in ("步行街", "餐厅")]
-            mode = "扭蛋流"
-        else:
-            return places
-        if len(pair) < 2:
-            return places
-
-        info = {}
-        for place in pair:
-            box = self._venue_box(texts, place)
-            info[place] = {"mate": bool(box) and self.venue_has_mate(box),
-                           "discount": bool(box) and self.venue_on_discount(texts, box)}
-
-        mates = [p for p in pair if info[p]["mate"]]
-        discounted = [p for p in pair if info[p]["discount"]]
-        chosen = None
-        if mode == "扭蛋流":
-            # 2026-10-30 用户截图（第5周周五）：步行街上方出现彩色爆炸标签
-            # 「扭蛋增强！」时，**不管有没有队友都先进步行街**。
-            # 2026-11-01：判据搬进步行街模块（`places/street.py`），
-            # 且连位置一起判 —— 这个标签只贴在步行街左上角，别处出现同样字眼不算。
-            if self.has_boost_label(texts, self._venue_box(texts, "步行街")):
-                self.log_info("周末地点：步行街有「扭蛋增强！」"
-                              "→ 不管队友，先进步行街")
-                return ["步行街"] + [p for p in places if p != "步行街"]
-            # 用户 2026-10-30 完整口径（扭蛋流的周五/周六/周日）：
-            #   0. 钱 > 300 → 先去步行街（钱多就该花）；
-            #   1. 钱 <= 300：两边都有队友 → 先进步行街；
-            #   2. 只有一边有队友 → 去有队友的那边；
-            #   3. 都没队友 → 周五/周六去餐厅赚钱，周日去步行街消费。
-            money = self.read_money(texts)
-            if money is not None and money > 300:
-                chosen = "步行街"
-                reason = f"零用钱 {money} > 300，先去步行街消费"
-            elif len(mates) == 2:
-                chosen = "步行街"
-                reason = "两边都有队友，先进步行街"
-            elif mates:
-                chosen = mates[0]
-                reason = f"只有「{mates[0]}」有队友"
-            elif day in ("五", "六"):
-                chosen = "餐厅"
-                reason = "都没队友，周五/周六去餐厅赚钱"
-            else:
-                chosen = "步行街"
-                reason = "都没队友，周日去步行街消费"
-            if chosen == "餐厅":
-                # 直接去打工：不再绕步行街，今天不用抽扭蛋
-                self.log_info(f"周末地点：{info} → {reason}，只去「餐厅」")
-                return ["餐厅"]
-            return [chosen] + [p for p in places if p != chosen]
-        if len(mates) == 1:
-            chosen = mates[0]
-            reason = "只有一个有队友"
-        elif len(mates) == 2:
-            only = [p for p in mates if info[p]["discount"]]
-            if len(only) == 1:
-                chosen = only[0]
-                reason = "都有队友，这个在打折"
-        elif len(discounted) == 1:
-            # 2026-10-30 用户实机：周六两个地点都没队友，游戏厅在打折
-            # （左侧橙色「打折！」爆炸标签，venue_on_discount 判 True），
-            # 但旧规则只在「都有队友」分支里比较折扣 → 退回原顺序选了步行街。
-            # 都没队友时，打折的那个比顺序更值得去。
-            chosen = discounted[0]
-            reason = "都没有队友，这个在打折"
-        if chosen is None:
-            self.log_info(f"周末地点：{info} → 没法分出高下，按原顺序 {pair}")
-            return places
-        self.log_info(f"周末地点：{info} → {reason}，先进「{chosen}」")
-        return [chosen] + [p for p in places if p != chosen]
-
     def handle_weekend(self, texts):
         """周末地图：按「星期 + 流派」去地点。
 
@@ -1080,16 +733,14 @@ class WeekendHandlers:
         # 地图只有「公园/公园+」「游戏厅/属性+」「步行街/零用钱+」，无「出行」）。
         # 台词常含地点名（「告诉她公园的草坪是假的」「游戏厅地狱挑战开始了！」），
         # 只靠地点名会把首页当地图：点中台词 → 误 mark_visited → todo 空 → 点右上角。
-        if self.match_text(texts, "出行") is not None:
-            return False
-        if not self.match_text(texts, labels.WEEKEND_PLACES):
+        if not self.weekend_map_page(texts):
             return False
         st = self.day_state()
         visited = st.setdefault("visited", set())
         day = st["date"][1] if st["date"] else None
 
-        # 周六的训练流 + 周日公园：地点完全由 WEEKEND_PLAN 表决定
-        places = self.weekend_priority(day, st)
+        # 今天去哪几个地点：**判断在 `training/places/map.py`**（决策模块）
+        places = self.today_places(day, st)
 
         # 今天已经去过的地方不再进：游戏厅没有可跳过的小游戏时会退回地图，
         # 不记录「已去过」就会来回进出游戏厅（2026-10-26 实训）。

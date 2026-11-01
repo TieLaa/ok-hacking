@@ -16,6 +16,12 @@
 每个模块只提供**判断**，不点击 —— 点击由 `handlers/` 里的 handler 做。
 """
 
+from src.tasks.training.places.arcade import ArcadePlace
+from src.tasks.training.places.map import MapPlace
+from src.tasks.training.places.park import ParkPlace
+from src.tasks.training.places.restaurant import RestaurantPlace
+from src.tasks.training.places.shop import ShopPlace
 from src.tasks.training.places.street import StreetPlace
 
-__all__ = ["StreetPlace"]
+__all__ = ["ArcadePlace", "MapPlace", "ParkPlace", "RestaurantPlace",
+           "ShopPlace", "StreetPlace"]
