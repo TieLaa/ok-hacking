@@ -730,37 +730,14 @@ class WeekendHandlers:
         return last_cards
 
     def handle_street(self, texts):
-        """步行街扭蛋：只买 彩/金/紫，同等先增强款再队友，体力低才允许清空精力的卡。
+        """步行街扭蛋：**判断在 `training/places/street.py`**（地点模块）。
 
-        用户规则（2026-10-26，2026-11-01 更新）：
-        1. 品质优先级 **彩色 > 金色 > 紫色**（彩色是训练等级提升后解锁的最高品质）；
-           蓝色、其他一律不买（宁可退出）；
-        2. 同等情况下**先「增强款」，再有队友加成的**（都相同才比价格）；
-        3. 「消耗/清空精力」的卡：只有体力低于阈值（默认 30）才买；
-        4. 没有合格卡就点右上角返回，不点确定。
-
-        2026-10-26 事故：旧版只按 rank*10 打分，蓝卡也有 10 分，
-        结果 72 体力买了「精力转换-意识（消耗所有精力）」，体力归 0，
-        周日只能划船回 30。现在清空卡在体力够时必须排除。
-
-        2026-11-01 事故：彩色卡（`体能增加+++`，卡头是彩虹渐变）被
-        `card_quality_at` 按中位色相判成「紫」（彩虹带的中位色相正好落在紫区），
-        于是金卡 300 压过它 200 → 又买了金卡（用户：「中间的是彩色，你已经点错
-        了一次了」）。现在 `card_band_quality` 先认彩虹（彩），再退回单色判据。
+        这里只负责「认页面 → 问模块 → 照它说的点」。
+        步行街模块只管自己的事（买哪张卡、试过没有），不需要知道别的地点。
         """
-        if self.match_text(texts, labels.STREET_TITLE) is None:
+        if not self.street_page(texts):
             return False
-        # 2026-10-31 实跑（野上泷额外周末，第3周星期五）：**周末地图**上步行街那条
-        # 奖励提示这次写的是「扭蛋增强」（平时是「零用钱+」），STREET_TITLE 里的
-        # 「扭蛋」用包含匹配把地图判成了扭蛋页 → 三张卡当然读不出来 →
-        # leave_street() 点返回 → 又回到训练日主界面，当天的外出白跑
-        # （用户：「进了出行地图然后就退回来了，又点了训练」）。
-        # 地图上有 ≥2 个地点名，扭蛋页只有一个，用它区分；必须放在 mark_visited 之前，
-        # 否则「步行街已去过」会被误记，回来以后就再也不进步行街了。
-        if len([t for t in texts
-                if t.name.strip() in labels.WEEKEND_PLACES]) >= 2:
-            return False
-        if not self.config.get("允许进步行街", True):
+        if not self.street_enabled():
             self.log_info("步行街扭蛋：未开启，退出")
             self.leave_street()
             return True
@@ -772,13 +749,13 @@ class WeekendHandlers:
         #
         # 但**不能**简单地「没读到卡就不标记 visited」：那样回到地图时
         # todo 里还有步行街 → 又点进去 → 又失败 → 无限循环。
-        # 所以分两件事：
+        # 所以分两件事（见 places/street.py 的说明）：
         #   - `visited`：今天**进过**步行街（进过就算来过，防止反复进）；
         #   - `gacha_tried`：今天**试过**抽扭蛋（不管买没买成）。
         # 地图上只按 `gacha_tried` 排除步行街（试过了就不再试），
         # 「买没买成」交给 gacha_spent 决定要不要去餐厅打工。
         self.mark_visited("步行街")
-        self._weekend.setdefault("gacha_tried", set()).add("步行街")
+        self.mark_tried()
         if not cards:
             self.log_warning("扭蛋：三张卡都没认出来，退出不买")
             self.leave_street()
@@ -794,71 +771,15 @@ class WeekendHandlers:
             self.log_warning("扭蛋：读不到零用钱，保守退出不买")
             self.leave_street()
             return True
-        clear_limit = int(self.config.get("扭蛋清空体力阈值", 30))
-        allow_clear = stamina is not None and stamina < clear_limit
 
-        # 品质优先级（配置项「扭蛋品质优先」，默认 彩色 > 金色 > 紫色，用户 2026-11-01）：
-        # 列表 = 从高到低的品质名，分数按位置给（第一位 400、第二位 300……），
-        # 间隔远大于同品质内的任何差别，保证「品质永远是第一权重」；
-        # 不在列表里的品质（蓝/其他）直接不当候选。
-        order = list(self.config.get("扭蛋品质优先") or ["彩", "金", "紫"])
-        base_of = {q: (len(order) - i) * 100 for i, q in enumerate(order)}
-
-        def score(c):
-            # 2026-11-01 用户口径：**品质优先级 彩色 > 金色 > 紫色**（彩色扭蛋是
-            # 训练等级提升后解锁的）。
-            s = base_of.get(c["quality"], 0)
-            s += 1 if "+" in c["name"] else 0
-            # 2026-10-27（用户截图 45/130 三选一）：「精力恢复++」
-            # （立刻恢复90，之后每天30×4天，金卡+队友）和「运控增加++」
-            # 同为 141 分，max() 取第一个把恢复卡丢掉了。
-            # 恢复量按「这次真能补上的体力」折半计分：满体力时 room=0 不加分，
-            # 不会为了满体力白花钱。
-            if c.get("recover") and stamina is not None:
-                room = max(stamina_max - stamina, 0)
-                s += int(min(c["recover"], room) * 0.5)
-            return s
-
-        ok = []
-        for c in cards:
-            if c["clear"]:
-                # 清空卡只在体力低于阈值时买（这时是拿体力换属性）
-                if not allow_clear:
-                    continue
-            elif c["quality"] not in base_of:
-                continue
-            # 读不到价格就不买：买不起时点「确定」游戏不扣钱、页面也不关，
-            # 旧代码会一直「选卡 → 确定 → 没反应」（2026-10-26 实测）。
-            # 2026-11-01 15:09：卡面先渲染、价格后渲染的那一拍价格是 None，
-            # 这时宁可退出等下一轮，也不能按「猜的价格」买。
-            if c["price"] is None:
-                continue
-            # 买不起就跳过，看下一张（2026-10-26：零用钱 50、卡片 60，
-            # 旧代码照样点确定 → 停留在扭蛋页反复点）。
-            if money is not None and c["price"] > money:
-                continue
-            c["score"] = score(c)
-            ok.append(c)
-
-        detail = "、".join(
-            f"{c['name']}({c['quality']}{'+队友' if c['mate'] else ''}"
-            f"{'·增强' if c.get('enhanced') else ''}"
-            f"{'·恢复' + str(c['recover']) if c.get('recover') else ''}"
-            f"{'·清空' if c['clear'] else ''}"
-            f"{'/' + str(c['price']) + '币' if c['price'] is not None else '/价格未出'}"
-            f"/{score(c)})" for c in cards)
-        if not ok:
+        best, detail, _all = self.gacha_candidates(
+            cards, stamina, stamina_max, money)
+        if best is None:
             self.log_info(f"扭蛋：{detail} → 没有可买的"
                           f"（零用钱 {money}，体力 {stamina}），退出")
             self.leave_street()
             return True
 
-        # 同分时的取舍（用户 2026-11-01：「同分排序 增强款 > 队友」，都相同再比价格）：
-        # score（品质/恢复/名字）打平以后，先「增强款」，再「有队友」，最后「便宜的」。
-        # 2026-10-30 的老口径就是这个顺序；这里只是把它从 score 挪到同分比较里，
-        # 免得「增强款 +30 / 队友 +20」把恢复精力的加成压掉。
-        best = max(ok, key=lambda c: (c["score"], bool(c.get("enhanced")),
-                                      c["mate"], -c["price"]))
         self.click(best["x"], best["y"], after_sleep=0.5)
         self.log_info(f"扭蛋：{detail} → 选「{best['name']}」"
                       f"（{best['quality']}，{best['price']}币，"
@@ -867,7 +788,7 @@ class WeekendHandlers:
         if self.click_button("confirm", after_sleep=0.8, must=False):
             self.log_info("扭蛋：确定")
             # 今天花过钱了：扭蛋流周末不必再去餐厅打工（flow.weekend_priority 用）
-            self.day_state()["gacha_spent"] = True
+            self.mark_spent()
         else:
             self.click(int(self.width * 0.5), int(self.height * 0.93), after_sleep=0.8)
             self.log_warning("扭蛋：没认出「确定」，按底部中间兜底")
@@ -1094,48 +1015,6 @@ class WeekendHandlers:
                 return True
         return False
 
-    # 「扭蛋增强！」彩色爆炸标签与「步行街」名字框的相对位置（比例）。
-    # 实测 10 张真实地图帧（logs/events/1031-173714 / 1031-194957 / 1101-150917 等，
-    # 1549x871）几何高度一致：
-    #   标签 box=(597,669,225,71)  cx=0.457 cy=0.809
-    #   步行街 box=(810,722,126,50) cx=0.564 cy=0.858
-    #   → Δcx=0.105~0.107（标签在名字**左边**）、Δcy=0.048~0.049（标签在名字**上方**）
-    # 所以判「标签在步行街名字的左上方」：Δcx ≤ 0.20 且 Δcy ≤ 0.12，
-    # 并且标签中心必须在名字中心的**左边**（tcx < cx）。
-    STREET_BOOST_DX = 0.20
-    STREET_BOOST_DY = 0.12
-
-    def venue_has_street_boost(self, texts, label_box):
-        """步行街名字框的**左上方**有没有「扭蛋增强！」标签。
-
-        2026-11-01 修：原来只 `match_text(texts, ("扭蛋增强","扭蛋加强"))` ——
-        全屏出现这四个字就生效，不看它贴在哪。于是别处只要出现同样的字
-        （比如队友台词、别的界面的说明文字），就会误判成「步行街有加成」
-        → 不管钱和队友直进步行街。
-
-        现在连**位置**一起判（和 `venue_on_discount` 同一套路）：
-        标签必须贴着步行街名字的左上方（Δcx ≤ 0.20、Δcy ≤ 0.12、且在左边）。
-        实测 10 张真实帧的 Δcx=0.105~0.107 / Δcy=0.048~0.049，阈值留了 2 倍余量。
-        """
-        if label_box is None:
-            return False
-        cx = label_box.x + label_box.width / 2
-        cy = label_box.y + label_box.height / 2
-        for t in texts or []:
-            name = t.name.strip()
-            if not any(k in name for k in labels.STREET_BOOST_TEXTS):
-                continue
-            tcx = t.x + t.width / 2
-            tcy = t.y + t.height / 2
-            if tcx >= cx:                      # 必须在名字左边
-                continue
-            if abs(tcx - cx) / self.width > self.STREET_BOOST_DX:
-                continue
-            if abs(tcy - cy) / self.height > self.STREET_BOOST_DY:
-                continue
-            return True
-        return False
-
     def _venue_box(self, texts, place):
         """地点名对应的文本框（整词优先，其次 ≤4 字的短框）。"""
         box = self.exact_text(texts, (place,))
@@ -1181,9 +1060,9 @@ class WeekendHandlers:
         if mode == "扭蛋流":
             # 2026-10-30 用户截图（第5周周五）：步行街上方出现彩色爆炸标签
             # 「扭蛋增强！」时，**不管有没有队友都先进步行街**。
-            # 2026-11-01：连位置一起判（`venue_has_street_boost`）——
-            # 这个标签只贴在步行街左上角，别处出现同样字眼不算。
-            if self.venue_has_street_boost(texts, self._venue_box(texts, "步行街")):
+            # 2026-11-01：判据搬进步行街模块（`places/street.py`），
+            # 且连位置一起判 —— 这个标签只贴在步行街左上角，别处出现同样字眼不算。
+            if self.has_boost_label(texts, self._venue_box(texts, "步行街")):
                 self.log_info("周末地点：步行街有「扭蛋增强！」"
                               "→ 不管队友，先进步行街")
                 return ["步行街"] + [p for p in places if p != "步行街"]

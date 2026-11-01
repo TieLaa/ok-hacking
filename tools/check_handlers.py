@@ -346,11 +346,6 @@ def check_date_entry():
     返回问题列表（空 = 通过）。
     """
     problems = []
-    allowed = {
-        "src/tasks/training/daycycle.py",       # 公共入口自己
-        "src/tasks/training/parsers.py",        # 顶层解析层
-        "src/tasks/training/flow.py",           # 单拍状态机
-    }
     handlers_dir = os.path.join(ROOT, "src", "tasks", "training", "handlers")
     for f in sorted(os.listdir(handlers_dir)):
         if not f.endswith(".py"):
@@ -373,6 +368,58 @@ def check_date_entry():
     print("-" * 96)
     print(f"日期入口：handlers 里直接读日期 {len(problems)} 处"
           f"（唯一入口 = src/tasks/training/daycycle.py）")
+    for p in problems:
+        print("  ✗ " + p)
+    return problems
+
+
+# ---------- 地点模块互不知道（2026-11-01 架构）----------
+# 地点模块（places/）只管自己的判断，**不许引用别的地点**。
+# 「今天该去哪」是**地图模块**的职责；地点模块之间互相知道 = 耦合又回来了。
+def check_places():
+    """地点模块之间不许互相引用。
+
+    返回问题列表（空 = 通过）。
+    """
+    problems = []
+    places_dir = os.path.join(ROOT, "src", "tasks", "training", "places")
+    if not os.path.isdir(places_dir):
+        return problems
+    # 模块名 → 它自己的「地名」
+    owners = {}
+    for f in sorted(os.listdir(places_dir)):
+        if not f.endswith(".py") or f == "__init__.py":
+            continue
+        path = os.path.join(places_dir, f)
+        src = open(path, encoding="utf-8").read()
+        tree = ast.parse(src, filename=path)
+        for node in ast.walk(tree):
+            # 形如 PLACE = "步行街" 的模块归属声明
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) \
+                    and isinstance(node.value.value, str):
+                for t in node.targets:
+                    if isinstance(t, ast.Name) and t.id == "PLACE":
+                        owners[f] = node.value.value
+    for f, own_place in owners.items():
+        path = os.path.join(places_dir, f)
+        src = open(path, encoding="utf-8").read()
+        tree = ast.parse(src, filename=path)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            text = node.value
+            # 地点模块之间不许提别的地点名
+            for other_file, other_place in owners.items():
+                if other_file == f or other_place == own_place:
+                    continue
+                if other_place in text and other_place != own_place:
+                    problems.append(
+                        f"src/tasks/training/places/{f}:{node.lineno} "
+                        f"提到了别的地点「{other_place}」——"
+                        f"地点模块之间不许互相知道（该由地图模块决定去哪个）")
+    print("-" * 96)
+    print(f"地点模块：跨地点引用 {len(problems)} 处"
+          f"（已归属 {len(owners)} 个地点模块）")
     for p in problems:
         print("  ✗ " + p)
     return problems
@@ -555,8 +602,10 @@ def main():
     arch_problems = check_architecture()
     label_problems = check_labels()
     date_problems = check_date_entry()
+    place_problems = check_places()
 
-    if fails or misses or arch_problems or label_problems or date_problems:
+    if fails or misses or arch_problems or label_problems or date_problems \
+            or place_problems:
         print("回归失败")
         return 1
     print("回归通过")

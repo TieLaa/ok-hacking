@@ -116,9 +116,10 @@ handlers 里直接 `top_bar()` 取日期就报红。
 
 | 门禁 | 管什么 |
 |---|---|
-| `check_architecture()` | 判断分支里不许出现 handler 名字（依赖进 `LEAVE_RESETS` 声明表） |
+| `check_architecture()` | 判断分支里不许出现 handler 名字（依赖进 `handlers/__init__.py` 的声明表） |
 | `check_labels()` | 调用处不许写按钮文案（要走 `labels.BUTTONS`） |
 | `check_date_entry()` | handlers 里不许直接读日期（唯一入口 = `daycycle.py`） |
+| `check_places()` | 地点模块之间不许互相知道（该由地图模块决定去哪个） |
 | 回归图 | `docs/shots/expected.json` 锁「哪张图命中哪个 handler」 |
 
 ## 五、落地顺序
@@ -130,13 +131,28 @@ handlers 里直接 `top_bar()` 取日期就报红。
 |---|---|---|
 | 1 | `daycycle.py`：全局日期 + 两个入口 + 当天状态 | ✅ 2026-11-01 |
 | 2 | `systemui.py`：系统级固定控件收口 | ✅ 2026-11-01（倍速/快进已搬） |
-| 3 | 地点模块拆分（步行街 → 游戏厅 → 餐厅 → 公园 → 商店） | 待做 |
+| 3 | 地点模块拆分（步行街 → 游戏厅 → 餐厅 → 公园 → 商店） | ✅ 步行街样板；其余待做 |
 | 4 | 通用交互层：选选项/找确定/退出/购买成交判定 | 待做 |
 | 5 | 配置层：`config_spec.py` 单一来源 + 门禁 | 待做 |
 
 第 3 步的样板：步行街（它今天暴露的问题最多）。
 判据和状态搬到 `places/street.py`，`handle_street` 退化成
 「认页面 → 调模块 → 点」。
+
+**地点模块的接口形状**（`places/street.py`）：
+
+```python
+class StreetPlace:
+    def street_page(self, texts)          -> bool   # 这是不是我的页面？
+    def street_enabled(self)               -> bool   # 配置开关
+    def gacha_candidates(cards, ...)       -> (best, detail, all)  # 买哪张（纯判断）
+    def has_boost_label(texts, box)        -> bool   # 地图上「扭蛋增强！」标签
+    def street_state(self)                 -> dict   # 我自己的状态
+    def mark_tried() / mark_spent()       -> None
+```
+
+模块**只给判断，不点击** —— 点击由 handler 做。
+这样模块可以被离线测试（不需要帧、不需要点击）。
 
 ## 六、被否掉的方案
 

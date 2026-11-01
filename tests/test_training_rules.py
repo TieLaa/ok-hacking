@@ -1797,7 +1797,7 @@ class WeekendMapRules(unittest.TestCase):
         """标签贴在步行街左上 → 认得出来。"""
         task = self.styled("扭蛋流", self._map_with_boost(self.BOOST))
         vb = task._venue_box(task._texts, "步行街")
-        self.assertTrue(task.venue_has_street_boost(task._texts, vb))
+        self.assertTrue(task.has_boost_label(task._texts, vb))
 
     def test_boost_label_elsewhere_is_ignored(self):
         """标签出现在**别处** → 不算数（原来只 match_text，全屏命中就误判）。
@@ -1807,21 +1807,21 @@ class WeekendMapRules(unittest.TestCase):
         far = box(1400, 200, "扭蛋增强", 279, 88)
         task = self.styled("扭蛋流", self._map_with_boost(far))
         vb = task._venue_box(task._texts, "步行街")
-        self.assertFalse(task.venue_has_street_boost(task._texts, vb))
+        self.assertFalse(task.has_boost_label(task._texts, vb))
 
     def test_boost_label_on_right_of_street_is_ignored(self):
         """标签在步行街**右边** → 不算数（判据要求在左上方）。"""
         right = box(1200, 829, "扭蛋增强", 279, 88)
         task = self.styled("扭蛋流", self._map_with_boost(right))
         vb = task._venue_box(task._texts, "步行街")
-        self.assertFalse(task.venue_has_street_boost(task._texts, vb))
+        self.assertFalse(task.has_boost_label(task._texts, vb))
 
     def test_boost_label_wrong_text_is_ignored(self):
         """只有「扭蛋增强」/「扭蛋加强」算数；「零用钱+」不算。"""
         task = self.styled("扭蛋流", self._map_with_boost(
             box(710, 829, "零用钱+", 279, 88)))
         vb = task._venue_box(task._texts, "步行街")
-        self.assertFalse(task.venue_has_street_boost(task._texts, vb))
+        self.assertFalse(task.has_boost_label(task._texts, vb))
 
     def test_boost_label_still_forces_street_first(self):
         """贴对了 → 仍然「不管钱和队友」直进步行街（行为不变）。"""
