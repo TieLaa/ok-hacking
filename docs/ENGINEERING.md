@@ -17,6 +17,7 @@
 | `src/tasks/training/daycycle.py` | **全局日期 + 两个新一天入口 + 当天状态**（唯一读顶栏日期的地方） | 具体业务的判据 |
 | `src/tasks/training/systemui.py` | **系统级固定控件**（返回 / 倍速 / 历史记录 / 菜单 / 快进） | 任何业务判断 |
 | `src/tasks/training/interactions.py` | **通用交互层**：选选项 / 按确定 / 按坐标退出 / 购买成交判定（**零地点知识**） | 地点知识、业务判断 |
+| `src/tasks/training/config_spec.py` | **配置项的唯一声明**（键/默认值/类型/说明）；`default_config` 从这里生成 | 业务逻辑 |
 | `src/tasks/training/places/<地点>.py` | **地点模块**：内页判据 + 买什么/做什么 + 自己的状态（只给判断，不点击） | 别的地点的知识、点击 |
 | `src/tasks/training/handlers/<域>.py` | 按界面域分的 handler：popup / training / weekend / match / entry | 跨域判据、通用工具 |
 | `src/tasks/training/handlers/__init__.py` | **唯一**的 `HANDLERS` 优先级表 | 方法实现 |

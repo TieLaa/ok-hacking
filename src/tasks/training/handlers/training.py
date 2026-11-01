@@ -255,9 +255,9 @@ class TrainingHandlers:
         fail = self.read_fail_rate(texts)
         if fail is not None:
             self.info_set("当前失败率", f"{fail}%")
-        limit = int(self.config.get("失败率上限(%)", 50))
+        limit = int(self.config.get("失败率上限(%)"))
         if fail is not None and fail > limit:
-            if self.config.get("失败率超限改休息", True):
+            if self.config.get("失败率超限改休息"):
                 self._force_rest = True
                 self.log_warning(f"失败率 {fail}% > {limit}% → 退出科目页，回主界面休息")
                 # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
@@ -435,7 +435,7 @@ class TrainingHandlers:
             self._shop_try_key = key
             self._shop_try_count = 1
         # 赛前清空：比赛当天把零用钱花光（配置开关）
-        self._shop_spend_all = bool(self.config.get("赛前清空余额", False))
+        self._shop_spend_all = bool(self.config.get("赛前清空余额"))
         self.click_box(shop, after_sleep=0.9)
         self.log_info(f"比赛日（周{day or '?'}）：{self.style}先进店买一次"
                       + ("（赛前清空）" if self._shop_spend_all else ""))

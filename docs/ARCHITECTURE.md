@@ -121,6 +121,7 @@ handlers 里直接 `top_bar()` 取日期就报红。
 | `check_date_entry()` | handlers 里不许直接读日期（唯一入口 = `daycycle.py`） |
 | `check_places()` | 地点模块之间不许互相知道（该由地图模块决定去哪个） |
 | `check_interactions()` | 通用交互层不许出现地点名（坐标/正则由调用方传进来） |
+| `check_config()` | 配置默认值只许写在 `config_spec.py`；读的键必须在 spec 里声明 |
 | 回归图 | `docs/shots/expected.json` 锁「哪张图命中哪个 handler」 |
 
 ## 五、落地顺序
@@ -134,7 +135,38 @@ handlers 里直接 `top_bar()` 取日期就报红。
 | 2 | `systemui.py`：系统级固定控件收口 | ✅ 2026-11-01（倍速/快进已搬） |
 | 3 | 地点模块拆分（步行街 → 游戏厅 → 餐厅 → 公园 → 商店） | ✅ 步行街样板；其余待做 |
 | 4 | 通用交互层：选选项/找确定/退出/购买成交判定 | ✅ 2026-11-01 |
-| 5 | 配置层：`config_spec.py` 单一来源 + 门禁 | 待做 |
+| 5 | 配置层：`config_spec.py` 单一来源 + 门禁 | ✅ 2026-11-01 |
+
+### 3.6 `config_spec.py` —— 配置项的**唯一声明**
+
+每个配置项在**一处**声明：键名 / 默认值 / 类型 / GUI 控件 / 说明。
+
+```python
+Spec("扭蛋清空体力阈值", 30, INT, "体力低于这个值才买「消耗/清空所有精力」的扭蛋…")
+```
+
+`TrainingTask.default_config` / `config_type` / `config_description`
+都从它生成 → **默认值只有一处**。
+
+**为什么必须收口**（2026-11-01 实测的三个问题）：
+
+1. **默认值写在两处**。`default_config` 声明了 40，调用处又写一遍
+   `self.config.get("休息体力阈值", 40)` —— 那个 40 **永远不生效**
+   （config 一定命中 default_config）。实测 24 处调用点全是这种死代码。
+2. **有配置项用户在 GUI 里配不到**。`扭蛋清空体力阈值`（weekend.py 读了）
+   和 `技能按键`（AutoBattleTask.py 读了）没在 `default_config` 声明 → GUI 上没有。
+3. **有配置项声明了但没人读**。`扭蛋优先属性`（10-26 选卡重写后就没读取点了，
+   但说明还写着「会消耗所有精力」—— 与现行规则**相反**）。
+
+**去掉调用处默认值的连带影响**（踩过的坑）：
+
+`config.get(key)` 在键不存在时返回 **None**（falsy），
+所以「允许进步行街」会被当成 False。生产环境不会缺键
+（`ok.util.config` 用 `default_config` 补全），但**测试夹具**原来只有 1 个键
+→ 25 条测试挂掉。修法：夹具改成用**真实的 default_config**（和生产一样）。
+
+**门禁**：`check_handlers.py: check_config()` ——
+调用处不许写默认值、读的键必须在 spec 里声明、声明了没人读的报出来。
 
 第 3 步的样板：步行街（它今天暴露的问题最多）。
 判据和状态搬到 `places/street.py`，`handle_street` 退化成

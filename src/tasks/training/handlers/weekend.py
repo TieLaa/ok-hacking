@@ -436,7 +436,7 @@ class WeekendHandlers:
             return False
 
         if self.style != "训练流":
-            pref = self.config.get("公园选项", "野餐")
+            pref = self.config.get("公园选项")
             order = (pref,) + tuple(x for x in labels.PARK_OPTIONS if x != pref)
             ok = self.choose_option(texts, order)
             if ok:
@@ -448,7 +448,7 @@ class WeekendHandlers:
         if st.get("park_choice") is None:
             if day == "日":
                 stamina = self.top_bar(texts).get("stamina")
-                threshold = int(self.config.get("周末野餐阈值", 60))
+                threshold = int(self.config.get("周末野餐阈值"))
                 if stamina is not None and stamina < threshold:
                     st["park_choice"] = "野餐"
                     self.log_info(f"周日体力 {stamina} < {threshold} → 野餐补精力")
@@ -493,7 +493,7 @@ class WeekendHandlers:
         # （2026-10-30 15:04:04 点在顶栏「新品上市」上），那样当天该允许再试一次。
         self._shop_day = getattr(self, "_shop_try_key", None)
 
-        policy = self.config.get("购买策略", "只买金和紫")
+        policy = self.config.get("购买策略")
         money = self.read_money(texts)
         items = self.read_shop_items(texts)
         # 免费商品（白神时久：每天多一件 0 元商品）：不花零用钱，
@@ -782,7 +782,7 @@ class WeekendHandlers:
             self.log_info("游戏厅：跳过已三星小游戏")
             return True
 
-        if not self.config.get("游戏厅付费", True):
+        if not self.config.get("游戏厅付费"):
             self.log_info("游戏厅：未开启付费，退出")
             self.exit_page()
             return True

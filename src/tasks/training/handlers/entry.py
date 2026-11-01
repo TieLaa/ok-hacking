@@ -172,7 +172,7 @@ class EntryHandlers:
         if self.no_captain_mode:
             return self.stop_for_no_captain("训练核心（选队长）")
 
-        want = (self.config.get("指定队长", "") or "").strip()
+        want = (self.config.get("指定队长") or "").strip()
         if want and self.pick_captain_by_name(want):
             self._captain_matched_config = True
             return True
@@ -391,7 +391,7 @@ class EntryHandlers:
             return False
         if self.no_captain_mode:
             return self.stop_for_no_captain("确认编队（开始训练）")
-        if not self.config.get("允许开始训练", True):
+        if not self.config.get("允许开始训练"):
             self.log_info("已禁用自动开始训练，停在这里等你确认")
             return True
         # 注意：确认框正文里也有「开始训练」四个字（整句会被 OCR 成一个框），

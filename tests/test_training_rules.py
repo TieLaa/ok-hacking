@@ -9,6 +9,8 @@
     .venv\\Scripts\\python.exe -m unittest discover -s tests -p "test_training_rules.py" -v
 """
 
+import glob
+import json
 import os
 import sys
 import time
@@ -40,10 +42,20 @@ class FakeTask(DryRunTask):
     def __init__(self, texts, qualities=None, mates=None, config=None):
         frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
         super().__init__(frame, texts)
-        # 和 DryRunTask 一样默认关掉「无队长不接开局」：测试测的是各 handler 的
-        # 判据/顺序，不是「无队长模式」这道闸门；不关掉的话所有开局页 handler
-        # 都会在 FakeTask（config 为空）里直接停手，测什么都没动作。
-        self.config = {"无队长不接开局": False, **(config or {})}
+        # config 用**真实的 default_config**（DryRunTask 已经填好了），
+        # 只覆盖「无队长不接开局」和测试自己传进来的项。
+        #
+        # 2026-11-01 之前这里是 `{"无队长不接开局": False, **config}` ——
+        # 只留一个键，靠「每个调用处都写 config.get(key, 默认值)」兜底。
+        # 去掉调用处的死默认值之后（默认值只留在 config_spec 一处），
+        # 缺键会拿到 **None**（falsy）→ 「允许进步行街」被当成 False，
+        # 一批测试挂掉。**夹具必须和生产一样**，否则测的就不是真实行为。
+        #
+        # 「无队长不接开局」关掉：测试测的是各 handler 的判据/顺序，
+        # 不是「无队长模式」这道闸门；不关掉的话所有开局页 handler
+        # 都会直接停手，测什么都没动作。
+        self.config["无队长不接开局"] = False
+        self.config.update(config or {})
         self._qualities = list(qualities or [])
         self._mates = list(mates or [])
         self.ocr_calls = 0
@@ -1693,6 +1705,117 @@ class DayCycleRules(unittest.TestCase):
         # handler 只做「照它说的做」
         self.assertTrue(hasattr(FakeTask, "training_day_action"))
         self.assertTrue(hasattr(FakeTask, "outing_offer"))
+
+
+class ConfigSpecRules(unittest.TestCase):
+    """配置项的**唯一声明**（training/config_spec.py）。
+
+    2026-11-01 实测的三个问题，这里逐条锁住：
+      ① 默认值写在两处（调用处的那个是死代码）；
+      ② 有配置项用户在 GUI 里配不到（没在 spec 里声明）；
+      ③ 有配置项声明了但没人读（GUI 上的无效项）。
+    """
+
+    def test_spec_declares_all_used_keys(self):
+        """training/ 里读的每个 config 键都在 spec 里声明了。
+
+        缺键时 `config.get(key)` 返回 **None**（falsy）→
+        「允许进步行街」被当成 False —— 2026-11-01 去掉调用处默认值后，
+        25 条测试就是这么挂的（FakeTask 的 config 只有 1 个键）。
+        """
+        import ast
+        from src.tasks.training import config_spec
+        declared = {s.key for s in config_spec.ALL}
+        used = set()
+        for path in glob.glob(r"src\tasks\training\**\*.py", recursive=True):
+            if path.endswith("config_spec.py"):
+                continue
+            tree = ast.parse(open(path, encoding="utf-8").read())
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "get"):
+                    continue
+                fn = node.func
+                if not (isinstance(fn.value, ast.Attribute)
+                        and fn.value.attr == "config"):
+                    continue
+                if not node.args:
+                    continue
+                kn = node.args[0]
+                if isinstance(kn, ast.Constant) and isinstance(kn.value, str):
+                    used.add(kn.value)
+        missing = used - declared
+        self.assertEqual(missing, set(),
+                         "这些键在 src/ 里被读但没在 config_spec 里声明：%s" % missing)
+
+    def test_no_default_value_at_call_site(self):
+        """调用处不许再写默认值（默认值只许在 spec 里）。"""
+        import ast
+        offenders = []
+        for path in glob.glob(r"src\tasks\training\**\*.py", recursive=True):
+            if path.endswith("config_spec.py"):
+                continue
+            tree = ast.parse(open(path, encoding="utf-8").read())
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "get"):
+                    continue
+                fn = node.func
+                if not (isinstance(fn.value, ast.Attribute)
+                        and fn.value.attr == "config"):
+                    continue
+                if len(node.args) >= 2:
+                    offenders.append("%s:%d" % (path, node.lineno))
+        self.assertEqual(offenders, [],
+                         "调用处还写着默认值（死代码）：%s" % offenders)
+
+    def test_dead_config_removed(self):
+        """失效的「扭蛋优先属性」已从 spec 里删掉。
+
+        10-26 选卡策略重写（金紫优先/队友优先）之后就没有读取点了，
+        但声明和 GUI 说明一直留着 —— 而且说明写的是老口径
+        「会消耗所有精力」，与现行规则（体力 < 30 才买清空卡）**相反**。
+        """
+        from src.tasks.training import config_spec
+        keys = {s.key for s in config_spec.ALL}
+        self.assertNotIn("扭蛋优先属性", keys)
+
+    def test_gacha_clear_threshold_is_configurable(self):
+        """「扭蛋清空体力阈值」在 spec 里（以前用户配不到）。"""
+        from src.tasks.training import config_spec
+        spec = {s.key: s for s in config_spec.ALL}
+        self.assertIn("扭蛋清空体力阈值", spec)
+        self.assertEqual(spec["扭蛋清空体力阈值"].default, 30)
+
+    def test_fixture_uses_real_defaults(self):
+        """测试夹具必须用**真实的 default_config**（和生产一样）。
+
+        夹具只有 1 个键 → 缺键拿到 None → 一批测试挂掉。
+        """
+        from src.tasks.training import config_spec
+        task = FakeTask([])
+        self.assertEqual(task.config["允许进步行街"], True)
+        self.assertEqual(task.config["休息体力阈值"], 40)
+        self.assertEqual(task.config["扭蛋清空体力阈值"], 30)
+        self.assertEqual(len(task.config), len(config_spec.ALL))
+
+    def test_json_and_spec_agree(self):
+        """configs/TrainingTask.json 的键集合与 spec 一致。
+
+        不一致的话，`ok.util.config.Config.verify_config` 会把 json 里
+        多出来的键**删掉**（用户改过的值就丢了）。
+        """
+        import json
+        from src.tasks.training import config_spec
+        spec = {s.key for s in config_spec.ALL}
+        cfg = json.load(open(r"configs\TrainingTask.json", encoding="utf-8"))
+        extra = set(cfg) - spec
+        self.assertEqual(extra, set(),
+                         "json 里多出来的键会被 verify_config 删掉：%s" % extra)
+        self.assertIn("扭蛋清空体力阈值", cfg,
+                      "json 里要有它（GUI 才能配上）")
 
 
 class InteractionsRules(unittest.TestCase):

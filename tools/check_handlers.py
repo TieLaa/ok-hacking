@@ -89,11 +89,20 @@ class DryRunTask(TrainingTask):
     def __init__(self, frame, texts):
         self._executor = _FakeExecutor(frame)
         self._texts = texts
-        # 空配置即可：所有 handler 里都写了 `config.get(key, 默认值)`，
-        # 这样回归测的就是**代码里的默认策略**，不依赖 configs/*.json。
+        # 配置用**真实的 default_config**（config_spec 生成）——
+        # 和生产环境一样（ok.util.config 会用 default_config 补全所有键）。
+        #
+        # 2026-11-01 之前这里是 `{"无队长不接开局": False}` —— 只留一个键，
+        # 靠「每个调用处都写 `config.get(key, 默认值)`」来兜底。
+        # 去掉调用处的死默认值之后（默认值只留在 config_spec 一处），
+        # 缺键就会拿到 **None**（falsy）→ 「允许进步行街」被当成 False，
+        # 25 条测试挂掉。**夹具必须和��产一样**，否则测的就不是真实行为。
+        #
         # 例外：`无队长不接开局` 关掉，否则空队长会触发「只跑已有局」的闸门，
         # 开局页全部不再执行，回归就测不到启程/选人/笔记/器材。
-        self.config = {"无队长不接开局": False}
+        from src.tasks.training import config_spec
+        self.config = dict(config_spec.build_default_config())
+        self.config["无队长不接开局"] = False
         self.actions = []
         self.logs = []
         self.name = "dry-run"
@@ -481,6 +490,104 @@ def check_interactions():
     return problems
 
 
+# ---------- 配置项单一来源（2026-11-01 架构）----------
+# `training/config_spec.py` 是配置项的**唯一声明**（键/默认值/类型/说明）。
+#
+# 为什么必须收口（2026-11-01 实测的三个问题）：
+#   ① 默认值写在两处 —— `default_config` 声明了 40，调用处又写一遍
+#      `config.get("休息体力阈值", 40)`，那个 40 **永远不生效**（死代码）；
+#   ② 有配置项用户在 GUI 里配不到（没在 default_config 声明）；
+#   ③ 有配置项声明了但没人读（GUI 上的无效项）。
+#
+# 规则：
+#   ✗ 禁止：调用处写默认值（`config.get("键", 默认值)`）—— 默认值只许在 spec 里
+#   ✗ 禁止：读一个 spec 里没声明的键 —— 缺键时 config.get 返回 None，
+#     而 None 是 falsy → 「允许进步行街」被当成 False（2026-11-01 踩过）
+#   ✓ 允许：spec 里声明了、但**没有任何地方读**（要报出来，但可以先留着）
+def check_config():
+    """配置项的单一来源门禁（**只管 TrainingTask 的配置**）。
+
+    范围：`src/tasks/training/` 下读 `self.config` 的地方。
+    别的任务（QuickMatchTask / AutoBattleTask / InputTestTask）有各自的
+    `default_config`，不在这个 spec 的范围内 —— 它们自己声明，不归这里管。
+
+    返回问题列表（空 = 通过）。
+    """
+    problems = []
+    spec_path = os.path.join(ROOT, "src", "tasks", "training", "config_spec.py")
+    if not os.path.exists(spec_path):
+        return problems
+    sys.path.insert(0, ROOT)
+    from src.tasks.training import config_spec
+    declared = {s.key for s in config_spec.ALL}
+
+    read_keys = set()
+    src_root = os.path.join(ROOT, "src")
+    for dp, _, files in os.walk(src_root):
+        for f in files:
+            if not f.endswith(".py"):
+                continue
+            path = os.path.join(dp, f)
+            rel = os.path.relpath(path, ROOT).replace("\\", "/")
+            if rel.endswith("training/config_spec.py"):
+                continue
+            # 只管 training/ 下的（本任务的业务代码）
+            in_scope = rel.startswith("src/tasks/training/")
+            tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                    continue
+                fn = node.func
+                if not (isinstance(fn, ast.Attribute) and fn.attr == "get"):
+                    continue
+                if not (isinstance(fn.value, ast.Attribute) and fn.value.attr == "config"):
+                    continue
+                if not node.args:
+                    continue
+                kn = node.args[0]
+                if not (isinstance(kn, ast.Constant) and isinstance(kn.value, str)):
+                    continue
+                key = kn.value
+                if in_scope:
+                    read_keys.add(key)
+                    if len(node.args) >= 2:
+                        problems.append(
+                            f"{rel}:{node.lineno} config.get({key!r}, 默认值) —— "
+                            f"默认值只许写在 training/config_spec.py（调用处那个是死代码）")
+                    if key not in declared:
+                        problems.append(
+                            f"{rel}:{node.lineno} 读了没在 config_spec 里声明的键 {key!r} —— "
+                            f"缺键时 config.get 返回 None（falsy），语义会变")
+
+    # 声明了但 training/ 里没人读 —— **警告**（不拦截）。
+    # 这些是 2026-10 就存在的死配置项（`只在决战前清空` / `快进重复间隔(秒)`），
+    # 不是本次改动造成的；先报出来，等用户决定接上还是删掉。
+    # 注意：有些键是**监控页**读的（技能-彩色/金色/白色），不算无效项。
+    monitor = os.path.join(ROOT, "src", "ui", "MonitorTab.py")
+    if os.path.exists(monitor):
+        mtext = open(monitor, encoding="utf-8").read()
+        for s in config_spec.ALL:
+            if s.key in read_keys:
+                continue
+            if ('"%s"' % s.key) in mtext:
+                read_keys.add(s.key)
+
+    warnings = []
+    for key in sorted(declared - read_keys):
+        warnings.append(
+            f"src/tasks/training/config_spec.py: 声明了 {key!r} 但 src/ 里没人读 —— "
+            f"GUI 上是个无效选项（要么接上，要么删掉）")
+
+    print("-" * 96)
+    print(f"配置单一来源：违规 {len(problems)} 处"
+          f"（声明 {len(declared)} 项 / 被读 {len(read_keys & declared)} 项）")
+    for p in problems:
+        print("  ✗ " + p)
+    for w in warnings:
+        print("  ! " + w)
+    return problems
+
+
 # ---------- 判据单一来源（文案门禁）----------
 # 受管按钮词：出现在这些方法的 names 参数里、且是**内联字面量**，就算违规。
 # 为什么是这几个：它们是「按钮」，必须全等匹配且来自 labels.BUTTONS
@@ -660,9 +767,10 @@ def main():
     date_problems = check_date_entry()
     place_problems = check_places()
     inter_problems = check_interactions()
+    config_problems = check_config()
 
     if fails or misses or arch_problems or label_problems or date_problems \
-            or place_problems or inter_problems:
+            or place_problems or inter_problems or config_problems:
         print("回归失败")
         return 1
     print("回归通过")

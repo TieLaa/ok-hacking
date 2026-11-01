@@ -257,7 +257,7 @@ class MatchHandlers:
         if self.ensure_speed(texts):
             return True
 
-        mode = self.config.get("比赛日处理", "")
+        mode = self.config.get("比赛日处理") or ""
         if mode.startswith("总是进比赛") and go is not None:
             self._match_intro_at = time.monotonic()
             self.click_box(go, after_sleep=0.6)
@@ -535,7 +535,7 @@ class MatchHandlers:
         if os.environ.get("OK_DUMP_CHOICES"):
             self.dump_unknown(texts, "choice_skill")
 
-        pref = list(self.config.get("技能标签优先", ["得分手"]))
+        pref = list(self.config.get("技能标签优先"))
         frame = self.frame
         icons = self.find_teammate_icons(0.0, 1.0) if frame is not None else []
 

@@ -78,7 +78,7 @@ class StreetPlace:
 
     def street_enabled(self):
         """配置开关「允许进步行街」开了吗？"""
-        return bool(self.config.get("允许进步行街", True))
+        return bool(self.config.get("允许进步行街"))
 
     # ---------- 买哪张卡（纯判断，不点击） ----------
 
@@ -94,7 +94,7 @@ class StreetPlace:
         读不到零用钱或价格时**不买**（买不起点「确定」游戏不扣钱、页面也不关，
         旧代码会一直「选卡 → 确定 → 没反应」，2026-10-26 实测）。
         """
-        clear_limit = int(self.config.get("扭蛋清空体力阈值", 30))
+        clear_limit = int(self.config.get("扭蛋清空体力阈值"))
         allow_clear = stamina is not None and stamina < clear_limit
 
         # 品质优先级（配置项「扭蛋品质优先」，默认 彩色 > 金色 > 紫色）：

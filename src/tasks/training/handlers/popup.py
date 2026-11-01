@@ -55,7 +55,7 @@ class PopupHandlers:
         if self.match_text(texts, "训练确认") is None:
             return False
         # 想开新的一局：先删掉上一局的存档（旧局已经跑完，删档不会误伤进度）
-        if self.config.get("新一局删档", False):
+        if self.config.get("新一局删档"):
             wipe = self.exact_text(texts, ("删档",))
             if wipe is not None:
                 self.click_box(wipe, after_sleep=0.9)

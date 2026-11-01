@@ -105,7 +105,7 @@ class TrainingFlowMixin:
             self.log_info(f"parsers: {_p.__file__} v{getattr(_p, 'CODE_VERSION', '?')}")
         except Exception:                        # noqa: BLE001
             pass
-        interaction = self.apply_user_idle_wait(self.config.get("空闲等待(秒)", 3))
+        interaction = self.apply_user_idle_wait(self.config.get("空闲等待(秒)"))
         # 等待用户空闲可能很久：把紧急停止挂进去，否则按了停止键要等用户停手才生效
         if interaction is not None and hasattr(interaction, "abort_check"):
             interaction.abort_check = STOP.event.is_set
@@ -124,9 +124,9 @@ class TrainingFlowMixin:
         self.reset_run_state()
         self.log_info(f"流派：{self.style}"
                       + ("" if self.style_known else "（待日历识别队长）"))
-        max_steps = int(self.config.get("单局最大操作数", 400))
-        interval = float(self.config.get("操作间隔(秒)", 0.8))
-        stuck_seconds = float(self.config.get("卡死判定(秒)", 5))
+        max_steps = int(self.config.get("单局最大操作数"))
+        interval = float(self.config.get("操作间隔(秒)"))
+        stuck_seconds = float(self.config.get("卡死判定(秒)"))
         stuck_limit = max(3, int(stuck_seconds / max(interval, 0.05)))
         last_sig, stuck = None, 0
         self._last_dump = 0.0
@@ -501,9 +501,9 @@ class TrainingFlowMixin:
         开关 `无队长不接开局` 默认 True；回归桩（tools/check_handlers.py）关掉它，
         这样测试仍然按旧的「自动选第一个」流程跑。
         """
-        if not self.config.get("无队长不接开局", True):
+        if not self.config.get("无队长不接开局"):
             return False
-        return not (self.config.get("指定队长", "") or "").strip()
+        return not (self.config.get("指定队长") or "").strip()
 
     def stop_for_no_captain(self, stage):
         """无队长模式下遇到开局页面：不动作，直接让 run() 停下。"""
@@ -598,7 +598,7 @@ class TrainingFlowMixin:
 
         现在：填了队长就查表定流派；查不到（SR/R 或 OCR 名不匹配）才回落到日历。
         """
-        name = (self.config.get("指定队长", "") or "").strip()
+        name = (self.config.get("指定队长") or "").strip()
         if not name:
             return False
         style = self.style_for_name(name)
@@ -636,9 +636,9 @@ class TrainingFlowMixin:
             if not st.get("gacha_spent"):
                 places.append("餐厅")
         places = [p for p in places if p != "商店"]
-        if not self.config.get("允许进游戏厅", True):
+        if not self.config.get("允许进游戏厅"):
             places = [p for p in places if p != "游戏厅"]
-        if not self.config.get("允许进步行街", True):
+        if not self.config.get("允许进步行街"):
             places = [p for p in places if p != "步行街"]
         # 兜底：开关全关/表里没这个组合时总得花掉一天，退化去公园。
         if not places:
@@ -652,7 +652,7 @@ class TrainingFlowMixin:
         （周五扭蛋流要打工/抽扭蛋）。原来的周五特殊阈值（训练流以外 55、
         商店流 80）已取消，周五回到配置里的「休息体力阈值」。
         """
-        base = int(self.config.get("休息体力阈值", 40))
+        base = int(self.config.get("休息体力阈值"))
         if day == "四":
             return max(base, THURSDAY_REST_THRESHOLD)
         return base
