@@ -76,3 +76,26 @@ HANDLERS = (
     EntryHandlers.handle_club_members,
     EntryHandlers.handle_story_arrow,
 )
+
+# handler 的**瞬时状态**声明：谁的状态谁声明。
+# 命中别的 handler 时，这些字段自动清零（flow._reset_handler_leave_states）。
+#
+# 为什么要有这张表：以前的写法是在 flow._handle_any 里
+#     if name != "handle_prepare": self._skip_tries = 0
+# 用 handler 名字**字符串**表达「handler 之间有依赖」，于是每加一个 handler
+# 都要回来改一次 flow（2026-11-01 重构前的三处：handle_prepare / handle_in_match /
+# handle_subject_select）。现在依赖只存在这一张表里，flow 不认识任何 handler 名字；
+# tools/check_handlers.py 会禁止 src/ 其它地方再出现 handler 名字字符串。
+#
+# 值可以是常量，也可以是工厂函数（可变默认值必须用 lambda，否则所有实例共享同一个 dict）。
+LEAVE_RESETS = {
+    # 跳过比赛只试一次：换个界面就重来
+    "handle_prepare": {"_skip_tries": 0},
+    # 比赛内的「手动修正/快进」标记：离开比赛界面就清空
+    "handle_in_match": {
+        "_match_flags": lambda: {"manual_fixed": False, "fast_clicked": False,
+                                 "last_fast_at": 0.0},
+    },
+    # 训练科目页的选择缓存：离开科目页就清空
+    "handle_subject_select": {"_picked_subject": False, "_picked_index": 0},
+}

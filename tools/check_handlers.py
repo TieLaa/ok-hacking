@@ -15,6 +15,7 @@
 退出码：有「未命中」或「和 expected.json 不一致」时返回 1，可以直接进 pre-commit / CI。
 """
 
+import ast
 import glob
 import json
 import os
@@ -257,6 +258,73 @@ def describe(actions):
     return " ".join(str(x) for x in actions[0])[:46]
 
 
+def check_architecture():
+    """结构断言（ast，不 import 代码）：挡住「用 handler 名字做判断分支」的回退。
+
+    背景：`flow._handle_any` 曾经用 `if name != "handle_prepare": self._skip_tries = 0`
+    表达「handler 之间有依赖」，于是每加一个 handler 都要回去改 flow。
+    2026-11-01 改成 `handlers/__init__.py: LEAVE_RESETS` 声明表 + 自动清零。
+
+    规则（精确到"判断分支"，不是一刀切）：
+      ✗ 禁止：比较/`in` 判断里出现 handler 名字字面量（`if name != "handle_x"`、`if state in ("handle_x",)`）
+      ✓ 允许：模块级**声明表**（集合/字典里列 handler 名，如 `SNAP_HANDLERS`、`LEAVE_RESETS`）
+    后者是数据，前者是把依赖写进控制流 —— 只拦后者。
+
+    为什么用 ast 不用 grep：`from . import match`、别名导入、注释/字符串里的字样，
+    grep 会漏或误报；ast 只看真正的比较表达式。
+
+    返回问题列表（空 = 通过）。顺带打印 `self._xxx = …` 赋值数当**状态散装度基线**（只统计不拦截）。
+    """
+    handler_names = set()
+    handler_dir = os.path.join(ROOT, "src", "tasks", "training", "handlers")
+    for f in os.listdir(handler_dir):
+        if not f.endswith(".py"):
+            continue
+        tree = ast.parse(open(os.path.join(handler_dir, f), encoding="utf-8").read())
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("handle_"):
+                handler_names.add(node.name)
+
+    problems = []
+    state_assignments = 0
+    for dp, _, files in os.walk(os.path.join(ROOT, "src")):
+        for f in files:
+            if not f.endswith(".py"):
+                continue
+            path = os.path.join(dp, f)
+            rel = os.path.relpath(path, ROOT).replace("\\", "/")
+            tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+
+            # 基线：`self._xxx = …` 赋值次数（跨拍状态散装度）
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    for t in targets:
+                        if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) \
+                                and t.value.id == "self" and t.attr.startswith("_"):
+                            state_assignments += 1
+
+            # 违规：判断分支里的 handler 名字字面量
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Compare):
+                    continue
+                operands = [node.left] + list(node.comparators)
+                for sub in operands:
+                    for c in ast.walk(sub):
+                        if isinstance(c, ast.Constant) and isinstance(c.value, str) \
+                                and c.value in handler_names:
+                            problems.append(
+                                f"{rel}:{c.lineno} 判断分支里出现 handler 名字「{c.value}」——"
+                                f"依赖要写进 handlers/__init__.py 的声明表，不要写进控制流")
+
+    print("-" * 96)
+    print(f"结构断言：判断分支里的 handler 名字 {len(problems)} 处；"
+          f"self._xxx 赋值 {state_assignments} 处（状态散装度基线，只统计）")
+    for p in problems:
+        print("  ✗ " + p)
+    return problems
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     verbose = "--verbose" in sys.argv
@@ -333,12 +401,13 @@ def main():
         for base, others in conflicts:
             print(f"  {base}: 首个 {expected.get(base, '?')}，另外 {'、'.join(others)}")
 
-    if fails or misses:
+    arch_problems = check_architecture()
+
+    if fails or misses or arch_problems:
         print("回归失败")
         return 1
     print("回归通过")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

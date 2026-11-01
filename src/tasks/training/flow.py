@@ -454,6 +454,20 @@ class TrainingFlowMixin:
         except Exception as e:                       # noqa: BLE001
             self.log_debug(f"调试包保存失败: {type(e).__name__}: {e}")
 
+    def _reset_handler_leave_states(self, hit_name):
+        """命中 `hit_name` 后，把**其它** handler 声明的瞬时状态清回默认值。
+
+        声明表在 `handlers/__init__.py: LEAVE_RESETS` —— 谁的状态谁声明，
+        这里不认识任何具体 handler 名字，所以**加 handler 不用改本文件**。
+        """
+        from src.tasks.training.handlers import LEAVE_RESETS   # 局部导入，避开导入环
+
+        for owner, defaults in LEAVE_RESETS.items():
+            if owner == hit_name:
+                continue
+            for attr, default in defaults.items():
+                setattr(self, attr, default() if callable(default) else default)
+
     def _handle_any(self, texts, frame=None):
         # 大厅子菜单（强化/招募/卡池…）：玩家自己点进去的，任务一律不动，
         # 也不要走「不认识的界面 → 点屏幕中央」兜底（2026-10-28 用户反馈：
@@ -470,16 +484,10 @@ class TrainingFlowMixin:
                     # 记录「点击之后应该看到的那一帧」的指纹，下一拍对比是否变化
                     self._sig_after_click = self._signature(texts)
                     self.log_debug(f"命中 {handler.__name__}（第 {self._steps} 步）")
-                    # 用名字判断而不是 `is TrainingTask.handle_x`：
-                    # 拆分到 mixin 后类引用会循环 import，名字更稳。
-                    name = handler.__name__
-                    if name != "handle_prepare":
-                        self._skip_tries = 0
-                    if name != "handle_in_match":
-                        self._match_flags = {"manual_fixed": False, "fast_clicked": False, "last_fast_at": 0.0}
-                    if name != "handle_subject_select":
-                        self._picked_subject = False
-                        self._picked_index = 0
+                    # 各 handler 的瞬时状态由它自己声明（handlers/__init__.py: LEAVE_RESETS），
+                    # 命中别的界面时自动清零。这里**不再用 handler 名字字符串判断** ——
+                    # 那种写法每加一个 handler 都要回来改本函数（2026-11-01 重构）。
+                    self._reset_handler_leave_states(handler.__name__)
                     return True
             except Exception as e:
                 self.log_error(f"{handler.__name__} 异常: {type(e).__name__}: {e}")
