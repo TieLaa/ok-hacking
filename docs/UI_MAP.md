@@ -32,23 +32,27 @@
    （日志 `left_click 今天可以出行哦！要不 (950, 182)`），点了没有反应。
    必须限定 `x > 0.75w` 的整词「出行」。
 2. 一天只能出行一次，否则「出行 → 地图 → 退回首页」打转；
-   `weekend_state()["outing_done"]` 记录，非周末再遇到就直接返回主界面。
+   `outing_done` 记录，非周末再遇到就直接返回主界面。
+3. **`outing_done` 只在「真的看到地图」那一拍置位**（`handle_weekend`，2026-11-03）。
+   旧版点完「出行」就记账，于是这一拍点了没生效（页面淡入期常见）→ 周五当天
+   就被 `handle_go_out`（非周末）锁死，整天进不去地图。现在点完不记账，
+   下一拍自动重试（最多 `OUTING_CLICK_LIMIT` 次），头一拍也只等不点。
 
-代码：`handlers/weekend.py: handle_go_out`、`parsers.py: weekend_state`。
+代码：`handlers/weekend.py: handle_go_out / handle_weekend`、
+`handlers/training.py: handle_training_day`、`daycycle.py: outing_offer / mark_outing_used`。
 
 扭蛋流的周末口径（因为这个天赋，周五也算周末）：
 
 - 周五 / 周六 / 周日：只进「步行街（扭蛋）」或「餐厅」。
-- **钱 > 300 → 先进步行街消费**（钱多就该花掉，别留到最后剩一堆）。
-- 钱 ≤ 300 时看队友：**两边都有队友 → 步行街**；只有一边有队友 → 去那一边；
-  **都没队友**：周五 / 周六 → 餐厅赚钱；周日 → 步行街消费。
-- 地图上步行街上方出现彩色爆炸标签 **「扭蛋增强！」** 时：不管钱和队友，
-  直接进步行街（最高优先级）。
+- **零用钱读不到 → 去步行街**（不拿打工赌今天的消费）。
+- **零用钱 ≤ 300 → 直接去餐厅打工，不看队友**（2026-11-03 用户修正；
+  钱不够就打工，第二天再抽）。
+- **钱 > 300** 才排顺序：两边都有队友 → 步行街；步行街有「扭蛋增强！」→ 步行街；
+  只有一边有队友 → 去那一边；**都没队友**：周五 / 周六 → 餐厅赚钱；周日 → 步行街消费。
 - 去了步行街但**没消费**（没钱 / 没买到）→ 再去餐厅打工；买到东西就不去了。
 - 餐厅打工：默认选**当服务员**（右边、耗精力）；**桌游GM**（左边）的队友比它
   **多 2 个及以上**才改选桌游GM；当服务员精力不够就选桌游GM。
-- 代码：`constants.WEEKEND_PLAN`、`flow.weekend_priority`、
-  `handlers/weekend.py: prefer_mate_venue / restaurant_order`、
+- 代码：`constants.WEEKEND_PLAN`、`places/map.py: today_places / prefer_mate_venue`、
   `places/restaurant.py: restaurant_preference`。
 
 ## 周末地图的标记
@@ -169,12 +173,34 @@
 那行里的 `早三/昆三` 属于框架日志，只能靠**不用 debug 启动**（`main.py` 而不是 `main_debug.py`，
 `config['debug']=False` → 日志级别 INFO）才消失。
 
+### 已知噪声：精力条左端的 ⚡ 图标会被并进数字
+
+精力条左端有一个 ⚡ 图标，**位置固定、纯装饰**。整帧 OCR 会把它并进数字框，
+输出 `3 54/130` / `381/130` / `3130/130`，记录里看着像「数字错了」。
+带图标的框左沿在 `x≈0.197~0.216w`，不带图标的是 `x≈0.231w`（1549x871 实测）。
+
+图标在模型眼里**不是字符**：按 `ocr.txt` 的真实框坐标单独裁出来放大 x3~x8 再识别，
+返回的是空列表；只有被并进数字框、要求「输出一串字符」时才会被猜成 3。
+
+**2026-11-03 已实现清洗**（用户口径：「把 ⚡ 排除出去，反正没有用，只是多个图标好看」）：
+`ui/topbar_energy.py: strip_icon_digit / strip_icon_reading`，同样挂在 `_ocr_region` 上，
+不复制帧、不动画面。判据只用文本 —— **当前值 > 上限** 就是图标（真实精力不可能
+超过上限），丢掉那一位：
+
+    3 54/130 → 54/130     381/130 → 81/130     3130/130 → 130/130
+    105/145  → 不动        13/20   → 不动
+
+实测覆盖 `logs/debug` 全部 177 条顶栏精力文本：129 条命中、73 条正常值零误伤。
+回归：`tests/test_topbar_energy.py`。
+
 ### 注意：别把这几类「三」当噪声
 
 `三分威`（三分威胁，技能名）、`三张卡`、`事件三选一`、`三倍经`、`降序三`、`三分卡` 是**真文本**。
 
 代码：`ui/Defs.py: SPEED_ICON_CLICK / TOP_ICON_POINTS / ICON_NOISE_RE`、
-`ui/topbar.py: speed_at_max / off_text / speed_label`、`handlers/match.py: ensure_speed / speed_level`、
+`ui/topbar.py: speed_at_max / off_text / speed_label`、
+`ui/topbar_energy.py: strip_icon_digit / strip_icon_reading`、
+`handlers/match.py: ensure_speed / speed_level`、
 `tasks/BaseGirlsTask.py: EXIT_TEXTS / find_exit_control / drop_icon_noise`。
 
 ## 笔记「学习」页（开局装备的笔记触发，不可跳过动画 + 右下「学习」按钮）
