@@ -1010,8 +1010,8 @@ runtime，reload_tasks 只刷新已注册任务模块。
 - 根因：`match.py` 只 `from ...constants import JPEG_PARAMS`，`PROJECT_ROOT` 从没导入；
   外面套着 `except Exception: log_debug(...)`，失败就一行 DEBUG，跑完没人会翻。
 - 判据：**「功能没生效」先查「有没有被静默吞掉的异常」** —— 日志里 `DEBUG` 级别的
-  `失败: XxxError` 一律当红旗。顺手跑 `tools/check_undefined_names.py`（AST 扫
-  「裸名字用了但没导入/没定义」，2026-11-03 全项目只此一处）。
+  `失败: XxxError` 一律当红旗。回归里已有这道门禁：`check_handlers.py: check_undefined_names()`
+  （AST 扫「裸名字用了但没导入/没定义」，2026-11-03 全项目只此一处，修完 0 处）。
 - 提示词里应该加的那句：**「`try/except` 把异常降成 debug 等于把 bug 藏起来。凡是
   『本该产出文件/数据』的功能，日志里必须有成功计数：只有失败告警、没有成功行，
   就是没跑过。」**

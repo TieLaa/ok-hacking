@@ -177,6 +177,8 @@ class StreetPlace:      # 其余四个地点同形
 | `check_places()` | 地点模块之间不许互相知道（该由地图模块决定去哪个） |
 | `check_interactions()` | 通用交互层不许出现地点名（坐标/正则由调用方传进来） |
 | `check_config()` | 配置默认值只许写在 `config_spec.py`；读的键必须在 spec 里声明 |
+| `check_mojibake()` | 源码里不许出现 U+FFFD（被 GBK 吃掉的字符） |
+| `check_undefined_names()` | 裸名字用了但没导入/没定义（漏 import 的模块级常量；被 try/except 压成 DEBUG 的那类 bug） |
 | 回归图 | `docs/shots/expected.json` 锁「哪张图命中哪个 handler」 |
 
 ## 五、落地顺序

@@ -648,6 +648,65 @@ def load_allowlist():
     return allowed
 
 
+def check_undefined_names():
+    """未定义名字门禁：`foo` 用了但没导入/没定义 —— 只可能是漏 import 的模块级常量。
+
+    2026-11-03 抓到的真实 bug：`handlers/match.py: dump_skill_frame` 用了
+    `PROJECT_ROOT` 但只 import 了 `JPEG_PARAMS`，外面套着 `except Exception: log_debug`
+    → 技能三选一存帧**从上线起一次都没成功**，日志上只有一行 DEBUG
+    `技能帧存证失败: NameError`。跑完整一轮才发现。
+
+    为什么用 ast 不用 pyflakes：本机没装 pyflakes，而且这条只需查「裸名字」
+    （混入类全走 `self.xxx`，裸名字几乎只可能是模块级常量/函数），30 行够用。
+
+    只管 `src/` 和 `tools/`（`tests/` 里同名变量多，误报率高）。
+    """
+    import builtins
+
+    def defined_names(tree):
+        names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    names.add((alias.asname or alias.name).split(".")[0])
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                names.add(node.id)
+            elif isinstance(node, ast.arg):
+                names.add(node.arg)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                names.add(node.name)
+            elif isinstance(node, (ast.Global, ast.Nonlocal)):
+                names.update(node.names)
+        return names
+
+    problems = []
+    for sub in ("src", "tools"):
+        for dp, _, files in os.walk(os.path.join(ROOT, sub)):
+            for f in sorted(files):
+                if not f.endswith(".py"):
+                    continue
+                path = os.path.join(dp, f)
+                rel = os.path.relpath(path, ROOT).replace("\\", "/")
+                try:
+                    source = open(path, encoding="utf-8").read()
+                    tree = ast.parse(source, filename=path)
+                except (OSError, SyntaxError) as e:
+                    problems.append(f"{rel}: 解析失败 {type(e).__name__}")
+                    continue
+                known = (defined_names(tree) | set(dir(builtins))
+                         | {"__file__", "__name__", "__doc__"})
+                for node in ast.walk(tree):
+                    if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+                            and node.id not in known):
+                        problems.append(f"{rel}:{node.lineno} {node.id}")
+    print(f"未定义名字门禁：裸名字用了但没导入/没定义 {len(problems)} 处")
+    for item in problems:
+        print(f"  - {item}")
+    return problems
+
+
 def check_mojibake():
     """源码里不许出现 U+FFFD —— 那是被 GBK 吃掉的字符，中文已经丢了。
 
@@ -822,10 +881,11 @@ def main():
     inter_problems = check_interactions()
     config_problems = check_config()
     moji_problems = check_mojibake()
+    name_problems = check_undefined_names()
 
     failed = bool(fails or misses or arch_problems or label_problems
                   or date_problems or place_problems or inter_problems
-                  or config_problems or moji_problems)
+                  or config_problems or moji_problems or name_problems)
     # 中文结果落盘（UTF-8）：stdout 可能被父进程按 cp936 解码（见 tools/_console.py）。
     lines = ["# check_handlers 报告",
              f"结果：{'失败' if failed else '通过'}",
