@@ -161,6 +161,11 @@ class DayCycleMixin:
         （官方日志 `left_click 今天可以出行哦！要不 (950, 182)`），按钮一下没点到，
         外出标记却已经置上，下一拍直接进训练（用户：「为什么没有点出行，
         反而默认进了训练」）。
+
+        2026-11-03 再修：「点到了」还不够 —— 点下去也可能**没生效**（页面淡入期、
+        按钮被挡）。所以 `mark_outing_used()` 只在 `handle_weekend` **看到地图**时
+        调用；点空了下一拍这里仍然返回 "点按钮"，会自动重试
+        （`handle_training_day` 用 `OUTING_CLICK_LIMIT` 限次）。
         """
         if self.match_text(texts, "出行") is None:
             return None, "这一页没有「出行」"
@@ -367,6 +372,13 @@ class DayCycleMixin:
         return bool(self.day_state().get("outing_done"))
 
     def mark_outing_used(self):
-        """标记今天的额外出行机会已用（**点到了才算**）。"""
+        """标记今天的额外出行机会已用。
+
+        **置位点只有一个：真的看到地图的那一拍**（`weekend.handle_weekend`）。
+        2026-11-03 之前是在 `handle_training_day` 点完「出行」就置位，于是
+        点空了也算用过 —— 周五（野上泷额外周末）当天再也进不去地图：
+        `handle_go_out` 对非周末的 `outing_done` 是直接 `exit_page()`。
+        改成「进门才算」以后，点空了下一拍还能重试。
+        """
         self.day_state()["outing_done"] = True
 

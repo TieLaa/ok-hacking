@@ -28,6 +28,16 @@ class TrainingHandlers:
     # 代价：每天多等一拍（≈0.5 秒）。换的是一次不可撤销的错误点击。
     HUB_SETTLE_TICKS = 1
 
+    # 训练日「出行」按钮最多点几次。
+    # 2026-11-03 14:48 实测（用户：「星期5没进出行地图」）：那一拍点「出行」
+    # @(1373,465) 没生效，下一拍页面还停在训练日主界面、直接去点了「训练」；
+    # 而旧代码点完就记 `outing_done`（不管有没有真的进地图），于是
+    # `handle_go_out` 对周五（非周末）直接 `exit_page()` → 当天的额外周末
+    # **整天都进不去**。现在：点完不记账（记账挪到真的看到地图那一拍），
+    # 页面没翻就下一拍重试；点够这么多次还没进地图才放弃
+    # （放弃时按「今天出过行」处理并告警，不要死循环在这一页）。
+    OUTING_CLICK_LIMIT = 3
+
     # 加强训练（「球队经理的帮助」那页）同样要躲淡入：头一拍只观察不点。
     # 2026-11-02 用户实机反馈「两次空点击」：第一拍卡片还在滑入，点下去不生效，
     # 紧接着的「确定」也就白点了。
@@ -201,14 +211,37 @@ class TrainingHandlers:
             return True
         # 2026-10-29 用户补充：野上泷周五也能出行 —— 训练日主界面上出现「出行」时，
         # 先把这次外出机会用掉（一天一次），再回来训练/休息；否则练完这天就过去了。
+        #
+        # 2026-11-03 修（用户：「星期5没进出行地图」），三条一起才成立：
+        #   1. **头一拍不点「出行」**：整页还在淡入，右侧按钮虽然能被 OCR 读到、
+        #      点下去却常常不生效（14:48:50 实测就是这一拍点的，页面没翻）；
+        #   2. **点完不记「今天出过行」** —— 记账挪到真的看到地图的那一拍
+        #      （`weekend.handle_weekend`）。旧写法点完就记，一点空，
+        #      周五当天就被 `handle_go_out`（`outing_done and 非周末 → 退出`）锁死；
+        #   3. **点了没进地图 → 下一拍重试**，最多 `OUTING_CLICK_LIMIT` 次。
         action, reason = self.outing_offer(texts)
         if action == "点按钮":
             self._outing_wait = 0
-            button = self.find_go_out_button(texts)
-            self.click_box(button, after_sleep=0.6)
-            self.mark_outing_used()
-            self.log_info(f"训练日有「出行」按钮 → 先外出（一天一次）：{reason}")
-            return True
+            if hub_seen < self.HUB_SETTLE_TICKS:
+                # 与下面「训练/休息」的决策拍同理：这一拍只等，不点。
+                self.log_info(f"训练日：头一拍先不点「出行」（整页还在淡入）→ {reason}")
+                self.sleep(0.5)
+                return True
+            clicks = getattr(self, "_outing_clicks", 0)
+            if clicks >= self.OUTING_CLICK_LIMIT:
+                # 点了这么多次都没进地图（游戏卡在淡入 / 按钮被挡）：记成「今天出过行」，
+                # 回去训练/休息。不这么兜底就会一直点「出行」，把这一天耗完。
+                self.mark_outing_used()
+                self.log_warning(
+                    f"训练日：「出行」连续点了 {clicks} 次都没进地图"
+                    "（页面没翻）→ 今天不再试，按训练/休息继续", notify=True)
+            else:
+                self._outing_clicks = clicks + 1
+                button = self.find_go_out_button(texts)
+                self.click_box(button, after_sleep=0.6)
+                self.log_info(f"训练日有「出行」按钮 → 先外出（一天一次）：{reason}"
+                              f"（第 {clicks + 1}/{self.OUTING_CLICK_LIMIT} 次点）")
+                return True
         if action == "推进对话":
             # 只等按钮淡入，**不点台词**：台词点不出任何东西，
             # 反而在对话框里留一下空点击（用户 2026-11-02 反馈）。

@@ -72,14 +72,18 @@ class MapPlace:
     # ---------- 先去哪个 ----------
 
     def prefer_mate_venue(self, texts, places, day=None):
-        """训练流周六：步行街 / 游戏厅 二选一（买扭蛋/玩小游戏当天就结束）。
+        """周末地图：决定今天先去哪个地点。
 
+        **训练流周六**（步行街 / 游戏厅 二选一，买扭蛋/玩小游戏当天就结束），
         用户 2026-10-30 口径，优先级：
         1. **只有一个有队友** → 去有队友的；
         2. **都有队友** → 再比**打折**（地点名左边橙色「打折！」爆炸标签），只有一个打折就去那个；
         3. **都没队友、但只有一个在打折** → 去打折的（2026-10-30 用户实机补充）；
         4. 其他情况（都没队友也没打折 / 都打折）→ 保持原顺序
            （步行街 → 游戏厅 → 公园）。
+
+        **扭蛋流周五/周六/周日**（步行街 / 餐厅）：见下面的分支注释，
+        2026-11-03 用户口径 —— 钱 ≤300 直接打工，不看队友。
 
         队友气泡判据见 BaseGirlsTask.venue_has_mate（深藏青色块）；
         打折判据见 venue_on_discount（OCR 文本 + 名字左侧）。
@@ -106,23 +110,28 @@ class MapPlace:
         discounted = [p for p in pair if info[p]["discount"]]
         chosen = None
         if mode == "扭蛋流":
-            # 2026-10-30 用户截图（第5周周五）：步行街上方出现彩色爆炸标签
-            # 「扭蛋增强！」时，**不管有没有队友都先进步行街**。
-            # 2026-11-01：判据搬进步行街模块（`places/street.py`），
-            # 且连位置一起判 —— 这个标签只贴在步行街左上角，别处出现同样字眼不算。
-            if self.has_boost_label(texts, self._venue_box(texts, "步行街")):
-                self.log_info("周末地点：步行街有「扭蛋增强！」"
-                              "→ 不管队友，先进步行街")
-                return ["步行街"] + [p for p in places if p != "步行街"]
-            # 用户 2026-10-30 完整口径（扭蛋流的周五/周六/周日）：
-            #   0. 钱 > 300 → 先去步行街（钱多就该花）；
-            #   1. 钱 <= 300：两边都有队友 → 先进步行街；
-            #   2. 只有一边有队友 → 去有队友的那边；
-            #   3. 都没队友 → 周五/周六去餐厅赚钱，周日去步行街消费。
+            # 用户 2026-11-03 口径（扭蛋流的周五/周六/周日）：
+            #   0. 零用钱读不到 → 去步行街（不拿打工赌今天的消费）；
+            #   1. 零用钱 <= 300 → **直接去餐厅打工，不看队友**；
+            #   2. 零用钱 > 300：
+            #      - 两边都有队友 → 步行街；
+            #      - 步行街有「扭蛋增强！」→ 步行街；
+            #      - 只有一边有队友 → 去有队友的那边；
+            #      - 都没队友 → 周五/周六餐厅，周日步行街。
+            # 注意：≤300 时「扭蛋增强」也不再豁免 —— 钱不够就打工，明天再抽。
+            # 增强标签的判据在 `places/street.py`（连位置一起判，只认贴在
+            # 步行街左上角的那个，别处出现同样字眼不算）。
             money = self.read_money(texts)
-            if money is not None and money > 300:
+            if money is None:
                 chosen = "步行街"
-                reason = f"零用钱 {money} > 300，先去步行街消费"
+                reason = "零用钱读不到，去步行街"
+            elif money <= 300:
+                # 直接打工：不再绕步行街，今天不抽扭蛋
+                self.log_info(f"周末地点：零用钱 {money} <= 300 → 只去「餐厅」打工")
+                return ["餐厅"]
+            elif self.has_boost_label(texts, self._venue_box(texts, "步行街")):
+                chosen = "步行街"
+                reason = "有「扭蛋增强！」"
             elif len(mates) == 2:
                 chosen = "步行街"
                 reason = "两边都有队友，先进步行街"
@@ -139,6 +148,7 @@ class MapPlace:
                 # 直接去打工：不再绕步行街，今天不用抽扭蛋
                 self.log_info(f"周末地点：{info} → {reason}，只去「餐厅」")
                 return ["餐厅"]
+            self.log_info(f"周末地点：{info} → {reason}，先进「{chosen}」")
             return [chosen] + [p for p in places if p != chosen]
         if len(mates) == 1:
             chosen = mates[0]

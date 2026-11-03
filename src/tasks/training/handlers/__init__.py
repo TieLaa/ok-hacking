@@ -133,7 +133,7 @@ LEAVE_RESETS = {
     # 不清就会把第二天的页面当成「已经看过好几拍」→ 又回到淡入那一拍就决策。
     # `_lounge_snapshot_done`：进休息室的六维/精力/零用钱快照，**每次进这一页只拍一次**
     # （2026-11-03 用户口径），所以离开时必须清掉，第二天才会重新拍。
-    "handle_training_day": {"_hub_ticks": 0, "_outing_wait": 0,
+    "handle_training_day": {"_hub_ticks": 0, "_outing_wait": 0, "_outing_clicks": 0,
                             "_lounge_snapshot_done": False},
     # 笔记学习页的等待/点击计数：离开这页就清零（下次遇到重新等、重新点）
     "handle_note_study": {"_note_study_wait": 0, "_note_study_clicks": 0},

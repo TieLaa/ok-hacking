@@ -696,6 +696,9 @@ class WeekendHandlers:
         # 用过之后如果又停在一个「有出行」的页面（进地图又退回来的首页），
         # 再点就是「出行 → 地图 → 退回首页」打转，所以这里直接退出去。
         # 注意：**只对非周末生效** —— 周末出行是主流程，每次进地图都要点。
+        # `outing_done` 由 `handle_weekend` 在**真的看到地图**那一拍置位
+        # （2026-11-03），所以「点了出行但没进地图」时这里还会再点一次，
+        # 不会出现「周五点空一次就整天进不去」。
         st = self.day_state()
         day = st["date"][1] if st["date"] else None
         if st.get("outing_done") and day not in ("六", "日"):
@@ -759,6 +762,12 @@ class WeekendHandlers:
         if not self.weekend_map_page(texts):
             return False
         st = self.day_state()
+        # 2026-11-03：**真的看到地图**这一刻才记「今天的出行机会用掉了」。
+        # 记账点原来在 `handle_training_day` 的点击处，于是点空了也算用过 ——
+        # 周五（野上泷额外周末）当天就再也进不去地图（`handle_go_out` 对非周末
+        # 的 `outing_done` 是直接返回）。放这里同时也保住了「出图 → 回首页 →
+        # 再点出行」的打转守卫。
+        self.mark_outing_used()
         visited = st.setdefault("visited", set())
         day = st["date"][1] if st["date"] else None
 
@@ -783,7 +792,9 @@ class WeekendHandlers:
             self.exit_page()
             return True
 
-        self.log_info(f"周末{'日' if day == '日' else '六'}：待去 {todo}（已去 {sorted(visited)}）")
+        # 日志打**真实**星期：旧写法 `'日' if day == '日' else '六'` 把周五也印成
+        # 「周末六」，排查「周五没进出行地图」时会把周五看成周六（2026-11-03）。
+        self.log_info(f"周末（星期{day or '读不到'}）：待去 {todo}（已去 {sorted(visited)}）")
         todo = self.prefer_mate_venue(texts, todo, day)
         for place in todo:
             # 只认「公园」「餐厅」这种**整框就是地点名**的按钮。

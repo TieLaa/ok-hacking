@@ -30,6 +30,7 @@ from ok.feature.Box import Box  # noqa: E402
 from tools.check_handlers import DryRunTask  # noqa: E402
 from src.tasks.training.parsers import (  # noqa: E402
     CRIT_RING_FACTOR, CRIT_RING_MIN, ring_is_border)
+from src.tasks.training.constants import WEEKEND_PLAN  # noqa: E402
 from src.tasks.ui import topbar_day  # noqa: E402
 
 
@@ -2527,13 +2528,13 @@ class WeekendMapRules(unittest.TestCase):
         self.assertFalse(task.has_boost_label(task._texts, vb))
 
     def test_boost_label_still_forces_street_first(self):
-        """贴对了 → 仍然「不管钱和队友」直进步行街（行为不变）。"""
-        texts = self._map_with_boost(self.BOOST)
+        """钱够（>300）+ 标签贴对 → 走「扭蛋增强」直进步行街。"""
+        texts = self._map_with_boost(self.BOOST) + [box(1000, 20, "350", 120, 45)]
         task = self.styled("扭蛋流", texts)
         task.weekend_state()
         self.assertTrue(task.handle_weekend(texts))
         self.assertEqual(task.actions[-1][1], "步行街")
-        self.assertTrue(any("不管队友，先进步行街" in m for m in task.logs),
+        self.assertTrue(any("有「扭蛋增强！」" in m for m in task.logs),
                         "应走「扭蛋增强 → 直进步行街」这条路")
 
     def test_boost_label_elsewhere_does_not_force_street(self):
@@ -2547,7 +2548,7 @@ class WeekendMapRules(unittest.TestCase):
         task = self.styled("扭蛋流", texts)
         task.weekend_state()
         self.assertTrue(task.handle_weekend(texts))
-        self.assertFalse(any("不管队友，先进步行街" in m for m in task.logs),
+        self.assertFalse(any("有「扭蛋增强！」" in m for m in task.logs),
                          "标签不在步行街旁，不该走 boost 分支")
 
     def test_sunday_place_by_style(self):
@@ -2594,6 +2595,77 @@ class WeekendMapRules(unittest.TestCase):
         task._weekend["visited"] = {"步行街"}          # 步行街走完，但没买东西
         self.assertTrue(task.handle_weekend(task._texts))
         self.assertEqual(task.actions[-1][1], "餐厅")
+
+    def test_friday_row_is_explicit_for_every_style(self):
+        """周五（野上泷「额外周末」）在 WEEKEND_PLAN 里**显式**有行。
+
+        2026-11-03：以前表里只有 ("五","扭蛋流")，其它流派靠 `today_places`
+        的「读不到星期 → 按周六兜底」隐式拿到周六那行 —— 改周六会顺手改掉周五，
+        从表里也看不出周五到底去哪。现在周五三行与周六一致（行为不变）。
+        """
+        for style in ("训练流", "商店流", "扭蛋流", "小游戏流"):
+            self.assertIn(("五", style), WEEKEND_PLAN, style)
+            task = self.styled(style, self._map("星期五"))
+            st = task.weekend_state()
+            self.assertEqual(task.today_places("五", st),
+                             task.today_places("六", st), style)
+
+    def test_map_entry_marks_outing_used(self):
+        """**进了地图**才记「今天的出行机会用掉了」（记账点在 handle_weekend）。"""
+        for day in ("星期五", "星期六", "星期日"):
+            task = self.styled("扭蛋流", self._map(day))
+            task.weekend_state()
+            self.assertFalse(task.weekend_state().get("outing_done"), day)
+            self.assertTrue(task.handle_weekend(task._texts), day)
+            self.assertTrue(task.weekend_state().get("outing_done"), day)
+
+    def _gacha_map(self, day, money=None):
+        """扭蛋流地图：可带顶栏零用钱（不传 = OCR 读不到）。"""
+        texts = self._map(day)
+        if money is not None:
+            texts.append(box(1000, 20, str(money), 120, 45))
+        return texts
+
+    def test_gacha_low_money_goes_restaurant_even_with_mate(self):
+        """2026-11-03 用户口径：钱 ≤300 直接打工，**不看队友**（周日也一样）。"""
+        for day in ("星期五", "星期六", "星期日"):
+            for money in (0, 250, 300):          # 300 整也算「≤300」
+                texts = self._gacha_map(day, money)
+                task = self.styled("扭蛋流", texts)
+                task.venue_has_mate = lambda b: True    # 两边都有队友也不算数
+                task.weekend_state()
+                self.assertTrue(task.handle_weekend(texts), (day, money))
+                self.assertEqual(task.actions[-1][1], "餐厅", (day, money))
+
+    def test_gacha_money_unknown_goes_street(self):
+        """钱读不到 → 去步行街（不拿打工赌今天的消费）。"""
+        texts = self._gacha_map("星期六")
+        task = self.styled("扭蛋流", texts)
+        task.venue_has_mate = lambda b: False
+        task.weekend_state()
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertEqual(task.actions[-1][1], "步行街")
+
+    def test_gacha_over_300_no_mate_weekday_work_sunday_street(self):
+        """钱 >300 都没队友：周五/六打工，周日步行街。"""
+        want = {"星期五": "餐厅", "星期六": "餐厅", "星期日": "步行街"}
+        for day, place in want.items():
+            texts = self._gacha_map(day, 350)
+            task = self.styled("扭蛋流", texts)
+            task.venue_has_mate = lambda b: False
+            task.weekend_state()
+            self.assertTrue(task.handle_weekend(texts), day)
+            self.assertEqual(task.actions[-1][1], place, day)
+
+    def test_gacha_over_300_only_one_mate_goes_there(self):
+        """钱 >300：只有一边有队友 → 去有队友的那边。"""
+        for mate, place in (("餐厅", "餐厅"), ("步行街", "步行街")):
+            texts = self._gacha_map("星期六", 350)
+            task = self.styled("扭蛋流", texts)
+            task.venue_has_mate = (lambda name: lambda b: b.name == name)(mate)
+            task.weekend_state()
+            self.assertTrue(task.handle_weekend(texts), mate)
+            self.assertEqual(task.actions[-1][1], place, mate)
 
     def test_saturday_training_style_keeps_old_route(self):
         """训练流周六原设定不变：步行街 → 游戏厅 → 公园。"""
@@ -2912,11 +2984,12 @@ class StylePlanRules(unittest.TestCase):
 
     # ---------- 周二休息阈值 ----------
 
-    def test_tuesday_rest_threshold_ignores_style(self):
-        """周二：精力低于 60 就休息，跟流派无关。
+    def test_tuesday_rest_threshold_by_style(self):
+        """周二硬阈值只对**扭蛋流 / 小游戏流**生效（65）；其它流派周二没有特殊限制。
 
-        用户 2026-11-02 口径（constants.TUESDAY_REST_THRESHOLD）：周四不再有
-        特殊阈值（旧的 75 已取消），回到配置里的「休息精力阈值」。
+        用户 2026-11-03 口径（constants.TUESDAY_REST_THRESHOLD_BY_STYLE）：
+        「只有扭蛋流周2精力限制 65，其他流派周二没有限制精力，只遵守全局精力恢复门槛」
+        + 补充「小游戏流也是周二 65」。周四同样没有特殊阈值（旧的 75/60 都已取消）。
         """
         base = {"休息精力阈值": 40}
 
@@ -2925,16 +2998,22 @@ class StylePlanRules(unittest.TestCase):
             task._style = style
             return task.rest_threshold(day)
 
+        for style in ("扭蛋流", "小游戏流"):
+            self.assertEqual(limit(style, "二"), 65, style)
+        for style in ("训练流", "商店流"):
+            self.assertEqual(limit(style, "二"), 40, style)
         for style in ("训练流", "商店流", "扭蛋流", "小游戏流"):
-            self.assertEqual(limit(style, "二"), 60, style)
             self.assertEqual(limit(style, "四"), 40, style)
             self.assertEqual(limit(style, "五"), 40, style)
             self.assertEqual(limit(style, "一"), 40, style)
         # 配置里的阈值更高时以配置为准（取 max，不能因为周二就下调）
-        self.assertEqual(FakeTask([], config={"休息精力阈值": 80}).rest_threshold("二"), 80)
+        for style in ("扭蛋流", "小游戏流", "训练流"):
+            task = FakeTask([], config={"休息精力阈值": 80})
+            task._style = style
+            self.assertEqual(task.rest_threshold("二"), 80, style)
 
     def test_tuesday_low_stamina_rests(self):
-        """周二 50 精力：直接休息（门槛 60），扭蛋流也不例外。"""
+        """周二 50 精力：扭蛋流直接休息（门槛 65）。"""
         texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期二", 130, 40),
                  box(380, 16, "50/130", 210, 53),
                  box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
@@ -2944,6 +3023,30 @@ class StylePlanRules(unittest.TestCase):
         task._hub_ticks = task.HUB_SETTLE_TICKS     # 模拟「出行」按钮已淡入
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "休息")
+
+    def test_tuesday_gacha_rests_5_points_earlier(self):
+        """2026-11-03 用户口径：扭蛋流 / 小游戏流周二门槛 65，其它流派周二没有特殊限制。
+
+        精力 62：扭蛋流、小游戏流（< 65）→ 休息；训练流/商店流（只守全局 40）→ 训练。
+        """
+        def run(style, stamina):
+            texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期二", 130, 40),
+                     box(380, 16, f"{stamina}/130", 210, 53),
+                     box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
+            task = FakeTask(texts)
+            task._style = style
+            task.ensure_speed = lambda *a, **k: False
+            task._hub_ticks = task.HUB_SETTLE_TICKS
+            self.assertTrue(task.handle_training_day(texts))
+            return task.actions[-1][1]
+
+        self.assertEqual(run("扭蛋流", 62), "休息")
+        self.assertEqual(run("小游戏流", 62), "休息")
+        self.assertEqual(run("训练流", 62), "训练")
+        self.assertEqual(run("商店流", 62), "训练")
+        # 65 是下限（不含）：精力 65 仍照常训练
+        self.assertEqual(run("扭蛋流", 65), "训练")
+        self.assertEqual(run("小游戏流", 65), "训练")
 
     def test_thursday_low_stamina_trains(self):
         """周四 50 精力：回落到配置的 40 → 照常训练（周四不再有特殊阈值）。"""
@@ -3582,6 +3685,10 @@ class PurchaseRules(unittest.TestCase):
 class OutingOnTrainingDay(unittest.TestCase):
     """野上泷：周五的训练日主界面也会出现「出行」入口（用户 2026-10-29）。"""
 
+    # 同一张户外地图（1549x871 实测版式，见 logs/events/*_handle_weekend.jpg）
+    MAP = [box(814, 461, "游戏厅", 148, 57), box(1538, 606, "公园", 102, 51),
+           box(258, 748, "餐厅", 104, 60), box(1010, 897, "步行街", 148, 58)]
+
     def _texts(self):
         return [
             box(37, 18, "第3周", 120, 33),
@@ -3593,14 +3700,61 @@ class OutingOnTrainingDay(unittest.TestCase):
             box(1378, 748, "出行", 110, 40),
         ]
 
+    def _map(self):
+        return list(self.MAP) + [box(37, 18, "第3周", 120, 33),
+                                 box(163, 18, "星期五", 130, 35)]
+
     def test_goes_out_before_training_once(self):
+        """周五先外出：点「出行」→ **真的看到地图**才算「今天出过行」。
+
+        2026-11-03 用户：「星期5没进出行地图」。实跑日志（logs/clicks.jsonl）：
+            14:48:50 left_click 出行 (1373,465)   ← 点了，页面没翻
+            14:48:51 left_click 训练 (1377,750)   ← 下一拍直接去训练
+        旧写法点完就记 `outing_done`，于是 `handle_go_out` 对周五（非周末）
+        整天都直接返回 —— 那天的额外周末白丢。现在只在进地图那一拍记账。
+        """
         task = FakeTask(self._texts())
-        task.ensure_speed = lambda texts: False       # 倍速按钮靠像素判，测试里没有帧
+        task.ensure_speed = lambda texts: False
+        task._hub_ticks = task.HUB_SETTLE_TICKS        # 整页已淡入
         self.assertTrue(task.handle_training_day(task._texts))
         self.assertEqual(task.actions[-1][1], "出行")
-        # 同一天第二次进来：外出已经用过，不能再点出行（否则会打转）
+        # 点完**不算**用过：还没进地图（否则点空一次就锁死这一天）
+        self.assertFalse(task.weekend_state().get("outing_done"))
+        # 进了地图（handle_weekend 认到地图）→ 才记账
+        self.assertTrue(task.handle_weekend(self._map()))
+        self.assertTrue(task.weekend_state().get("outing_done"))
+
+    def test_first_tick_does_not_click_go_out(self):
+        """整页刚出现的第一拍不点「出行」（躲淡入，与训练/休息的决策拍同理）。"""
+        task = FakeTask(self._texts())
+        task.ensure_speed = lambda texts: False
+        self.assertTrue(task.handle_training_day(task._texts))   # hub_seen = 0
+        self.assertEqual(task.actions, [])
+        # 第二拍按钮已经画稳 → 正常外出
         self.assertTrue(task.handle_training_day(task._texts))
-        self.assertNotEqual(task.actions[-1][1], "出行")
+        self.assertEqual(task.actions[-1][1], "出行")
+
+    def test_go_out_click_is_retried_then_given_up(self):
+        """点了「出行」页面没翻 → 下一拍重试；点够上限才放弃（放弃时记账+告警）。"""
+        task = FakeTask(self._texts())
+        task.ensure_speed = lambda texts: False
+        for _ in range(task.OUTING_CLICK_LIMIT + 3):
+            task.handle_training_day(task._texts)
+        clicks = [a for a in task.actions if a[0] == "click_box" and a[1] == "出行"]
+        self.assertEqual(len(clicks), task.OUTING_CLICK_LIMIT)
+        # 放弃之后不能死盯这一页：记账（这一天按「出过行」处理）+ 告警 + 回去训练/休息
+        self.assertTrue(task.weekend_state().get("outing_done"))
+        self.assertTrue(any("今天不再试" in m for m in task.logs), task.logs)
+
+    def test_outing_used_home_page_does_not_click_again(self):
+        """出过行以后停回「有出行」的首页：直接返回，不点第二次（防打转）。"""
+        task = FakeTask(self._texts())
+        task.weekend_state()                            # 先固定 date
+        task.mark_outing_used()
+        self.assertTrue(task.handle_go_out(task._texts))
+        self.assertFalse([a for a in task.actions
+                          if a[0] == "click_box" and a[1] == "出行"])
+        self.assertEqual(task.actions[-1][0], "click")   # exit_page 的返回箭头
 
     def _dialog_texts(self):
         """同一帧里只有对话框台词、右侧按钮还没出来（2026-10-31 实跑那一拍）。"""
@@ -3644,6 +3798,7 @@ class OutingOnTrainingDay(unittest.TestCase):
                  + [box(1380, 750, "出", 52, 40), box(1440, 750, "行", 52, 40)])
         task = FakeTask(texts)
         task.ensure_speed = lambda texts: False
+        task._hub_ticks = task.HUB_SETTLE_TICKS      # 头一拍不点（躲淡入），先跳过
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "出行")
 

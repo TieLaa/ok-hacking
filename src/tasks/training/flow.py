@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 
 from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,
-                                          TUESDAY_REST_THRESHOLD,
+                                          TUESDAY_REST_THRESHOLD_BY_STYLE,
                                           WEEKEND_PLAN)  # noqa: F401
 from src.util.emergency_stop import STOP
 
@@ -644,10 +644,15 @@ class TrainingFlowMixin:
     def rest_threshold(self, day=None):
         """今天「精力低于多少就休息」。
 
-        用户 2026-11-02：**周二**精力低于 60 就休息；**周四不再有特殊阈值**
-        （旧的 75 已取消），回到配置里的「休息精力阈值」。
+        用户 2026-11-03：**扭蛋流 / 小游戏流**在周二有硬阈值 **65**
+        （`TUESDAY_REST_THRESHOLD_BY_STYLE`）；**其它流派（训练流 / 商店流）周二
+        没有特殊限制**，只遵守配置里的「休息精力阈值」。
+        周四同样没有特殊阈值（旧的 75 已取消）。
+        有硬阈值时取 max(配置值, 硬阈值)，配置调高时以配置为准。
         """
         base = int(self.config.get("休息精力阈值"))
         if day == "二":
-            return max(base, TUESDAY_REST_THRESHOLD)
+            hard = TUESDAY_REST_THRESHOLD_BY_STYLE.get(self.style)
+            if hard is not None:
+                return max(base, hard)
         return base
