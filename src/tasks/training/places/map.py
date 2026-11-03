@@ -114,14 +114,16 @@ class MapPlace:
             #   0. 零用钱读不到 → 去步行街（不拿打工赌今天的消费）；
             #   1. 零用钱 <= 300 → **直接去餐厅打工，不看队友**；
             #   2. 零用钱 > 300：
+            #      - 步行街有「扭蛋增强！」**或步行街在打折** → 步行街；
             #      - 两边都有队友 → 步行街；
-            #      - 步行街有「扭蛋增强！」→ 步行街；
             #      - 只有一边有队友 → 去有队友的那边；
             #      - 都没队友 → 周五/周六餐厅，周日步行街。
-            # 注意：≤300 时「扭蛋增强」也不再豁免 —— 钱不够就打工，明天再抽。
+            # 注意：≤300 时「扭蛋增强 / 打折」也不再豁免 —— 钱不够就打工，明天再抽。
             # 增强标签的判据在 `places/street.py`（连位置一起判，只认贴在
-            # 步行街左上角的那个，别处出现同样字眼不算）。
+            # 步行街左上角的那个，别处出现同样字眼不算）；打折判据见
+            # `venue_on_discount`（名字左边同一行有「打折」）。
             money = self.read_money(texts)
+            street_tags = self.street_pull_tags(texts, info)
             if money is None:
                 chosen = "步行街"
                 reason = "零用钱读不到，去步行街"
@@ -129,9 +131,9 @@ class MapPlace:
                 # 直接打工：不再绕步行街，今天不抽扭蛋
                 self.log_info(f"周末地点：零用钱 {money} <= 300 → 只去「餐厅」打工")
                 return ["餐厅"]
-            elif self.has_boost_label(texts, self._venue_box(texts, "步行街")):
+            elif street_tags:
                 chosen = "步行街"
-                reason = "有「扭蛋增强！」"
+                reason = "、".join(street_tags)
             elif len(mates) == 2:
                 chosen = "步行街"
                 reason = "两边都有队友，先进步行街"
@@ -170,6 +172,28 @@ class MapPlace:
             return places
         self.log_info(f"周末地点：{info} → {reason}，先进「{chosen}」")
         return [chosen] + [p for p in places if p != chosen]
+
+    # ---------- 步行街今天值不值得优先去 ----------
+
+    def street_pull_tags(self, texts, info):
+        """步行街「优先去」的标签：**「扭蛋增强！」或打折都算**（用户 2026-11-03）。
+
+        2026-11-03 用户口径原话：「扭蛋增强或者打折都优先步行街，其他逻辑不变」。
+        所以原来只认增强标签的那一档，现在扩成「增强 or 打折」两个标签同一档。
+
+        两条都不要越过「零用钱 ≤300 → 直接去餐厅打工」那道闸门：
+        钱不够时增强/打折都不豁免（用户 2026-11-03 同日口径），这是调用方的顺序。
+
+        参数 `info` 是 `prefer_mate_venue` 已经算好的
+        `{"步行街": {"mate":…, "discount":…}, …}`；步行街今天不在候选里时
+        自然拿不到 discount（那时也不该因为打折改道）。
+        """
+        tags = []
+        if self.has_boost_label(texts, self._venue_box(texts, "步行街")):
+            tags.append("有「扭蛋增强！」")
+        if (info.get("步行街") or {}).get("discount"):
+            tags.append("步行街在打折")
+        return tags
 
     # ---------- 地点名的框 ----------
 
