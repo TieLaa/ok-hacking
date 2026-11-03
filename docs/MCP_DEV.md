@@ -90,7 +90,7 @@ ESC → 放弃并存证 `recover_failed`。遇到比赛/小游戏标记（`VS`/`
 
 | 文件 | 对应任务 | 说明 |
 |---|---|---|
-| `tools/mcp/training.py` | TrainingTask | 跑完整一轮；`OK_MCP_STEPS` 可限步；默认强制「新一局删档=False」 |
+| `tools/mcp/training.py` | TrainingTask | 跑完整一轮；`OK_MCP_STEPS` 可限步；**不支持删档**（见下方红线） |
 | `tools/mcp/quickmatch.py` | QuickMatchTask | 跑 N 拍（`OK_MCP_TICKS`，默认 10），不回大厅 |
 | `tools/mcp/autobattle.py` | AutoBattleTask | 骨架任务跑 N 拍，只读画面 |
 | `tools/mcp/input_test.py` | InputTestTask | 点一次并断言界面变化 |
@@ -102,8 +102,10 @@ ESC → 放弃并存证 `recover_failed`。遇到比赛/小游戏标记（`VS`/`
 `_harness.borrow()` 借出已注册实例并临时设置 `_enabled / running / current_task /
 artifact_directory`；`run_registered()` 额外支持本次运行的 config 覆盖（跑完还原）。
 
-⚠️ **危险开关**：`新一局删档=True` 时，遇到「训练确认」会点删档清存档。MCP 入口
-默认把它强制关掉，只有显式 `OK_MCP_ALLOW_DELETE=1` 才放行。
+🚫 **红线：脚本永不删档**（2026-11-02 用户口径）。开训练消耗的专注在删档时
+**不返还**，所以「删档」是纯亏损操作。「训练确认」弹窗只会点「继续训练」，
+「新一局删档」开关已从 `config_spec` 删除 —— 旧配置里残留 `true` 也不会被读。
+`tools/mcp/run_rounds.py` 连跑多轮时需要人工开新局，脚本本身不提供删档入口。
 
 ## 适配后要遵守的约束
 
@@ -135,6 +137,42 @@ artifact_directory`；`run_registered()` 额外支持本次运行的 config 覆�
 - `OK_PM_NO_RESET=1`：只读模式，**全程不动真实鼠标**，不在大厅就直接判失败退出；
 - `OK_PM_CONTROL=1`：对照实验（同一坐标再用真实鼠标点一次）。会抢前台、夺走光标，
   只在你确认电脑空闲时打开。
+
+## 改了 helper 怎么换新 runtime（2026-11-02 实测）
+
+`reload_tasks` 只重编**任务自己那个文件**（`task_manager._load_source_module` 用
+`spec_from_file_location` 加载任务路径），`src/tasks/training/handlers/*`、`parsers.py`
+这类 helper **不会**跟着重载。所以改 handler 判据后必须换进程，别指望 `reload_tasks`。
+
+换进程的三条路，按「能不能用」排序：
+
+| 手段 | 什么时候能用 | 说明 |
+|---|---|---|
+| `client.py --exit` | runtime 空闲时 | 有时只是排队，进程不真退（2026-11-02 连发两次都没退） |
+| 管理员 shell 里 `restart_mcp_runtime.ps1` | 你的 shell 是管理员 | 最干净 |
+| `client.py tools/mcp/kill_self.py` | 任何情况 | runtime **自己** `os.kill(pid, 9)`，进程立刻消失；客户端会报连接错误，属预期 |
+
+**先确认游戏是不是管理员进程**（今天就不一定是）：
+
+```powershell
+try { (Get-Process -Id <游戏pid>).MainModule.FileName } catch { '非管理员读不到' }
+```
+
+读得到 → 游戏不是管理员 → **非管理员 runtime 也能点进去**（UIPI 只拦「低权限进程→高权限窗口」），
+直接在自己 shell 起即可，不需要 UAC：
+
+```powershell
+Start-Process -FilePath .venv\Scripts\python.exe `
+  -ArgumentList '-m','ok','mcp','--config','src.config:config' `
+  -WorkingDirectory 'D:\workspace\ok-hacking' -WindowStyle Hidden `
+  -RedirectStandardOutput logs\mcp\runtime_stdout.log `
+  -RedirectStandardError  logs\mcp\runtime_stderr.log
+```
+
+`tools/mcp/whoami_probe.py` 会报 runtime 的 `is_admin` / `session`，起完先跑它确认。
+
+⚠️ 派生子进程那条路走不通：从 runtime 里 `subprocess.Popen(powershell, DETACHED_PROCESS)`
+起的进程**根本不执行**（2026-11-02 用标记文件验过），所以别写成「自己排程重启自己」。
 
 ## 常用命令
 

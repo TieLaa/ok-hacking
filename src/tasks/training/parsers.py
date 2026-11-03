@@ -88,7 +88,7 @@ RAINBOW_BAND_MIN_BINS = 3
 RAINBOW_BAND_BIN_FRAC = 0.10
 RAINBOW_BAND_MAX_TOP = 0.70
 # 代码版本戳（run() 会打到日志里）：排查「改完不生效」时一眼看出跑的是哪份代码
-CODE_VERSION = "2026-11-02a"
+CODE_VERSION = "2026-11-02b"
 
 
 def ring_is_border(ratio, baseline=None, floor=GOLD_RING_MIN,
@@ -138,7 +138,7 @@ class TrainingParsersMixin:
     SHOP_MAX_ITEMS = SHOP_COLS * SHOP_ROWS
 
     def read_money(self, texts):
-        """顶栏金币：体力条右边的独立数字（不含斜杠）。"""
+        """顶栏金币：专注条右边的独立数字（不含斜杠）。"""
         best = None
         for t in texts:
             s = t.name.strip()
@@ -150,22 +150,22 @@ class TrainingParsersMixin:
                 best = int(s)
         return best
 
-    # ---------- 顶栏体力条像素兜底（2026-11-01） ----------
+    # ---------- 顶栏专注条像素兜底（2026-11-01） ----------
     # OCR 把「/」读成「1」是固定毛病，不是偶发：57/130 → `571130`、30/130 → `301130`、
     # 33/115 → `333/115`、17/115 → `971115`（RULES.md 记过 301130 那次）。
-    # 顶栏体力药丸 = 左边**黄色填充段** + 右边**灰色空段**，总宽是固定版式比例：
+    # 顶栏专注药丸 = 左边**黄色填充段** + 右边**灰色空段**，总宽是固定版式比例：
     # 实测 554/1920 = 447/1549 = 377/1307 = **0.2885w**（与上限 115/121/130 无关）。
-    # 所以量填充比例就能反推体力，和 OCR 正读值比只差 ≤1 个单位
+    # 所以量填充比例就能反推专注，和 OCR 正读值比只差 ≤1 个单位
     # （58→58、40→39、50→49、75→74、61→60、94→93）。斜杠读错时，末 3 位当上限、
     # 比例当当前值即可还原，不必再指望 OCR 认斜杠。
     STAMINA_BAR_BOX = (0.10, 0.005, 0.75, 0.075)   # x1, y1, x2, y2（画面比例）
     STAMINA_BAR_WIDTH_F = 0.2885                   # 药丸总宽 / 画面宽（固定版式）
     STAMINA_BAR_LEFT_F = 0.2010                    # 药丸左沿 / 画面宽（固定版式）
-    STAMINA_BAR_LEFT_TOL = 0.010                   # 左沿偏离这么多 = 不是体力条，别信
-    STAMINA_BAR_TOL = 2                            # 像素换算 vs OCR 的容忍差（体力单位）
+    STAMINA_BAR_LEFT_TOL = 0.010                   # 左沿偏离这么多 = 不是专注条，别信
+    STAMINA_BAR_TOL = 2                            # 像素换算 vs OCR 的容忍差（专注单位）
 
     def stamina_bar(self):
-        """量顶栏体力条，返回 (填充比例, 左 px, 右 px)；量不出来返回 None。
+        """量顶栏专注条，返回 (填充比例, 左 px, 右 px)；量不出来返回 None。
 
         同一帧只算一次：一拍里 top_bar() 会被好几个 handler 调用。
         """
@@ -222,14 +222,25 @@ class TrainingParsersMixin:
         return min(ratio, 1.0), left, int(left + total)
 
     def top_bar(self, texts=None):
-        """顶栏解析，外加**体力条像素兜底**（详见 STAMINA_BAR_* 的注释）。
+        """顶栏解析，外加**专注条像素兜底**（详见 STAMINA_BAR_* 的注释）。
 
         两条信息互相校验：
           - 斜杠被读成数字的粘连串（`571130` = 57/130）：能拆出**精确**的当前值候选；
-          - 体力条填充比例：只知道大概（±1），但能仲裁候选里哪一个是对的。
-        只在 OCR 解不出体力、或与像素差 > `STAMINA_BAR_TOL` 时才改判。
+          - 专注条填充比例：只知道大概（±1），但能仲裁候选里哪一个是对的。
+        只在 OCR 解不出专注、或与像素差 > `STAMINA_BAR_TOL` 时才改判。
+
+        另外把**零用钱**补进 `state` / `info`：取法直接用 `read_money()`（周末商店、
+        游戏厅本来就在用它，别再造第二份判据）。监控页要显示这个数，业务侧不要
+        反过来依赖 `info` —— 它们自己调 `read_money`。
         """
         state = super().top_bar(texts)
+        pool = texts if texts is not None else getattr(self, "_tick_texts", None)
+        coin = self.read_money(pool or [])
+        if coin is not None and coin != state.get("coin"):
+            state["coin"] = coin
+            info = getattr(self, "info", None)
+            if isinstance(info, dict):
+                info["coin"] = coin
         ratio = self.stamina_bar()
         if ratio is None:
             return state
@@ -265,10 +276,10 @@ class TrainingParsersMixin:
         if pick is not None and abs(pick - est) <= 5:
             est = pick
         if cur is None:
-            self.log_info(f"体力：OCR 没读出斜杠（粘成 {cands or '无'}），"
-                          f"按体力条填充 {frac:.3f}×{mx} 还原为 {est}")
+            self.log_info(f"专注：OCR 没读出斜杠（粘成 {cands or '无'}），"
+                          f"按专注条填充 {frac:.3f}×{mx} 还原为 {est}")
         else:
-            self.log_warning(f"体力：OCR 读 {cur}，体力条填充 {frac:.3f}×{mx} → {est}，"
+            self.log_warning(f"专注：OCR 读 {cur}，专注条填充 {frac:.3f}×{mx} → {est}，"
                              "按像素值算")
         state["stamina"], state["stamina_max"] = est, mx
         self._stamina_max_seen = mx
@@ -285,7 +296,7 @@ class TrainingParsersMixin:
 
         例：`571130` → (130, [5, 7, 11, 51, 57, 71, …] 里 ≤130 的那批)；
         `3251130`（第3周 + 25/130 粘成一串）同理。
-        候选只负责「哪几位是粘进来的前缀」的穷举，具体哪个对由体力条填充比例仲裁
+        候选只负责「哪几位是粘进来的前缀」的穷举，具体哪个对由专注条填充比例仲裁
         （`top_bar` 取离像素值最近的那个，容差 5）。
         只在药丸的横向范围内找：顶栏金币也是纯数字，但它不在药丸里。
         """
@@ -303,7 +314,7 @@ class TrainingParsersMixin:
             head = s[:-3]
             cands = set()
             # head 里所有连续子串都当候选：粘进来的「第N周」和「斜杠读成的 1」
-            # 都在 head 的前/中段，切掉它们剩下的就是当前体力。
+            # 都在 head 的前/中段，切掉它们剩下的就是当前专注。
             for i in range(len(head)):
                 for j in range(i + 1, len(head) + 1):
                     v = int(head[i:j])
@@ -577,7 +588,7 @@ class TrainingParsersMixin:
                 and abs((n.x + n.width / 2) / self.width - cx) < 0.14
                 for n in texts)
             # 效果文本：卡名下沿到价格药丸之间的同列文字。
-            # 2026-10-26 漏读「消耗所有精力」导致 72 体力买了清空扭蛋。
+            # 2026-10-26 漏读「消耗所有精力」导致 72 精力买了清空扭蛋。
             # 价格还没渲染时（price_top = 卡名底），只取**说明文字那一段**
             # （GACHA_EFFECT_ROW），否则会把「确定」「能力详情」也当效果。
             if price is None:
@@ -591,7 +602,9 @@ class TrainingParsersMixin:
                     n.name.strip() for n in texts
                     if title.y + title.height <= n.y < price_top
                     and abs((n.x + n.width / 2) / self.width - cx) < 0.13)
-            score = rank * 10 + (3 if mate else 0) + (1 if "+" in title.name else 0)
+            # 「+」不进分（用户 2026-11-02）：只代表同名卡片之间的档位差，
+            # 没「+」的同名卡本身就是低一级品质，已在 rank 里体现。队友同理只做同分比较。
+            score = rank * 10 + (3 if mate else 0)
             cards.append({
                 "name": title.name.strip(),
                 "price": int(price) if price is not None else None,
@@ -742,8 +755,17 @@ class TrainingParsersMixin:
 
         所以这里只认**整词**「出行」：台词是长句，永远匹配不上。
         OCR 把短按钮拆成「出」「行」两个单字框时（商店 商/店 同款坑）再拼一次。
+
+        2026-11-02 再加一档「短词」：按钮上带箭头/角标时 OCR 会读成
+        「出行▶」这种 2~6 字的框，纯整词匹配不到。台词最短也有 10 个字
+        （「今天可以出行哦！要不」），用长度就能和按钮分开 ——
+        绝不能退回子串匹配（那正是 2026-10-31 空点击台词的根因）。
         """
         cands = [t for t in texts if t.name.strip() == self.GO_OUT_WORD]
+        if not cands:
+            cands = [t for t in texts
+                     if self.GO_OUT_WORD in t.name.strip()
+                     and len(t.name.strip()) <= 6]
         if not cands:
             cands = self._split_go_out(texts)
         if not cands:
@@ -935,6 +957,69 @@ class TrainingParsersMixin:
         r = roi[:, :, 2].astype(int)
         deep = (b > r) & (r < 120) & (g < 120) & (b < 160)
         return 1 if float(deep.mean()) > 0.08 else 0
+
+    # ---------- 炒股选股页：卡片头顶的「队友头像」（2026-11-02） ----------
+
+    # 队友头像是同一套 chibi 表情，**张开的嘴是同一块颜色**：
+    #   r - g > 58 且 r > 175 且 b < 215（脸/皮肤只有 r-g ≈ 40~55，分得开）。
+    # 为什么不用别的判据（2026-11-02 都试过，见 logs/debug/*stock*.jpg 四帧）：
+    #   · **气泡文字**（「就选它了！」）一张卡最多一个，2 个队友也只冒一句 → 数不出人数；
+    #   · 头发/皮肤颜色每个角色都不一样（橙发/棕发/金发都见过）；
+    #   · 白描边在浅蓝卡面、白色气泡上分不开（纯白连通域只剩卡边和气泡）。
+    # 位置：卡片类型名上方约 1.5~3 个字高那一条横带。四帧实测：3 个嘴都在 y=294、
+    # 大小 14~16 x 7~8 像素（1549x871），所以按屏宽比例卡尺寸/面积即可换分辨率。
+    STOCK_MOUTH_RG = 58
+    STOCK_MOUTH_R_MIN = 175
+    STOCK_MOUTH_B_MAX = 215
+
+    def stock_teammate_counts(self, cards):
+        """每张卡头顶挂了几个队友头像；返回和 `cards` 同序的个数列表。
+
+        `cards` 是「稳健型/平衡型/风险型」这些类型名的文本框（按 x 排好序）。
+        每张嘴归给横向最近的那张卡（卡的列心 = 类型名中心），离所有卡都远的丢掉。
+        数不到就是 0 —— 调用方拿 0 当「没队友」，并保留气泡/价格兜底。
+        """
+        if not cards:
+            return []
+        counts = [0] * len(cards)
+        frame = getattr(self, "_tick_frame", None)
+        if frame is None:
+            frame = self.frame
+        if frame is None or not frame.any():
+            return counts
+        h, w = frame.shape[:2]
+        y_label = min(b.y for b in cards)
+        h_label = max(b.height for b in cards)
+        y1 = int(max(0, y_label - h_label * 3.4))     # 头像顶（嘴再往下约 1.2 个字高）
+        y2 = int(max(0, y_label - h_label * 0.7))
+        if y2 <= y1:
+            return counts
+        b = frame[:, :, 0].astype(int)
+        g = frame[:, :, 1].astype(int)
+        r = frame[:, :, 2].astype(int)
+        mask = (((r - g) > self.STOCK_MOUTH_RG)
+                & (r > self.STOCK_MOUTH_R_MIN)
+                & (b < self.STOCK_MOUTH_B_MAX)).astype(np.uint8)
+        mask[:y1, :] = 0
+        mask[y2:, :] = 0
+        n, _lab, stats, cent = cv2.connectedComponentsWithStats(mask, 8)
+        centers = [c.x + c.width / 2 for c in cards]
+        for i in range(1, n):
+            x, y, ww, hh, area = stats[i]
+            # 嘴是**横着的窄条**；头发块是 38x40、脸是 30x25，宽高比过不了这关。
+            if not (0.004 * w <= ww <= 0.025 * w and 0.001 * w <= hh <= 0.015 * w):
+                continue
+            if ww < hh * 1.2:
+                continue
+            if not (0.000012 * w * w <= area <= 0.0004 * w * w):
+                continue
+            cx = cent[i][0]
+            k = min(range(len(centers)), key=lambda j: abs(cx - centers[j]))
+            if abs(cx - centers[k]) > 0.18 * w:      # 离所有卡都远：不是卡上的头像
+                continue
+            counts[k] += 1
+        self.log_debug(f"炒股：卡片头顶队友头像 {counts}（横带 y={y1}~{y2}）")
+        return counts
 
     def is_training_plan(self, texts):
         """是不是训练计划（日历）页。
@@ -1179,6 +1264,54 @@ class TrainingParsersMixin:
                     values[name] = int(m.group(1))
                     break
         return values
+
+    def refresh_attr_info(self, texts):
+        """读底部六维面板并**合并**进 `info["attrs"]`（监控页「六维 / 分数预测」用）。
+
+        **只在「进休息室」时调一次**（`handlers/training.py:handle_training_day` →
+        `snapshot_lounge`），不挂在科目页、也不是每拍读（2026-11-03 用户口径）。
+        原因：
+        - 六维面板只在休息室（训练日主界面）这几页是**当前角色的完整面板**；
+          校门口 / 地图根本没有；
+        - 周末加的是零碎属性（属性+10、精力+…），回头再累加没有意义，也不该拿来算。
+
+        成本：只是对**本拍已有的 OCR 文本**做过滤（`read_attribute_values`），
+        不额外截图、不额外推理。
+
+        **合并而不是整块替换**：面板被说明气泡挡住（鼠标停在某一格上会弹
+        「提高看破对手意图…」，实测会盖掉体能那一行）、或这一帧 OCR 漏一项时，
+        那一项保留上一次读到（上一次进休息室）的值，不会掉成「—」。
+        """
+        info = getattr(self, "info", None)
+        merged = dict(info.get("attrs") or {}) if isinstance(info, dict) else {}
+        values = self.read_attribute_values(texts)
+        if not isinstance(info, dict) or not values:
+            return merged
+        changed = {k: v for k, v in values.items() if merged.get(k) != v}
+        if changed:
+            merged.update(changed)
+            info["attrs"] = merged
+            self.log_debug(f"六维当前值：{merged}")
+        return merged
+
+    def snapshot_lounge(self, texts):
+        """进休息室（训练日主界面）时的一次性快照：**六维 + 精力 + 零用钱**。
+
+        用户 2026-11-03 口径：
+        - 只在**进入休息室**时更新这三项，其它页面不刷；
+        - 校门口 / 地图没有六维面板；
+        - 周末加的是零碎属性（属性+10、精力+…），回头累加既对不上面板也没意义。
+
+        实现：六维走 `refresh_attr_info`（合并）；精力和零用钱由 `top_bar` 解析，
+        它本身就会把 `stamina / stamina_max / coin` 写进 `info`，这里只负责**触发**
+        一次并留痕。返回六维字典（科目排行会用到）。
+        """
+        attrs = self.refresh_attr_info(texts)
+        bar = self.top_bar(texts)
+        self.log_debug(
+            f"休息室快照：六维 {attrs}｜精力 {bar.get('stamina')}/{bar.get('stamina_max')}"
+            f"｜零用钱 {bar.get('coin')}")
+        return attrs
 
     def read_equipment(self, texts):
         """数预览界面底部的器材卡，并判断哪些已经满经验。
@@ -1585,7 +1718,20 @@ class TrainingParsersMixin:
         两条左边缘差 276px、宽度差 461px；而对话/关卡列表/本周总结都是
         **左对齐等宽**的段落（左边缘几乎相同）。所以这里只认「左边缘不齐」的
         2 行以上，避免把对话当选项（2026-10-26 卡死事故）。
+
+        2026-11-02 实跑（第3周 星期六 校门口）：队长的台词是**居中气泡**
+        （「和名雪同学约好了在游戏厅见 / 面，快迟到了一」），再加一条
+        「今天餐厅缺人，快去看看吧！」和学校名 —— 日志原文
+        `事件选项（整句）：面，快迟到了一、北空之丘女子高校、今天餐厅缺人，
+        快去看看吧！ → 选第一个「面，快迟到了一」`，
+        紧接着 `left_click 面，快迟到了一 (1014, 245)`：在对话框里空点一下。
+        这几个框能通过「左边缘不齐 / 宽度不齐 / 同列」的全部判据
+        （气泡续行的左边缘和上一行根本不在一起），内容上也没法排除。
+        所以先判页面：**有「出行」按钮的校门口/训练日首页不是事件页**。
         """
+        # 事件页是全屏浮层，从不出现「出行」入口（那是主界面的按钮）。
+        if self.match_text(texts, "出行") is not None:
+            return []
         ui = {"下一步", "下一场", "跳过", "确定", "取消", "关闭",
               "继续", "领取", "开始训练"}
         rows = []
@@ -1594,6 +1740,10 @@ class TrainingParsersMixin:
             if s in ui or s in labels.WEEKEND_PLACES or self.is_decor(s):
                 continue
             if re.search(r"[0-9%]", s) or not (2 <= len(s) <= 30):
+                continue
+            # 学校名「北空之丘女子高校」是主界面的标题，永远不是选项
+            # （choice_candidates 早就有这条，这里补上）。
+            if re.search(r"(高校|公学|中学|大学|学校)$", s):
                 continue
             cx = (t.x + t.width / 2) / self.width
             cy = (t.y + t.height / 2) / self.height
@@ -1669,3 +1819,37 @@ class TrainingParsersMixin:
         r = roi[:, :, 2].astype(int)
         bright = (b > 195) & (g > 190) & (r > 180)
         return float(bright.mean()) > 0.50
+
+    def theme_tag_red_ratio(self, box):
+        """题材卡片「标签」文字里**红色**像素占高饱和像素的比例（0~1）。
+
+        用户口径（2026-11-02，第二次修正）：「优先红色，都一样就选中间」——
+        判据只问「这张卡的标签是不是红字」，**不**问「哪张跟别人不一样」。
+        三种实测样本（1549x871）：
+          - 白字 + 蓝底（普通卡）：饱和像素几乎全是蓝底（色相 100），红占比 0.00；
+          - **粉/红字**（天赋卡 `#权谋`，或三张全红的 `#悬疑/#治愈/#爽文`）：
+            红像素落在色相 0 与 170 两侧，占比 0.27 上下；
+          - 白字 + 白底（`#权谋` 那次的底色）：饱和像素只剩字，占比接近 1.0。
+        分母用「高饱和 + 亮」的像素而不是整框：OCR 框大小随字数变，绝对数不可比。
+        """
+        frame = self.frame
+        if frame is None:
+            return 0.0
+        h, w = frame.shape[:2]
+        x1, y1 = max(0, int(box.x)), max(0, int(box.y))
+        x2 = min(w, int(box.x + box.width))
+        y2 = min(h, int(box.y + box.height))
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return 0.0
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        hue, sat, val = cv2.split(hsv)
+        colorful = (sat > 80) & (val > 140)
+        total = int(colorful.sum())
+        # 框里几乎没有彩色像素（页面刚淡入 / 白底白字）→ 判「不是红字」，
+        # 不用 0/0 造一个假 0.0 去跟别人比。
+        if total < 30:
+            return 0.0
+        # 红色：色相在 0 附近，或折回 180 那一侧（洋红/粉）。橙黄（色相 20~35）不算红。
+        red = colorful & ((hue <= labels.THEME_RED_HUE_MAX) | (hue >= labels.THEME_RED_HUE_MIN_HIGH))
+        return float(red.sum()) / total

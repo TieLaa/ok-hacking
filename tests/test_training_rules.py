@@ -2,7 +2,7 @@
 
 为什么要这些测试：
     回归图只能验证「这张图命中哪个 handler」，验证不了「选哪张卡 / 点哪里」。
-    2026-10-26 的两次事故（72 体力买清空扭蛋、事件二选一点中间空白）
+    2026-10-26 的两次事故（72 精力买清空扭蛋、事件二选一点中间空白）
     都属于「handler 命中了但决策错了」，必须用构造数据测。
 
 运行：
@@ -30,10 +30,23 @@ from ok.feature.Box import Box  # noqa: E402
 from tools.check_handlers import DryRunTask  # noqa: E402
 from src.tasks.training.parsers import (  # noqa: E402
     CRIT_RING_FACTOR, CRIT_RING_MIN, ring_is_border)
+from src.tasks.ui import topbar_day  # noqa: E402
 
 
 def box(x, y, name, w=240, h=60):
     return Box(x=x, y=y, width=w, height=h, name=name)
+
+
+def tick_boost(task, texts, ticks=2):
+    """跑加强训练 handler 到「真正动手」的那一拍，清掉之前的观察拍动作。
+
+    2026-11-02 起这个 handler **头一拍只观察不点**（躲页面淡入，用户反馈
+    「第一下点卡片没点下去」），所以只调一次只能看到「头一拍先不点」。
+    """
+    for _ in range(max(0, ticks - 1)):
+        task.handle_boost_training(texts)
+    task.actions.clear()
+    return task.handle_boost_training(texts)
 
 
 class FakeTask(DryRunTask):
@@ -217,7 +230,7 @@ class GachaRules(unittest.TestCase):
     def test_discount_page_picks_gold_mate_card(self):
         """2026-10-31 23:41 用户截图：左蓝(60→50) / 中金+队友(100→90) / 右蓝(60→50)。
 
-        体力 25（低于清空阈值 30），右边那张「消耗所有精力」也是候选，
+        精力 25（低于清空阈值 30），右边那张「消耗所有精力」也是候选，
         但金+队友那张分最高 → 必须点中间那张。
         """
         texts = gacha_texts([
@@ -283,6 +296,26 @@ class GachaRules(unittest.TestCase):
             qualities=["金", "金"], mates=[False, True])
         self.assertTrue(task.handle_street(task._texts))
         self.assertEqual(task.actions[0][1], 1100)          # 带队友的右边那张
+
+    def test_plus_suffix_is_not_score(self):
+        """名字里的「+」不算分（用户 2026-11-02）。
+
+        实拍（第6周周日 105/130、零用钱 561）：左紫「运控增加+」80→70 /
+        中金「随机加成」100→90（带队友）/ 右金「体能增加++」100→90。
+        旧代码给名字带「+」的卡 +1 分 → 右边 301 > 中间 300，买了没队友的那张
+        （日志原文 `随机加成(金·+队友/90币/200)、体能增加++(金/90币/201)`）。
+        「+」只表示**同名卡片**之间的档位差，没「+」的同名卡本来就是紫/蓝，
+        已经由品质体现，不能再算一次分 → 同分时队友胜出，必须点中间那张。
+        """
+        task = FakeTask(gacha_texts([
+            ("运控增加+", "主力运控+48，队友属性中幅提升"),
+            ("随机加成", "训练主力随机一项属性+80，队友属性大幅提升"),
+            ("体能增加++", "主力体能+72，队友属性大幅提升"),
+        ], stamina="105/130", money="561",
+            price=[("80", "70"), ("100", "90"), ("100", "90")]),
+            qualities=["紫", "金", "金"], mates=[False, True, False])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions[0][1], 1100)          # 中间那张带队友的金卡
 
     def test_quality_beats_mate_bonus(self):
         """品质是第一权重：金卡没队友，也压过紫卡+队友（用户 2026-11-01）。"""
@@ -466,7 +499,7 @@ class GachaRules(unittest.TestCase):
         self.assertGreaterEqual(task.actions[0][1], 1300)   # 点第三张卡，不是第一张
 
     def test_recover_card_not_bought_at_full_stamina(self):
-        """体力满时恢复卡不加分：别为了回不上的精力白花钱。"""
+        """精力满时恢复卡不加分：别为了回不上的精力白花钱。"""
         task = FakeTask(gacha_texts([
             ("运控增加++", "主力运控+72，队友属性大幅提升"),
             ("精力恢复++", "立刻恢复90精力，之后每天恢复30点，持续4天，队友属性大幅提升"),
@@ -487,7 +520,7 @@ class GachaRules(unittest.TestCase):
         self.assertEqual(task.actions, [("click", 1837, 50)])
 
     def test_clear_card_rejected_when_stamina_high(self):
-        """体力 72 时，金卡但清空精力 → 拒绝，退出。"""
+        """精力 72 时，金卡但清空精力 → 拒绝，退出。"""
         task = FakeTask(gacha_texts([
             ("精力转换", "消耗所有精力，意识训练"),
             ("防守增加", "主力防守+30"),
@@ -507,7 +540,7 @@ class GachaRules(unittest.TestCase):
         self.assertEqual(task.actions, [("click", 1837, 50)])
 
     def test_clear_card_allowed_when_stamina_low(self):
-        """体力 10 < 阈值 30：允许买清空卡（拿体力换属性）。"""
+        """精力 10 < 阈值 30：允许买清空卡（拿精力换属性）。"""
         task = FakeTask(gacha_texts([
             ("精力转换", "消耗所有精力，意识训练"),
             ("防守增加", "主力防守+30"),
@@ -656,7 +689,7 @@ class EventRules(unittest.TestCase):
                  box(590, 640, "确定", 200, 60)]
         task = FakeTask(texts)
         self.assertFalse(task.handle_popup(texts))
-        self.assertTrue(task.handle_boost_training(texts))
+        self.assertTrue(tick_boost(task, texts))
 
     def test_boost_two_numbers_per_card(self):
         """2026-10-27 用户录屏：每张卡上有卡顶「100%」+ 卡内两个同名「+36」。
@@ -673,7 +706,7 @@ class EventRules(unittest.TestCase):
                  box(970, 700, "+36", 80, 45),
                  box(590, 1000, "确定", 200, 60)]
         task = FakeTask(texts)
-        self.assertTrue(task.handle_boost_training(texts))
+        self.assertTrue(tick_boost(task, texts))
         joined = " ".join(task.logs)
         self.assertIn("100%/+12=12", joined)
         self.assertIn("选 100%/+36", joined)
@@ -1184,10 +1217,10 @@ class IconNoiseFilter(unittest.TestCase):
 
 
 class StaminaBarFallback(unittest.TestCase):
-    """体力条像素兜底：OCR 把 `/` 读成 `1`（571130 / 301130 / 333115）。
+    """专注条像素兜底：OCR 把 `/` 读成 `1`（571130 / 301130 / 333115）。
 
     药丸总宽是固定版式 0.2885w（实测 554/1920、447/1549、377/1307），
-    填充比例反推体力与 OCR 正读值差 ≤1，所以斜杠读错时不再无解。
+    填充比例反推专注与 OCR 正读值差 ≤1，所以斜杠读错时不再无解。
     """
 
     W, H = 1920, 1080
@@ -1212,7 +1245,7 @@ class StaminaBarFallback(unittest.TestCase):
         state = task.top_bar(task._texts)
         self.assertEqual(state["stamina"], 57)
         self.assertEqual(state["stamina_max"], 130)
-        self.assertTrue(any("体力条" in s for s in task.logs))
+        self.assertTrue(any("专注条" in s for s in task.logs))
 
     def test_clean_ocr_is_kept(self):
         """OCR 读对了（57/130）就用 OCR 的值，不扰动。"""
@@ -1229,7 +1262,7 @@ class StaminaBarFallback(unittest.TestCase):
         self.assertTrue(any("按像素值算" in s for s in task.logs))
 
     def test_no_bar_means_no_guess(self):
-        """没有体力条的帧（黑屏/其它页面）不许瞎猜。"""
+        """没有专注条的帧（黑屏/其它页面）不许瞎猜。"""
         frame = np.zeros((self.H, self.W, 3), dtype=np.uint8)
         task = DryRunTask(frame, [self._pill_box("571130")])
         self.assertIsNone(task.top_bar(task._texts)["stamina"])
@@ -1258,7 +1291,7 @@ class StaminaBarFallback(unittest.TestCase):
         self.assertEqual(first, second)
 
     def test_candidates_disambiguate_which_digit_to_drop(self):
-        """粘连串拆出来的候选里既有 71 也有 57 → 由体力条填充（约 44%）仲裁成 57。"""
+        """粘连串拆出来的候选里既有 71 也有 57 → 由专注条填充（约 44%）仲裁成 57。"""
         task = DryRunTask(self._frame(57, 130), [self._pill_box("571130")])
         mx, cands = task.stamina_candidates(task._texts, self.LEFT,
                                            self.LEFT + self.TOTAL)
@@ -1351,6 +1384,45 @@ class EventCardChoices(unittest.TestCase):
         task = FakeTask(texts)
         self.assertTrue(task.handle_event_choice(texts))
         self.assertEqual(task.actions[-1][1], "安心按摩")     # EV 21 > 18 > 10
+
+
+class ResumeTrainingNeverWipes(unittest.TestCase):
+    """「训练确认」弹窗只许点「继续训练」，永不删档（2026-11-02 用户口径）。
+
+    开训练消耗的专注在删档时**不返还** → 删档是纯亏损操作。
+    旧开关「新一局删档」已从 config_spec 删除；即使配置里残留 True，
+    handler 也不许再出现任何点「删档」的动作。
+    """
+
+    @staticmethod
+    def confirm_texts():
+        return [box(760, 300, "训练确认", 400, 70),
+                box(500, 780, "删档", 200, 70),          # 青色（左）
+                box(1300, 780, "继续训练", 280, 70)]     # 黄色（右）
+
+    def test_never_clicks_wipe_even_if_config_lingers(self):
+        task = FakeTask(self.confirm_texts(), config={"新一局删档": True})
+        self.assertTrue(task.handle_resume_training(task._texts))
+        clicked = [a[1] for a in task.actions if a[0] == "click_box"]
+        self.assertEqual(clicked, ["继续训练"])
+        self.assertNotIn("删档", clicked)
+
+    def test_without_continue_text_clicks_fixed_yellow_spot(self):
+        """只 OCR 到「删档」时，宁可点固定坐标（黄按钮）也不点删档。"""
+        texts = [box(760, 300, "训练确认", 400, 70),
+                 box(500, 780, "删档", 200, 70)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_resume_training(texts))
+        self.assertEqual(len(task.actions), 1)
+        kind, x, y = task.actions[0]
+        self.assertEqual(kind, "click")
+        self.assertGreater(x, task.width * 0.5)      # 黄按钮在右半屏
+        self.assertNotIn("删档", [a[1] for a in task.actions])
+
+    def test_config_key_is_gone(self):
+        from src.tasks.training import config_spec
+        keys = {s.key for s in config_spec.ALL}
+        self.assertNotIn("新一局删档", keys)
 
 
 class TapToContinue(unittest.TestCase):
@@ -1534,13 +1606,104 @@ class GoldBorderRules(unittest.TestCase):
 class TopBarRules(unittest.TestCase):
 
     def test_zero_stamina_parsed(self):
-        """0/121 必须解析成 0，不能是 None（否则公园会误判体力充足）。"""
+        """0/121 必须解析成 0，不能是 None（否则公园会误判精力充足）。"""
         task = FakeTask([box(380, 16, "0/121", 210, 53)])
         self.assertEqual(task.top_bar()["stamina"], 0)
 
     def test_glued_week_prefix(self):
         task = FakeTask([box(380, 16, "369/115", 210, 53)])
         self.assertEqual(task.top_bar()["stamina"], 69)
+
+
+class TopBarDayDropout(unittest.TestCase):
+    """星期几被 OCR **丢字**时的兜底（2026-11-02 实测 1136 帧定案）。
+
+    实测结论：整帧 OCR **从来没读错**星期几，但会丢字 ——
+    「一」只有一条横线，检测框把它并进「期」里，整词变成「星期」两字。
+    丢字率 9.9%，其中「星期一」丢 67.7%、「星期六」被读成「期大」。
+
+    星期几是**当天状态**的日期键（`daycycle.day_state` 用 (周, 星期)），
+    读不到 → 整天状态都不对 → 周末去处、休息阈值全走错。
+    所以 `top_bar` 读不出时必须用「裁那块放大重读」兜底。
+    """
+
+    def _task(self, boxes, frame=None):
+        img = frame if frame is not None else np.zeros((1080, 1920, 3), dtype=np.uint8)
+        return DryRunTask(img, boxes)
+
+    def test_reads_day_when_present(self):
+        task = self._task([box(160, 14, "星期二", 90, 42)])
+        self.assertEqual(task.top_bar()["day"], "二")
+
+    def test_dropped_char_triggers_region_reread(self):
+        """框里只剩「星期」（第三字丢了）→ 必须走区域重读，而不是直接 None。"""
+        calls = []
+
+        def fake_read_day(ocr, frame):
+            calls.append(frame)
+            return "一"
+
+        old = topbar_day.read_day
+        topbar_day.read_day = fake_read_day
+        try:
+            task = self._task([box(160, 14, "星期", 70, 40)])
+            task._tick_frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+            self.assertEqual(task.top_bar()["day"], "一")
+            self.assertEqual(len(calls), 1)
+        finally:
+            topbar_day.read_day = old
+
+    def test_region_reread_is_cached_per_frame(self):
+        """`top_bar()` 一拍里被调用 20 多次，区域重读必须按帧缓存。"""
+        calls = []
+
+        def fake_read_day(ocr, frame):
+            calls.append(frame)
+            return "一"
+
+        old = topbar_day.read_day
+        topbar_day.read_day = fake_read_day
+        try:
+            task = self._task([box(160, 14, "星期", 70, 40)])
+            frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+            task._tick_frame = frame
+            for _ in range(5):
+                task.top_bar()
+            self.assertEqual(len(calls), 1)
+        finally:
+            topbar_day.read_day = old
+
+    def test_no_reread_when_day_already_read(self):
+        """整帧读得出时**不**做区域重读（省一次 OCR）。"""
+        calls = []
+
+        def fake_read_day(ocr, frame):
+            calls.append(frame)
+            return "九"
+
+        old = topbar_day.read_day
+        topbar_day.read_day = fake_read_day
+        try:
+            task = self._task([box(160, 14, "星期三", 90, 42)])
+            task._tick_frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+            self.assertEqual(task.top_bar()["day"], "三")
+            self.assertEqual(calls, [])
+        finally:
+            topbar_day.read_day = old
+
+    def test_day_from_texts_requires_whole_word(self):
+        """只认整词「星期X」：正文里的「星期日要训练」不算，「比赛后期」更不算。"""
+        self.assertEqual(topbar_day.day_from_texts(["星期三"]), "三")
+        self.assertEqual(topbar_day.day_from_texts(["星期天"]), "日")
+        self.assertIsNone(topbar_day.day_from_texts(["星期日要训练"]))
+        self.assertIsNone(topbar_day.day_from_texts(["比赛后期提升自己两项推荐"]))
+        self.assertIsNone(topbar_day.day_from_texts(["星期"]))
+        self.assertIsNone(topbar_day.day_from_texts([]))
+
+    def test_week_from_texts_requires_whole_word(self):
+        self.assertEqual(topbar_day.week_from_texts(["第4周"]), 4)
+        self.assertIsNone(topbar_day.week_from_texts(["第4周星期"]))
+        self.assertIsNone(topbar_day.week_from_texts(["4周"]))
 
 
 class AttributeValues(unittest.TestCase):
@@ -1564,6 +1727,64 @@ class AttributeValues(unittest.TestCase):
         self.assertEqual(task.read_attribute_values(texts),
                          {"投射": 501, "体能": 354, "弹跳": 999,
                           "防守": 424, "运控": 526, "意识": 475})
+
+    def test_refresh_merges_and_keeps_unread(self):
+        """refresh_attr_info 是**合并**：这一帧没读到的属性保留旧值，不掉成「—」。
+
+        场景（2026-11-02 实机）：停在训练日主界面时，鼠标停在某一格上会弹
+        「提高看破对手意图…」，正好盖住体能那一行 —— 整块替换会把体能写成空。
+        """
+        texts = [box(214, 830, "投射", 100, 57), box(384, 834, "501/1300", 186, 55)]
+        task = FakeTask(texts)
+        task.info["attrs"] = {"投射": 400, "弹跳": 300, "体能": 200}
+        merged = task.refresh_attr_info(texts)
+        self.assertEqual(merged, {"投射": 501, "弹跳": 300, "体能": 200})
+        self.assertEqual(task.info["attrs"], merged)
+
+
+class LoungeSnapshot(unittest.TestCase):
+    """进休息室（训练日主界面）时的一次性快照：六维 + 精力 + 零用钱。
+
+    2026-11-03 用户口径：**只在这一页更新**。校门口/地图没有六维面板；
+    周末加的是零碎属性（属性+10 / 精力+…），回头累加既对不上面板也没意义。
+    """
+
+    TOPBAR = [box(46, 22, "第1周", 108, 42), box(202, 22, "星期三", 130, 44),
+              box(384, 20, "115/130", 232, 48), box(1066, 28, "80", 44, 32)]
+    PANEL = [box(214, 830, "投射", 100, 57), box(384, 834, "501/1300", 186, 55),
+             box(222, 909, "弹跳", 92, 54), box(388, 917, "999/1450", 86, 46)]
+    HUB = [box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
+
+    def _task(self):
+        task = FakeTask(self.TOPBAR + self.PANEL + self.HUB)
+        task.ensure_speed = lambda *a, **k: False
+        return task
+
+    def test_coin_from_top_bar(self):
+        """零用钱 = 金币图标右边那个纯数字（cx≈0.567），别把「-100」当成钱。"""
+        texts = list(self.TOPBAR)
+        task = FakeTask(texts)
+        self.assertEqual(task.top_bar(texts)["coin"], 80)
+        # 周末购物飘出来的「-100」在 cx=0.649，不在竖带里
+        noisy = texts + [box(1226, 32, "-100", 98, 32)]
+        self.assertEqual(FakeTask(noisy).top_bar(noisy)["coin"], 80)
+
+    def test_snapshot_written_once_per_entry(self):
+        """决策拍拍一次快照，六维 / 精力 / 零用钱一起进 info；同一页不重复拍。"""
+        texts = self.TOPBAR + self.PANEL + self.HUB
+        task = self._task()
+        task.handle_training_day(texts)          # 头一拍只观察（HUB_SETTLE_TICKS）
+        self.assertNotIn("attrs", task.info)
+        task.handle_training_day(texts)          # 决策拍：先快照，再点训练
+        self.assertEqual(task.info["attrs"], {"投射": 501, "弹跳": 999})
+        self.assertEqual(task.info["coin"], 80)
+        self.assertEqual(task.info["stamina"], 115)
+        self.assertEqual(task.actions[-1][1], "训练")
+        self.assertTrue(task._lounge_snapshot_done)
+        # 同一个页面（点击没生效、又停一拍）不重复拍
+        before = dict(task.info["attrs"])
+        task.handle_training_day(texts)
+        self.assertEqual(task.info["attrs"], before)
 
 
 class SubjectRanking(unittest.TestCase):
@@ -1639,7 +1860,7 @@ class DayCycleRules(unittest.TestCase):
         st = task.day_state()
         st["visited"].add("步行街")
         st["gacha_spent"] = True
-        # 顶栏坏掉（只剩体力）
+        # 顶栏坏掉（只剩专注）
         task._texts = [box(380, 16, "120/130", 210, 53)]
         task._tick_frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
         st2 = task.day_state()
@@ -1659,7 +1880,7 @@ class DayCycleRules(unittest.TestCase):
         self.assertEqual(st["date"], (1, "六"))
 
     def test_training_day_action_rest_when_low_stamina(self):
-        """训练日入口①：体力低于阈值 → 休息。"""
+        """训练日入口①：专注低于阈值 → 休息。"""
         task = FakeTask([box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
                          box(380, 16, "20/130", 210, 53)])
         action, reason = task.training_day_action(task._texts)
@@ -1667,7 +1888,7 @@ class DayCycleRules(unittest.TestCase):
         self.assertIn("20", reason)
 
     def test_training_day_action_trains_when_enough(self):
-        """训练日入口①：体力够 → 训练。"""
+        """训练日入口①：专注够 → 训练。"""
         task = FakeTask([box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
                          box(380, 16, "120/130", 210, 53)])
         action, _ = task.training_day_action(task._texts)
@@ -1776,18 +1997,18 @@ class ConfigSpecRules(unittest.TestCase):
 
         10-26 选卡策略重写（金紫优先/队友优先）之后就没有读取点了，
         但声明和 GUI 说明一直留着 —— 而且说明写的是老口径
-        「会消耗所有精力」，与现行规则（体力 < 30 才买清空卡）**相反**。
+        「会消耗所有精力」，与现行规则（精力 < 30 才买清空卡）**相反**。
         """
         from src.tasks.training import config_spec
         keys = {s.key for s in config_spec.ALL}
         self.assertNotIn("扭蛋优先属性", keys)
 
     def test_gacha_clear_threshold_is_configurable(self):
-        """「扭蛋清空体力阈值」在 spec 里（以前用户配不到）。"""
+        """「扭蛋清空精力阈值」在 spec 里（以前用户配不到）。"""
         from src.tasks.training import config_spec
         spec = {s.key: s for s in config_spec.ALL}
-        self.assertIn("扭蛋清空体力阈值", spec)
-        self.assertEqual(spec["扭蛋清空体力阈值"].default, 30)
+        self.assertIn("扭蛋清空精力阈值", spec)
+        self.assertEqual(spec["扭蛋清空精力阈值"].default, 30)
 
     def test_fixture_uses_real_defaults(self):
         """测试夹具必须用**真实的 default_config**（和生产一样）。
@@ -1797,8 +2018,8 @@ class ConfigSpecRules(unittest.TestCase):
         from src.tasks.training import config_spec
         task = FakeTask([])
         self.assertEqual(task.config["允许进步行街"], True)
-        self.assertEqual(task.config["休息体力阈值"], 40)
-        self.assertEqual(task.config["扭蛋清空体力阈值"], 30)
+        self.assertEqual(task.config["休息精力阈值"], 40)
+        self.assertEqual(task.config["扭蛋清空精力阈值"], 30)
         self.assertEqual(len(task.config), len(config_spec.ALL))
 
     def test_json_and_spec_agree(self):
@@ -1814,8 +2035,51 @@ class ConfigSpecRules(unittest.TestCase):
         extra = set(cfg) - spec
         self.assertEqual(extra, set(),
                          "json 里多出来的键会被 verify_config 删掉：%s" % extra)
-        self.assertIn("扭蛋清空体力阈值", cfg,
+        self.assertIn("扭蛋清空精力阈值", cfg,
                       "json 里要有它（GUI 才能配上）")
+
+    def test_legacy_stamina_keys_are_migrated(self):
+        """2026-11-02 规范用词：配置键里不许再有「体力」/「专注」，旧值要能搬过来。
+
+        顶栏那个数字在训练里叫 **精力**（打工/公园/扭蛋清空消耗它）。
+        旧配置存过「体力」和「专注」，改名后 `Config.verify_config` 会把旧键
+        连同值一起丢掉，所以 `migrate_saved_config()` 必须在 `load_config()` 之前搬。
+        """
+        import json
+        import os
+        import tempfile
+        from src.tasks.training import config_spec
+
+        keys = {s.key for s in config_spec.ALL}
+        self.assertEqual([k for k in keys if "体力" in k or "专注" in k], [],
+                         "配置键里不许再出现「体力」/「专注」")
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "TrainingTask.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"休息体力阈值": 35, "扭蛋清空体力阈值": 12,
+                           "允许进步行街": False}, f, ensure_ascii=False)
+            self.assertTrue(config_spec.migrate_saved_config("TrainingTask", folder))
+            with open(path, encoding="utf-8") as f:
+                saved = json.load(f)
+            # 再跑一次不该有任何改动（幂等）
+            self.assertFalse(config_spec.migrate_saved_config("TrainingTask", folder))
+
+            # 新键已经有值（用户配过）→ 保留新值，旧键只负责清掉
+            path2 = os.path.join(folder, "Other.json")
+            with open(path2, "w", encoding="utf-8") as f:
+                json.dump({"休息精力阈值": 55, "休息专注阈值": 45,
+                           "休息体力阈值": 35}, f, ensure_ascii=False)
+            self.assertTrue(config_spec.migrate_saved_config("Other", folder))
+            with open(path2, encoding="utf-8") as f:
+                other = json.load(f)
+
+        self.assertEqual(saved["休息精力阈值"], 35)
+        self.assertEqual(saved["扭蛋清空精力阈值"], 12)
+        self.assertNotIn("休息体力阈值", saved)
+        self.assertNotIn("扭蛋清空体力阈值", saved)
+        self.assertEqual(saved["允许进步行街"], False)
+        self.assertEqual(other, {"休息精力阈值": 55})
 
 
 class PlaceModulesRules(unittest.TestCase):
@@ -1843,20 +2107,20 @@ class PlaceModulesRules(unittest.TestCase):
         self.assertEqual(shop.PLACE, "商店")
 
     def test_park_order_by_style_and_day(self):
-        """公园：训练流周日看体力，其它流派用配置项。"""
+        """公园：训练流周日看精力，其它流派用配置项。"""
         task = FakeTask([box(30, 20, "第1周", 120, 40), box(200, 20, "星期日", 130, 40),
                          box(380, 16, "20/130", 210, 53)])
         task._style = "训练流"
         task.weekend_state()
         order = task.park_order(task._texts, "训练流", day="日")
-        self.assertEqual(order[0], "野餐")      # 体力 20 < 60 → 野餐补精力
+        self.assertEqual(order[0], "野餐")      # 精力 20 < 60 → 野餐补精力
 
         task2 = FakeTask([box(30, 20, "第1周", 120, 40), box(200, 20, "星期日", 130, 40),
                           box(380, 16, "120/130", 210, 53)])
         task2._style = "训练流"
         task2.weekend_state()
         order2 = task2.park_order(task2._texts, "训练流", day="日")
-        self.assertEqual(order2[0], "划船")      # 体力够 → 划船（属性+）
+        self.assertEqual(order2[0], "划船")      # 精力够 → 划船（属性+）
 
         task3 = FakeTask([box(30, 20, "第1周", 120, 40), box(200, 20, "星期日", 130, 40)])
         task3._style = "扭蛋流"
@@ -2534,15 +2798,15 @@ class StylePlanRules(unittest.TestCase):
         self.assertIsNone(task._style)
         self.assertEqual(task.style, "训练流")      # 还没认出来时的兜底
 
-    # ---------- 周四休息阈值 ----------
+    # ---------- 周二休息阈值 ----------
 
-    def test_thursday_rest_threshold_ignores_style(self):
-        """周四：体力低于 75 就休息（给周五的周末留体力），跟流派无关。
+    def test_tuesday_rest_threshold_ignores_style(self):
+        """周二：精力低于 60 就休息，跟流派无关。
 
-        2026-10-30 口径（constants.THURSDAY_REST_THRESHOLD）：原来的「周五按流派
-        55 / 80」**已取消**，周五回落到配置里的「休息体力阈值」。
+        用户 2026-11-02 口径（constants.TUESDAY_REST_THRESHOLD）：周四不再有
+        特殊阈值（旧的 75 已取消），回到配置里的「休息精力阈值」。
         """
-        base = {"休息体力阈值": 40}
+        base = {"休息精力阈值": 40}
 
         def limit(style, day):
             task = FakeTask([], config=dict(base))
@@ -2550,32 +2814,35 @@ class StylePlanRules(unittest.TestCase):
             return task.rest_threshold(day)
 
         for style in ("训练流", "商店流", "扭蛋流", "小游戏流"):
-            self.assertEqual(limit(style, "四"), 75, style)
+            self.assertEqual(limit(style, "二"), 60, style)
+            self.assertEqual(limit(style, "四"), 40, style)
             self.assertEqual(limit(style, "五"), 40, style)
             self.assertEqual(limit(style, "一"), 40, style)
-        # 配置里的阈值更高时以配置为准（取 max，不能因为周四就下调）
-        self.assertEqual(FakeTask([], config={"休息体力阈值": 80}).rest_threshold("四"), 80)
+        # 配置里的阈值更高时以配置为准（取 max，不能因为周二就下调）
+        self.assertEqual(FakeTask([], config={"休息精力阈值": 80}).rest_threshold("二"), 80)
 
-    def test_thursday_low_stamina_rests(self):
-        """周四 50 体力：直接休息（门槛 75），扭蛋流也不例外。"""
-        texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期四", 130, 40),
+    def test_tuesday_low_stamina_rests(self):
+        """周二 50 精力：直接休息（门槛 60），扭蛋流也不例外。"""
+        texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期二", 130, 40),
                  box(380, 16, "50/130", 210, 53),
                  box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
         task = FakeTask(texts)
         task._style = "扭蛋流"
         task.ensure_speed = lambda *a, **k: False   # 零帧永远判不出 2x，跳过那一拍
+        task._hub_ticks = task.HUB_SETTLE_TICKS     # 模拟「出行」按钮已淡入
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "休息")
 
-    def test_friday_low_stamina_trains(self):
-        """周五 50 体力：回落到配置的 40 → 照常训练（周五不再有特殊阈值）。"""
-        texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期五", 130, 40),
+    def test_thursday_low_stamina_trains(self):
+        """周四 50 精力：回落到配置的 40 → 照常训练（周四不再有特殊阈值）。"""
+        texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期四", 130, 40),
                  box(380, 16, "50/130", 210, 53),
                  box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
         for style in ("训练流", "商店流", "扭蛋流"):
             task = FakeTask(texts)
             task._style = style
             task.ensure_speed = lambda *a, **k: False
+            task._hub_ticks = task.HUB_SETTLE_TICKS
             self.assertTrue(task.handle_training_day(texts), style)
             self.assertEqual(task.actions[-1][1], "训练", style)
 
@@ -2832,7 +3099,7 @@ class BoostTrainingClicks(unittest.TestCase):
 
     def test_picks_right_card_when_ev_higher(self):
         task = FakeTask(list(self.CARDS))
-        self.assertTrue(task.handle_boost_training(list(self.CARDS)))
+        self.assertTrue(tick_boost(task, list(self.CARDS)))
         self.assertEqual(task.actions[0], ("click", 1196, 540))   # 80%/+36 = 28.8 > 12，点卡片正中
         self.assertTrue(any(a[0] == "click_box" and a[1] == "确定" for a in task.actions))
 
@@ -2846,7 +3113,7 @@ class BoostTrainingClicks(unittest.TestCase):
             box(906, 874, "确定", 98, 51),
         ]
         task = FakeTask(texts)
-        self.assertTrue(task.handle_boost_training(texts))
+        self.assertTrue(tick_boost(task, texts))
         self.assertEqual(task.actions[0], ("click", 717, 540))    # 100%/+50 = 50 > 24
 
 
@@ -3066,22 +3333,35 @@ class OutingOnTrainingDay(unittest.TestCase):
                 + [box(945, 168, "今天可以出行哦！要不", 330, 40)])
 
     def test_dialogue_line_is_not_the_button(self):
-        """台词里有「出行」不算入口：只推进对话，不烧掉当天唯一的外出机会。
+        """台词里有「出行」不算入口，**也不点它**，更不烧掉当天唯一的外出机会。
 
         2026-10-31 实跑日志：`left_click 今天可以出行哦！要不 (950, 182)` ——
         旧版 click_text("出行") 是包含匹配，把台词当按钮点了，而 outing_done
         已经置 True，下一拍就掉进 else 点「训练」。用户：「为什么没有点出行，
         反而默认进了训练」。
+
+        2026-11-02 用户再反馈：按钮淡入前，每局都会在队长的对话框里空点一下。
+        所以这一步改成**只等不点**，下一拍按钮自己出来。
         """
         texts = self._dialog_texts()
         task = FakeTask(texts)
         task.ensure_speed = lambda texts: False
         self.assertTrue(task.handle_training_day(texts))
-        self.assertEqual(task.actions[-1][1], "今天可以出行哦！要不")
+        self.assertEqual(task.actions, [])          # 台词不是按钮，一个都不点
         self.assertFalse(task.weekend_state().get("outing_done"))
         # 下一拍按钮出来了 → 正常外出
         self.assertTrue(task.handle_training_day(self._texts()))
         self.assertEqual(task.actions[-1][1], "出行")
+
+    def test_dialogue_clicked_only_if_button_never_shows(self):
+        """等了两拍还没有按钮 → 才退回「点台词推进」（老行为，不能卡死）。"""
+        texts = self._dialog_texts()
+        task = FakeTask(texts)
+        task.ensure_speed = lambda texts: False
+        for _ in range(task.GO_OUT_WAIT_TICKS + 1):
+            self.assertTrue(task.handle_training_day(texts))
+        self.assertEqual(task.actions[-1][1], "今天可以出行哦！要不")
+        self.assertFalse(task.weekend_state().get("outing_done"))
 
     def test_split_button_still_found(self):
         """OCR 把按钮拆成「出」「行」两个单字框时也要认出来（商店 商/店 同款坑）。"""
@@ -3091,6 +3371,16 @@ class OutingOnTrainingDay(unittest.TestCase):
         task.ensure_speed = lambda texts: False
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "出行")
+
+    def test_short_button_with_glyph_still_found(self):
+        """按钮上带箭头（OCR 读成「出行▶」）也算按钮；长台词仍然不算。"""
+        texts = ([t for t in self._texts() if t.name != "出行"]
+                 + [box(1378, 748, "出行▶", 110, 40)])
+        task = FakeTask(texts)
+        self.assertEqual(task.find_go_out_button(texts).name, "出行▶")
+        # 同一帧再加一句台词，长度差就是判据：台词永远不是按钮
+        long_line = box(945, 168, "今天可以出行哦！要不", 330, 40)
+        self.assertIsNone(task.find_go_out_button([long_line]))
 
 
 class GachaMateBadge(unittest.TestCase):
@@ -3215,6 +3505,35 @@ class ArcadeTeammatePriority(unittest.TestCase):
         self.assertIn("买了「投射」", "".join(task.logs))
 
 
+class WeekendHomeDialogNotChoice(unittest.TestCase):
+    """2026-11-02 实跑（第3周 星期六 校门口）：队长气泡被当成「整句选项」。
+
+    真帧 OCR（1549x871，日志 01:25:22）：
+        和名雪同学约好了在游戏厅见 / 面，快迟到了一    ← 同一个气泡的两行
+        北空之丘女子高校                                ← 学校名
+        今天餐厅缺人，快去看看吧！                      ← 另一条提示
+        出行                                            ← 主界面按钮
+    气泡是**居中**文本，左边缘和宽度都不齐 → 骗过「非段落式整句」判据，
+    于是 `left_click 面，快迟到了一 (1014, 245)`，在对话里空点一下。
+    """
+
+    def _texts(self):
+        return [box(804, 236, "和名雪同学约好了在游戏厅见", 296, 27),
+                box(949, 231, "面，快迟到了一", 130, 28),
+                box(847, 254, "北空之丘女子高校", 138, 24),
+                box(850, 300, "今天餐厅缺人，快去看看吧！", 300, 30),
+                box(1379, 749, "出行", 138, 83)]
+
+    def test_dialog_bubble_is_not_options(self):
+        task = FakeTask(self._texts())
+        self.assertEqual(task.options_not_paragraph(task._texts), [])
+
+    def test_no_click_in_the_bubble(self):
+        task = FakeTask(self._texts())
+        self.assertFalse(task.handle_event_choice(task._texts))
+        self.assertEqual(task.actions, [])
+
+
 class TalentStockEvent(unittest.TestCase):
     """2026-10-29 闪堂电天赋「股神!」事件：选项是整句，右上是灰的「跳过」。
 
@@ -3299,6 +3618,62 @@ class TalentStockEvent(unittest.TestCase):
         self.assertTrue(task.handle_stock_pick(texts))
         self.assertIn("选「平衡型」(120)", "".join(task.logs))
         self.assertIn("队友1", "".join(task.logs))
+
+    # ---------- 2026-11-02：默认选「队友多」的那张（数头像，不数气泡） ----------
+
+    # 实拍取色（logs/debug/1102-234130_stock03.jpg），BGR：
+    # 皮肤 (163,192,236) → r-g=44；张开的嘴 (160,172,238) → r-g=66。差 22。
+    SKIN_BGR = (163, 192, 236)
+    MOUTH_BGR = (160, 172, 238)
+
+    def _stock_frame(self, mates, card_xs=(490, 875, 1260), mouth_y=425):
+        """画一张炒股选股页的帧：第 i 张卡头顶画 `mates[i]` 个队友头像。
+
+        只画「脸 + 嘴」两块，因为判据就是靠这两块分人的：脸 48x48（又高又方，
+        宽高比 1.0）、嘴 18x8（横窄条，宽高比 2.25 且更红）。
+        头像一排的**右端固定在卡心 +175**，往左每 75 一个 —— 实拍是 +160 / 间距 67
+        （1549 宽），按 1920 折算过来的。
+        """
+        frame = np.full((1080, 1920, 3), 210, np.uint8)
+        for cx, n in zip(card_xs, mates):
+            for dx in sorted(175 - 75 * i for i in range(n)):
+                mx = int(cx + dx)
+                frame[mouth_y - 62:mouth_y - 14, mx - 24:mx + 24] = self.SKIN_BGR  # 脸
+                frame[mouth_y:mouth_y + 8, mx - 9:mx + 9] = self.MOUTH_BGR         # 嘴
+        return frame
+
+    def test_stock_teammate_counts_count_mouths_not_faces(self):
+        """数的是头像的嘴：脸/头发那两块不能算成人头。"""
+        cards = [box(430, 495, "风险型", 120, 50),
+                 box(815, 495, "风险型", 120, 50),
+                 box(1200, 495, "稳健型", 120, 50)]
+        task = FakeTask(cards)
+        task._executor.frame = self._stock_frame([1, 0, 2])
+        self.assertEqual(task.stock_teammate_counts(cards), [1, 0, 2])
+
+    def test_stock_page_prefers_card_with_more_teammates(self):
+        """用户 2026-11-02：左边 1 个队友、右边 2 个 → 选右边（哪怕它更便宜）。
+
+        实拍那张：中间 200 买不起（零用钱 90），能买的只有左（1 人/40）和右（2 人/12）。
+        旧规则「气泡数 → 价格取高」会挑左边（40 > 12）；新规则按队友数挑右边。
+        """
+        texts = [box(700, 130, "请选择你要投资的股票", 500, 50),
+                 box(1150, 90, "90", 80, 40),
+                 box(430, 495, "风险型", 120, 50),
+                 box(815, 495, "风险型", 120, 50),
+                 box(1200, 495, "稳健型", 120, 50),
+                 box(480, 760, "40", 60, 40),
+                 box(870, 760, "200", 60, 40),
+                 box(1255, 760, "12", 60, 40),
+                 box(1030, 960, "确定", 280, 60)]
+        task = FakeTask(texts)
+        task.read_money = lambda texts=None: 90
+        task.dump_stock_frame = lambda texts: None       # 测试不许往 logs/debug 写图
+        task._executor.frame = self._stock_frame([1, 0, 2])
+        self.assertTrue(task.handle_stock_pick(texts))
+        self.assertEqual(task.actions[0][0], "click")
+        self.assertGreater(task.actions[0][1], int(task.width * 0.6))   # 最右那张
+        self.assertIn("队友2", "".join(task.logs))
 
     def test_stock_result_clicks_sell(self):
         """股票走势页只能点「卖出」。"""
@@ -3455,7 +3830,7 @@ class TalentStockEvent(unittest.TestCase):
                  box(1500, 380, "55%", 120, 60), box(1500, 520, "+66", 120, 60),
                  box(1200, 900, "确定", 200, 60)]
         task = FakeTask(texts)
-        self.assertTrue(task.handle_boost_training(texts))
+        self.assertTrue(tick_boost(task, texts))
         self.assertIn("选 55%/+66", "".join(task.logs))
 
     def test_boost_text_cards_skip_stamina_card(self):
@@ -3467,7 +3842,7 @@ class TalentStockEvent(unittest.TestCase):
                  box(1100, 560, "意识训练的等级增加至2", 260, 40),
                  box(1200, 900, "确定", 200, 60)]
         task = FakeTask(texts)
-        self.assertTrue(task.handle_boost_training(texts))
+        self.assertTrue(tick_boost(task, texts))
         self.assertIn("加强训练（文字效果）", "".join(task.logs))
         self.assertGreater(task.actions[0][1], int(task.width * 0.5))   # 点了右边
 
@@ -3494,6 +3869,7 @@ class TalentStockEvent(unittest.TestCase):
                  box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
         task = FakeTask(texts)
         task.ensure_speed = lambda *a, **k: False
+        task._hub_ticks = task.HUB_SETTLE_TICKS     # 模拟「出行」按钮已淡入
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "训练")
 
@@ -3906,13 +4282,66 @@ class MonitorButtonActions(unittest.TestCase):
         tab.toggle_connection()          # 断开
         self.assertFalse(tab._connected())
 
-    def test_start_auto_training_requires_connection(self):
-        """没接上游戏时点第二栏【开始】→ 不 enable，只提示。"""
+    def _fake_app(self, starting=False):
+        """给 `og.app.start_controller` 换成一个只记账的假货。"""
+        import ok
+
+        calls = []
+
+        class _Controller:
+            def __init__(self):
+                self.starting = starting
+
+            def start(self, task=None):
+                calls.append(("start", task))
+
+        class _App:
+            def __init__(self):
+                self.start_controller = _Controller()
+
+        app = _App()
+        old = getattr(ok.og, "app", None)
+        ok.og.app = app
+        self.addCleanup(lambda: setattr(ok.og, "app", old))
+        app.calls = calls
+        return app
+
+    def test_start_auto_training_starts_game_when_not_connected(self):
+        """没接上游戏时点第二栏【开始】→ **主动接入游戏**（用户 2026-11-02 口径）。
+
+        旧版这里只打一条 `logger.warning` 就 return，界面上一点变化都没有
+        —— 用户看到的就是「点了毫无反应」。现在改走第一栏【启动】的同一条链路：
+        `start_controller.start(task)`，它会自己刷新设备、必要时拉起游戏、
+        enable 这个任务并唤醒执行器。
+
+        注意这里**不自己 `task.enable()`**：还没连上就 enable，
+        任务只会躺在队列里，一帧都不跑。
+        """
         tab, task, executor, capture = self._tab(connected=False)
         capture.close()          # 模拟已断开
+        app = self._fake_app()
         tab.toggle_auto_training()
+        self.assertEqual(len(app.calls), 1)
+        self.assertIs(app.calls[0][1], task)
         self.assertNotIn("enable", task.calls)
-        self.assertEqual(task.enabled, False)
+        self.assertFalse(task.enabled)
+
+    def test_start_auto_training_ignores_repeat_click_while_starting(self):
+        """接入进行中再点【开始】不重复发起 —— 否则队列里堆好几个 `do_start`。"""
+        tab, task, executor, capture = self._tab(connected=False)
+        capture.close()
+        app = self._fake_app(starting=True)
+        tab.toggle_auto_training()
+        tab.toggle_auto_training()
+        self.assertEqual(app.calls, [])
+
+    def test_start_auto_training_when_connected_does_not_start_game(self):
+        """已经接上了就别再碰 `start_controller`（那是第一栏的职责）。"""
+        tab, task, executor, _ = self._tab(connected=True)
+        app = self._fake_app()
+        tab.toggle_auto_training()
+        self.assertEqual(app.calls, [])
+        self.assertIn("enable", task.calls)
 
     def test_start_auto_training_enables_when_connected(self):
         """接上游戏时点第二栏【开始】→ enable + 唤醒执行器。"""
@@ -3970,6 +4399,228 @@ class MonitorButtonActions(unittest.TestCase):
         tab.toggle_auto_training()    # 第二栏暂停
         self.assertIn("disable", task.calls)
         self.assertEqual(task.calls.count("disable"), 1)
+
+
+class MonitorQuickMatchSwitch(unittest.TestCase):
+    """「快速比赛」开关只管快速比赛模块（用户 2026-11-02 口径）。
+
+    分工：
+    - **执行器**是唯一运行基础，**只有第一栏【启动/停止】能动它**（接入：刷设备 /
+      拉游戏 / `executor.start()`；断开：两个开关复位 + `executor.pause()`）；
+    - **第二栏【开始/暂停】**只管自动训练；执行器没起来时**顺手**唤醒，不是必须；
+    - **快速比赛开关**同理：只管 `QuickMatchTask` 的 enable/disable + 顺手唤醒。
+      它**不接入**（不碰 `start_controller`），也**不关执行器**；
+    - 两个模块无关：自动训练自己处理养成里的比赛，快速比赛管养成之外的
+      全国大赛 / 圣山战 / 竞技场。
+
+    `QuickMatchTask` 是常驻 `TriggerTask`，**只有执行器没被暂停时才会被调度**
+    （`TaskExecutor.execute()` 里 `if self.paused: 只跑 job`）—— 所以旧版只
+    `enable()` 时开关拨了什么都不动，看着就像「跟第二栏的开始绑在一起」。
+    """
+
+    def _tab(self, connected=True):
+        from src.ui.MonitorTab import MonitorTab
+        import ok
+
+        class _FakeTask:
+            def __init__(self):
+                self.enabled = False
+                self.running = False
+                self.calls = []
+
+            def enable(self):
+                self.calls.append("enable")
+                self.enabled = True
+
+            def disable(self):
+                self.calls.append("disable")
+                self.enabled = False
+                self.running = False
+
+        class _FakeExecutor:
+            def __init__(self, paused=True):
+                self.paused = paused
+                self.calls = []
+
+            def start(self):
+                self.calls.append("executor.start()")
+                self.paused = False
+
+            def pause(self):
+                self.calls.append("executor.pause()")
+                self.paused = True
+
+        tab = MonitorTab.__new__(MonitorTab)
+        quick, train = _FakeTask(), _FakeTask()
+        executor = _FakeExecutor(paused=not connected)
+        tab._task = lambda: train
+        tab._task_by_name = lambda name: quick if name == "QuickMatchTask" else None
+        tab._connected = lambda: not executor.paused
+        tab._update_data = lambda: None
+        tab._close_capture_async = lambda: None
+        tab.executor = executor
+        return tab, quick, train, executor
+
+    def _forbid_start_controller(self):
+        """快速比赛**不许**接入（那是第一栏【启动】的活）—— 谁调谁炸。"""
+        import ok
+
+        class _App:
+            @property
+            def start_controller(self):
+                raise AssertionError("快速比赛开关不该碰 start_controller（接入是【启动】的职责）")
+
+        old = getattr(ok.og, "app", None)
+        ok.og.app = _App()
+        self.addCleanup(lambda: setattr(ok.og, "app", old))
+
+    def test_switch_on_enables_quick_match_only(self):
+        """拨到「开」：只 enable 快速比赛，不碰自动训练。"""
+        tab, quick, train, executor = self._tab(connected=True)
+        self._forbid_start_controller()
+        tab.set_quick_match(True)
+        self.assertIn("enable", quick.calls)
+        self.assertEqual(train.calls, [])
+        self.assertEqual(executor.calls, [])   # 执行器在跑，不用动
+
+    def test_switch_on_wakes_paused_executor_incidentally(self):
+        """执行器还停着就**顺手**唤醒一下 —— 只 `executor.start()`，不接入。"""
+        tab, quick, train, executor = self._tab(connected=False)
+        self._forbid_start_controller()
+        tab.set_quick_match(True)
+        self.assertIn("enable", quick.calls)
+        self.assertEqual(executor.calls, ["executor.start()"])
+        self.assertFalse(executor.paused)
+
+    def test_switch_off_only_disables_quick_match(self):
+        """拨到「关」：只 disable 快速比赛，不碰自动训练、不动执行器。"""
+        tab, quick, train, executor = self._tab(connected=True)
+        quick.enabled = True
+        tab.set_quick_match(False)
+        self.assertIn("disable", quick.calls)
+        self.assertFalse(quick.enabled)
+        self.assertEqual(train.calls, [])
+        self.assertEqual(executor.calls, [])
+
+    def test_switch_does_not_enable_auto_training(self):
+        """开关拨「开」不该替用户把自动训练也开起来（两个模块无关）。"""
+        tab, quick, train, executor = self._tab(connected=False)
+        tab.set_quick_match(True)
+        self.assertNotIn("enable", train.calls)
+        self.assertFalse(train.enabled)
+
+    def test_disconnect_resets_quick_match_switch(self):
+        """执行器被关掉（第一栏【停止】）→ 快速比赛开关复位成「关」。
+
+        「拨关」是用户自己关；「断开」是运行基础没了 —— 两种都要 disable，
+        但只有断开时由第一栏**代劳**（见 `MonitorExecutorLifecycle`）。
+        """
+        tab, quick, train, executor = self._tab(connected=True)
+        quick.enabled = True
+        tab._connection_stop()
+        self.assertIn("disable", quick.calls)
+        self.assertFalse(quick.enabled)
+
+
+class MonitorExecutorLifecycle(unittest.TestCase):
+    """执行器（`og.executor`）= 唯一运行基础，只有第一栏能动（用户 2026-11-02 口径）。
+
+    - 【启动】/【停止】= 拉起 / 关掉执行器；**关掉时两个模块开关一起复位**
+      （运行基础没了，挂着「开」就是撒谎）；
+    - 第二栏【开始/暂停】、快速比赛开关：开的时候**顺手**唤醒执行器
+      （`executor.start()`），关的时候**只 disable 自己**，绝不 pause 执行器。
+    """
+
+    def _tab(self, paused=True):
+        from src.ui.MonitorTab import MonitorTab
+
+        class _FakeTask:
+            def __init__(self, name):
+                self.name = name
+                self.enabled = False
+                self.running = False
+                self.calls = []
+
+            def enable(self):
+                self.calls.append("enable")
+                self.enabled = True
+
+            def disable(self):
+                self.calls.append("disable")
+                self.enabled = False
+                self.running = False
+
+        class _FakeExecutor:
+            def __init__(self):
+                self.paused = paused
+                self.calls = []
+
+            def start(self):
+                self.calls.append("start")
+                self.paused = False
+
+            def pause(self):
+                self.calls.append("pause")
+                self.paused = True
+
+        tab = MonitorTab.__new__(MonitorTab)
+        quick, train = _FakeTask("快速比赛"), _FakeTask("自动训练")
+        executor = _FakeExecutor()
+        tab._task = lambda: train
+        tab._task_by_name = lambda name: quick if name == "QuickMatchTask" else None
+        tab._connected = lambda: not executor.paused
+        tab._update_data = lambda: None
+        tab._close_capture_async = lambda: None
+        tab.executor = executor
+        return tab, quick, train, executor
+
+    def test_disconnect_closes_both_module_switches(self):
+        """执行器被关掉 → 【开始/暂停】和【快速比赛】**都要关掉**。"""
+        tab, quick, train, executor = self._tab(paused=False)
+        train.enabled, train.running = True, True
+        quick.enabled = True
+        tab._connection_stop()
+        self.assertIn("disable", train.calls)
+        self.assertIn("disable", quick.calls)
+        self.assertFalse(quick.enabled)
+        self.assertEqual(executor.calls, ["pause"])
+
+    def test_pause_auto_training_never_pauses_executor(self):
+        """第二栏【暂停】只停自己的任务 —— 关执行器不是它该管的事。"""
+        tab, quick, train, executor = self._tab(paused=False)
+        train.enabled, train.running = True, True
+        tab.toggle_auto_training()
+        self.assertIn("disable", train.calls)
+        self.assertEqual(executor.calls, [])
+        self.assertFalse(executor.paused)
+
+    def test_quick_match_off_never_pauses_executor(self):
+        """快速比赛拨「关」只停自己 —— 同样不许关执行器。"""
+        tab, quick, train, executor = self._tab(paused=False)
+        quick.enabled = True
+        tab.set_quick_match(False)
+        self.assertIn("disable", quick.calls)
+        self.assertEqual(executor.calls, [])
+        self.assertFalse(executor.paused)
+
+    def test_quick_match_switch_wakes_paused_executor(self):
+        """快速比赛拨「开」时执行器还停着 → **顺手** `executor.start()`。"""
+        tab, quick, train, executor = self._tab(paused=True)
+        tab.set_quick_match(True)
+        self.assertEqual(executor.calls, ["start"])
+        self.assertIn("enable", quick.calls)
+
+    def test_auto_training_wakes_paused_executor(self):
+        """第二栏【开始】同理：任务入队后顺手唤醒执行器（兜底，不是必须）。
+
+        `_connected()` 本身含「执行器没暂停」，所以真实场景里这条分支几乎走不到；
+        这里直接把「连上了但执行器停着」造出来，验证兜底确实会唤醒。
+        """
+        tab, quick, train, executor = self._tab(paused=True)
+        tab._connected = lambda: True
+        tab.toggle_auto_training()
+        self.assertEqual(executor.calls, ["start"])
+        self.assertIn("enable", train.calls)
 
 
 class MonitorButtons(unittest.TestCase):
@@ -4106,6 +4757,350 @@ class MonitorButtons(unittest.TestCase):
         view._captain_check.setChecked(False)
         view._captain_check.setChecked(True)
         self.assertIn(("captain", "野上泷"), actions.log)
+
+    @staticmethod
+    def _same_icon(btn, icon) -> bool:
+        """按钮当前图标是不是这一枚（按像素比，不看对象身份）。"""
+        a = btn.icon().pixmap(16, 16).toImage()
+        b = icon.icon().pixmap(16, 16).toImage()
+        return a == b
+
+    def test_first_bar_icon_flips_to_stop(self):
+        """第一栏跑了以后图标必须是 ■，不能还是 ▶（用户 2026-11-02 口径）。"""
+        from ok.ui.qt.common.OKIcon import OKIcon
+        from qfluentwidgets import FluentIcon
+
+        view, _ = self._view()
+        view.update_data(self._data(connected=False))
+        self.assertTrue(self._same_icon(view._btn_conn, FluentIcon.PLAY))
+        view.update_data(self._data(connected=True))
+        self.assertTrue(self._same_icon(view._btn_conn, OKIcon.STOP))
+        # 再断开：图标要回到 ▶
+        view.update_data(self._data(connected=False))
+        self.assertTrue(self._same_icon(view._btn_conn, FluentIcon.PLAY))
+
+    def test_second_bar_shows_connecting_while_starting(self):
+        """接入游戏期间第二栏显示【启动中…】。
+
+        用户 2026-11-02 口径：「第二栏按下开始的时候，如果没有连上游戏，
+        就主动启动」。接入要等窗口稳定 + 设备就绪（几秒到几十秒），
+        这段时间按钮既不是【开始】也不是【暂停】，得显示点什么，
+        否则又变成「点了没反应」。
+        """
+        from qfluentwidgets import FluentIcon
+
+        view, _ = self._view()
+        view.update_data(self._data(training_active=False, connecting=True))
+        self.assertEqual(view._btn_train.text(), "启动中…")
+        self.assertTrue(self._same_icon(view._btn_train, FluentIcon.SYNC))
+        # 接上并跑起来 → 【暂停】
+        view.update_data(self._data(training_active=True, connecting=True))
+        self.assertEqual(view._btn_train.text(), "暂停")
+        self.assertTrue(self._same_icon(view._btn_train, FluentIcon.PAUSE))
+        # 接入失败/取消 → 回到【开始】
+        view.update_data(self._data(training_active=False, connecting=False))
+        self.assertEqual(view._btn_train.text(), "开始")
+        self.assertTrue(self._same_icon(view._btn_train, FluentIcon.PLAY))
+
+    def test_second_bar_icon_is_pause_not_stop(self):
+        """第二栏文案是【暂停】，图标就该是 ‖；用 ■ 语义对不上。"""
+        from qfluentwidgets import FluentIcon
+
+        view, _ = self._view()
+        view.update_data(self._data(training_active=False))
+        self.assertTrue(self._same_icon(view._btn_train, FluentIcon.PLAY))
+        view.update_data(self._data(training_active=True))
+        self.assertTrue(self._same_icon(view._btn_train, FluentIcon.PAUSE))
+
+
+class MonitorConnectedCriterion(unittest.TestCase):
+    """第一栏的判据：**截帧通道活着 且 执行器没暂停**（用户 2026-11-02 口径）。
+
+    根因：框架启动时会自动刷新设备并建好 WGC 截图会话，所以 app 一打开
+    `capture_method` 就有对象 —— 旧判据只看它，第一栏一进页面就显示【停止】，
+    用户看到的是「默认已经开始了」。
+    """
+
+    def _patch(self, capture, paused):
+        import ok
+        from src.ui.MonitorTab import MonitorTab
+
+        class _Cap:
+            def __init__(self, alive):
+                self.alive = alive
+
+            def connected(self):
+                return self.alive
+
+        class _DM:
+            capture_method = None
+
+        class _Ex:
+            pass
+
+        dm = _DM()
+        dm.capture_method = capture
+        ex = _Ex()
+        ex.paused = paused
+        old_dm = getattr(ok.og, "device_manager", None)
+        old_ex = getattr(ok.og, "executor", None)
+        ok.og.device_manager = dm
+        ok.og.executor = ex
+        self.addCleanup(lambda: setattr(ok.og, "device_manager", old_dm))
+        self.addCleanup(lambda: setattr(ok.og, "executor", old_ex))
+        return MonitorTab, dm, ex
+
+    def test_capture_without_executor_is_not_started(self):
+        """启动态：截图会话已建好，但执行器还 paused → 显示【启动】。"""
+        cap = type("Cap", (), {"connected": lambda self: True})()
+        tab, dm, ex = self._patch(cap, paused=True)
+        self.assertFalse(tab._connected())
+        ex.paused = False
+        self.assertTrue(tab._connected())
+
+    def test_closed_capture_is_not_started(self):
+        """执行器在跑但截图会话没了（断开游戏）→ 显示【启动】。"""
+        cap = type("Cap", (), {"connected": lambda self: False})()
+        tab, dm, ex = self._patch(cap, paused=False)
+        self.assertFalse(tab._connected())
+        dm.capture_method = None
+        self.assertFalse(tab._connected())
+
+
+class ThemeSelect(unittest.TestCase):
+    """「请选择一个题材」三选一：**优先红色**，都一样就选中间。
+
+    用户口径（2026-11-02，第三次修正为准）：
+    - 有一张是**红字**（粉/洋红也算）→ 选它（天赋卡就是红的）；
+    - 颜色都一样（三张全白，或三张**全红**）→ 选中间那张。
+    判据**不是**「哪张跟别人不一样」，所以下面专门测「全红 → 中间」这条。
+    """
+
+    W, H = 1549, 871
+    TAGS = [("#悬疑", 345), ("#治愈", 728), ("#爽文", 1111)]
+    Y, TH, TW = 320, 42, 90
+
+    def _frame(self, warm=()):
+        """标题 + 三张卡 + 确定；`warm` 里列出的下标用**红字**（色相 0），其余白字。"""
+        frame = np.zeros((self.H, self.W, 3), dtype=np.uint8)
+        frame[:] = (200, 200, 200)                     # 浅灰底（低饱和，不进颜色统计）
+        for idx, (_name, x) in enumerate(self.TAGS):
+            roi = frame[self.Y:self.Y + self.TH, x:x + self.TW]
+            roi[:] = (250, 180, 120) if idx in warm else (250, 250, 250)   # BGR 蓝底 / 白底
+            # 文字像素：占框内约三成（模拟笔画），暖色卡用纯红
+            band = frame[self.Y + 8:self.Y + self.TH - 8, x + 6:x + self.TW - 6]
+            band[:, :] = (40, 40, 220) if idx in warm else (255, 255, 255)
+        return frame
+
+    def _texts(self, confirm=True):
+        texts = [box(663, 122, "请选择一个题材", 221, 38)]
+        texts += [box(x, self.Y, name, self.TW, self.TH) for name, x in self.TAGS]
+        if confirm:
+            texts.append(box(729, 743, "确定", 83, 46))
+        return texts
+
+    @staticmethod
+    def _handler():
+        from src.tasks.training.handlers import HANDLERS
+        return next(h for h in HANDLERS if h.__name__ == "handle_theme_select")
+
+    def test_unique_red_tag_wins(self):
+        """只有第 3 张是红字 → 选它（不按位置、不看光标）。"""
+        frame = self._frame(warm=(2,))
+        texts = self._texts()
+        task = DryRunTask(frame, texts)
+        self.assertTrue(self._handler()(task, texts))
+        clicks = [a for a in task.actions if a[0] == "click"]
+        self.assertEqual(len(clicks), 1)
+        self.assertAlmostEqual(clicks[0][1], 1111 + self.TW / 2, delta=3)
+        self.assertTrue(any("选「#爽文」" in m for m in task.logs))
+        self.assertTrue(any("唯一红字" in m for m in task.logs))
+
+    def test_all_same_color_picks_middle(self):
+        """三张全白（占比 0.00）→ 中间那张。"""
+        task = DryRunTask(self._frame(), self._texts())
+        self.assertTrue(self._handler()(task, self._texts()))
+        clicks = [a for a in task.actions if a[0] == "click"]
+        self.assertEqual(len(clicks), 1)
+        self.assertAlmostEqual(clicks[0][1], 728 + self.TW / 2, delta=3)
+        self.assertTrue(any("选「#治愈」" in m for m in task.logs))
+        self.assertTrue(any("没有红字" in m for m in task.logs))
+
+    def test_all_red_picks_middle(self):
+        """三张**全是红字**（2026-11-02 第二次实报）→ 同色，仍选中间。"""
+        frame = self._frame(warm=(0, 1, 2))
+        texts = self._texts()
+        task = DryRunTask(frame, texts)
+        self.assertTrue(self._handler()(task, texts))
+        clicks = [a for a in task.actions if a[0] == "click"]
+        self.assertEqual(len(clicks), 1)
+        self.assertAlmostEqual(clicks[0][1], 728 + self.TW / 2, delta=3)
+        self.assertTrue(any("选「#治愈」" in m for m in task.logs))
+        self.assertTrue(any("三张都红" in m for m in task.logs))
+
+
+class StartablePages(unittest.TestCase):
+    """`is_startable`：MCP 中途接手时允许「就地开始」的页面白名单。
+
+    2026-11-02 实跑：游戏停在「WARD文档」汇报页，`reset_to_start()` 回大厅失败、
+    这页又不在白名单 → 返回 False，整轮起不来（`logs/mcp/1798afc...`）。
+    """
+
+    def test_writing_event_pages_are_startable(self):
+        for texts in (
+            [box(663, 122, "请选择一个题材", 221, 38), box(729, 743, "确定", 83, 46)],
+            [box(110, 98, "WARD文档", 179, 43), box(155, 183, "收集到的idea", 200, 38),
+             box(1179, 687, "交稿", 75, 43)],
+        ):
+            task = FakeTask(texts)
+            self.assertTrue(task.is_startable(texts))
+
+    def test_match_page_is_not_startable(self):
+        """比赛内部仍然不行：盲点返回会毁局。"""
+        task = FakeTask([box(400, 850, "VS", 90, 40), box(300, 60, "比分", 200, 40)])
+        self.assertFalse(task.is_startable(task._texts))
+
+
+class ManuscriptSubmit(unittest.TestCase):
+    """「WARD文档」汇报页（写小说事件的收尾）：点右下角「交稿」。
+
+    2026-11-02 用户截图：左栏「收集到的idea」列着这次用到的标签
+    （#权谋 / #治愈 / #读心术），右侧是正文，右下角黄色「交稿」。
+    """
+
+    def _texts(self):
+        return [
+            box(110, 98, "WARD文档", 179, 43),
+            box(1301, 99, "跳过", 111, 40),
+            box(155, 183, "收集到的idea", 200, 38),
+            box(207, 256, "#权谋", 95, 48),
+            box(466, 176, "生死决斗的过程中，哈涅塔意外觉醒了“抽卡系统”", 907, 37),
+            box(1179, 687, "交稿", 75, 43),
+            box(224, 807, "WARD文档", 144, 34),      # 底部装饰，别被它带偏
+        ]
+
+    def test_clicks_submit(self):
+        texts = self._texts()
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_manuscript_submit(texts))
+        self.assertTrue(any(a[0] == "click_box" and a[1] == "交稿" for a in task.actions))
+
+    def test_needs_idea_column_not_just_title(self):
+        """只有标题（页面淡入中间态 / 底部那个装饰）不算这页，避免误点。"""
+        texts = [box(110, 98, "WARD文档", 179, 43), box(1179, 687, "交稿", 75, 43)]
+        task = FakeTask(texts)
+        self.assertFalse(task.handle_manuscript_submit(texts))
+        self.assertEqual(task.actions, [])
+
+
+class BoostSettle(unittest.TestCase):
+    """加强训练（「球队经理的帮助」那页）：头一拍只观察，点完卡片等一会儿再点确定。
+
+    用户 2026-11-02 实机反馈「每次都是两次空点击：第一下点卡片没点下去，
+    然后又点了继续又没点中」——页面淡入那一拍就点，卡片还没吃到点击。
+    """
+
+    W, H = 1549, 871
+
+    def _texts(self):
+        return [
+            box(60, 100, "球队经理的帮助", 300, 40),
+            box(700, 60, "加强训练", 200, 40),
+            box(300, 300, "100%", 120, 50), box(300, 420, "+24", 140, 70),
+            box(1000, 300, "85%", 120, 50), box(1000, 420, "+78", 140, 70),
+            box(729, 743, "确定", 83, 46),
+        ]
+
+    @staticmethod
+    def _handler():
+        from src.tasks.training.handlers import HANDLERS
+        return next(h for h in HANDLERS if h.__name__ == "handle_boost_training")
+
+    def test_first_tick_only_waits(self):
+        frame = np.zeros((self.H, self.W, 3), dtype=np.uint8)
+        texts = self._texts()
+        task = DryRunTask(frame, texts)
+        self.assertTrue(self._handler()(task, texts))
+        self.assertEqual(task.actions, [])            # 淡入那一拍：一下都不点
+        self.assertTrue(any("头一拍先不点" in m for m in task.logs))
+
+    def test_second_tick_clicks_card_then_confirm(self):
+        frame = np.zeros((self.H, self.W, 3), dtype=np.uint8)
+        texts = self._texts()
+        task = DryRunTask(frame, texts)
+        handler = self._handler()
+        handler(task, texts)                          # 第一拍：只等
+        task.actions.clear()
+        self.assertTrue(handler(task, texts))         # 第二拍：点卡片 + 确定
+        kinds = [(a[0], a[1] if a[0] == "click_box" else a[1]) for a in task.actions]
+        self.assertEqual(kinds[0][0], "click")        # 先点卡片
+        self.assertIn("确定", [a[1] for a in task.actions if a[0] == "click_box"])
+        self.assertGreaterEqual(len(task.actions), 2)
+
+    def test_no_double_confirm(self):
+        """点过确定之后的那一拍不能再点一次（2026-11-02 日志 22:34:51/52 连点两次）。"""
+        frame = np.zeros((self.H, self.W, 3), dtype=np.uint8)
+        texts = self._texts()
+        task = DryRunTask(frame, texts)
+        handler = self._handler()
+        handler(task, texts)
+        handler(task, texts)                          # 点卡片 + 确定
+        task.actions.clear()
+        self.assertTrue(handler(task, texts))         # 第三拍：页面还在 → 不重复点
+        self.assertEqual(task.actions, [])
+
+
+class SpeedEnsureGuard(unittest.TestCase):
+    """倍速：判不出「这条横带里有没有倍速图标」时，一下都不许点。
+
+    2026-11-02 23:41:34 实跑：炒股事件结束后回到训练日主界面，第一拍点了倍速
+    一下，把正在跑的 3x 打成了 OFF，再补 3 下才回到 3x。
+    根因：老判据「空心三角占比 ≥0.05 = 没到顶」在**没有图标**的画面上恒成立
+    （实心 0.00 / 空心 1.00）。
+    """
+
+    W, H = 1549, 871
+    STATE_DIR = os.path.join(ROOT, "logs", "topbar", "full_states")
+
+    def _texts(self):
+        return [box(30, 20, "第3周", 120, 40), box(200, 20, "星期四", 130, 40),
+                box(380, 16, "130/130", 210, 53)]
+
+    def _task(self, frame):
+        task = DryRunTask(frame, self._texts())
+        task.actions.clear()
+        return task
+
+    def _frame(self, name):
+        path = os.path.join(self.STATE_DIR, name)
+        if not os.path.exists(path):
+            self.skipTest(f"缺少样本 {path}")
+        return cv2.imread(path)
+
+    def test_no_icon_no_click(self):
+        """零帧：这条横带里什么都没有 → 判不了就不点。"""
+        task = self._task(np.zeros((self.H, self.W, 3), dtype=np.uint8))
+        self.assertFalse(task.ensure_speed(task._texts))
+        self.assertEqual(task.actions, [])
+
+    def test_stock_page_frame_no_click(self):
+        """右上角是炒股页的金币徽章（就压在倍速图标的坐标旁）→ 不许点。"""
+        task = self._task(self._frame("not_topbar_stock.png"))
+        self.assertFalse(task.ensure_speed(task._texts))
+        self.assertEqual(task.actions, [])
+
+    def test_at_max_no_click(self):
+        """3x 的真帧：已经到顶，不该再点。"""
+        task = self._task(self._frame("full_0.png"))
+        self.assertFalse(task.ensure_speed(task._texts))
+        self.assertEqual(task.actions, [])
+
+    def test_one_click_per_tick_when_not_at_max(self):
+        """1x 的真帧：一拍只点一下（盲连点会把 3x 直接点回 1x）。"""
+        task = self._task(self._frame("full_2.png"))
+        self.assertTrue(task.ensure_speed(task._texts))
+        self.assertEqual(len(task.actions), 1)
+        self.assertEqual(task.actions[0][:1], ("click",))
 
 
 if __name__ == "__main__":

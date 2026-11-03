@@ -79,7 +79,7 @@ class TrainingScoringMixin:
     def effect_value(cls, items):
         """一组「效果文本」→ (ev, flat)。**事件选项和加强训练共用这一份口径**。
 
-        - `flat=True`：纯回精力（出现「精力/体力」，但没有属性名、也没有「等级/属性」）
+        - `flat=True`：纯回精力（出现「精力」（或别名「体力」），但没有属性名、也没有「等级/属性」）
           —— 调用方一律不选它（用户口径：回精力不如一点属性）；
         - `ev`：真实属性总量（`_effect_ev`：全属性×6、精力×0.2、概率相乘）；
           读不到数字但写着「等级/属性」时按 100 计（训练等级提升这类文字效果）。
@@ -90,6 +90,7 @@ class TrainingScoringMixin:
         attrs = any(a in joined for a in cls.ATTR_NAMES)
         # 只认「等级提升」这类；「属性+10」是普通属性收益，交给 _effect_ev
         level = "等级" in joined
+        # 「体力」是游戏旧文案的别名，和「精力」同等看待（不是我们的术语）
         flat = (("精力" in joined or "体力" in joined) and not attrs and not level)
         ev = cls._effect_ev(items)
         if level:

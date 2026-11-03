@@ -20,7 +20,8 @@ from _harness import borrow, run_registered
 STEPS = os.environ.get("OK_MCP_STEPS")
 
 # 本次运行要选的队长：由外部写 logs/mcp/next_captain.json 指定（不用重启 runtime）。
-# 内容示例：{"captain": "真崎辉世", "allow_delete": false}
+# 内容示例：{"captain": "真崎辉世"}
+# 注意：**不支持删档**（2026-11-02 用户口径：开训练消耗的专注删档不返还）。
 CAPTAIN_FILE = os.path.join("logs", "mcp", "next_captain.json")
 
 
@@ -52,11 +53,8 @@ class Task(BaseTask):
         if wanted.get("captain"):
             overrides["指定队长"] = wanted["captain"]
             self.log_info(f"本次指定队长：{wanted['captain']}")
-        # 安全阀：MCP 运行默认不允许删档，除非显式 allow_delete
-        if wanted.get("allow_delete") is True:
-            overrides["新一局删档"] = True
-        else:
-            overrides["新一局删档"] = False
+        # 「新一局删档」已从 config_spec 删除：训练确认弹窗只会点「继续训练」。
+        # 开训练消耗的专注删档不返还，脚本里不再提供任何删档入口。
 
         task, result = run_registered(self, TrainingTask, overrides)
         assert task._steps >= 1, "训练任务一拍都没跑起来（界面不认识？）"

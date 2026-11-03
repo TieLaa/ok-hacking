@@ -82,10 +82,11 @@ class MonitorActions:
         pass
 
     def set_quick_match(self, enabled):
+        """队长栏右侧「快速比赛」开关：只管快速比赛模块自己（跟自动训练无关）。"""
         pass
 
     def toggle_auto_training(self):
-        """第二栏的【开始/暂停】：只管自动训练脚本本身的开关。"""
+        """第二栏的【开始/暂停】：只管自动训练脚本本身的开关，不碰快速比赛。"""
         pass
 
 
@@ -186,9 +187,16 @@ class MonitorView(QWidget):
         self._btn_capture: QPushButton | None = None
         self._btn_conn: QPushButton | None = None
         self._conn_text: tuple[str, str] = ("启动", "停止")
+        # 按钮图标当前是「跑」还是「停」—— 用来只在状态翻转时 setIcon，
+        # 不拿 `icon()` 和枚举比（PySide 每次返回新 QIcon，比出来永远不相等）。
+        self._conn_running: bool | None = None
         self._switch_quick: SwitchButton | None = None
         self._btn_train: QPushButton | None = None
         self._train_text: tuple[str, str] = ("开始", "暂停")
+        # 正在接入游戏时的文案（接入要等窗口稳定，几秒到几十秒）
+        self._train_connecting_text: str = "启动中…"
+        # 按钮当前处在哪一态：running / connecting / idle —— 只在翻转时 setIcon
+        self._train_state: str | None = None
         self._score_value: QLabel | None = None
         self._skill_labels: dict = {}
         self._skill_gain: QLabel | None = None
@@ -580,11 +588,12 @@ class MonitorView(QWidget):
             # 一个实例、两种文案：跑着的时候显示「暂停」，没跑显示「开始」。
             self._train_text = (spec.get("start_text", "开始"),
                                spec.get("pause_text", "暂停"))
+            self._train_connecting_text = spec.get("starting_text") or "启动中…"
             self._btn_train = self._make_primary(
                 self._train_text[0], self._slot_train,
                 icon=FluentIcon.PLAY)
             self._btn_train.setToolTip(
-                "自动训练脚本开关：开始 / 暂停（只管训练脚本，不影响游戏连接）")
+                "自动训练脚本开关：开始 / 暂停（没接上游戏时按【开始】会自动接入）")
 
             lay.addWidget(self._btn_train)
 
@@ -595,6 +604,15 @@ class MonitorView(QWidget):
             self._switch_quick = SwitchButton()
             self._switch_quick.setOnText("开")
             self._switch_quick.setOffText("关")
+            # 快速比赛是**独立模块**（常驻 TriggerTask），跟第二栏的自动训练无关：
+            # 养成里的比赛由自动训练自己处理，这个开关管的是全国大赛 / 圣山战 /
+            # 竞技场这些「养成之外」的局。开着的时候执行器停着会顺手唤醒一下，
+            # 但「接入游戏」仍是第一栏【启动】的事。
+            self._switch_quick.setToolTip(
+                "常驻监听养成之外的比赛（全国大赛 / 圣山战 / 竞技场等）："
+                "赛前跳过 / 进比赛点 ▶▶ / 收结算。\n"
+                "开启时执行器还停着会顺手唤醒（接入游戏仍按第一栏【启动】）；"
+                "关闭只停快速比赛，不动自动训练，也不关执行器。")
             self._switch_quick.checkedChanged.connect(self._slot_quick)
             lay.addWidget(self._switch_quick)
 
@@ -858,36 +876,53 @@ class MonitorView(QWidget):
     def _sync_run_button(self, data: dict):
         """第一栏总开关：接上游戏显示【停止】，没接上显示【启动】。
 
-        判据是**连接态**（`connected`），不是执行器状态 —— 否则第二栏
-        的动作会带动第一栏（2026-11-02 修正，详见 MonitorTab._connected）。
+        判据是**会话在跑**（`connected`）—— 截帧通道活着 **且** 执行器没
+        暂停（2026-11-02 修正，详见 MonitorTab._connected）。只看截帧通道
+        会在启动时就为真（框架启动会自己建 WGC 会话），第一栏一进页面
+        就显示【停止】，看着像「默认已经开始了」。
+
+        图标必须跟着文案走：跑着 = ■（停止），没跑 = ▶（播放）。
+        用户 2026-11-02 口径：「开始了以后，按钮应该是 ■停止，而不是 ▶停止」。
         """
         if self._btn_conn is None:
             return
-        text = self._conn_text[1] if data.get("connected") else self._conn_text[0]
+        running = bool(data.get("connected"))
+        text = self._conn_text[1] if running else self._conn_text[0]
         if self._btn_conn.text() != text:
             self._btn_conn.setText(text)
+        if self._conn_running != running:
+            self._btn_conn.setIcon(OKIcon.STOP if running else FluentIcon.PLAY)
+            self._conn_running = running
 
     def _sync_switches(self, data: dict):
-        """第二栏按钮：自动训练**真在跑** → 【暂停】，否则 → 【开始】。
+        """第二栏按钮：自动训练**真在跑** → 【暂停】；接入中 → 【启动中…】；
+        否则 → 【开始】。
 
         2026-11-02 修正：旧判据是 `running or enabled`（enabled 含「在队列里
         等」），于是点完【开始】按钮立刻变【暂停】，但其实一帧都还没跑。
         现在只认 `training_active`（= enabled 且 running）。
+
+        **没接上游戏时点【开始】**（同日口径）：按钮会去主动接入游戏，
+        期间显示【启动中…】—— 接入要等窗口稳定，几秒到几十秒，
+        这段时间界面必须有点变化，否则用户又会觉得「点了没反应」。
 
         **断开游戏时**（第一栏点【停止】）第二栏要回到未启动状态：
         训练任务已被 disable，`enabled` 立刻为假 → `training_active` 为假
         → 显示【开始】。不用等任务线程把 `running` 收尾（那有几秒滞后）。
         """
         if self._btn_train is not None and "training_active" in data:
-            running = bool(data.get("training_active"))
-            text = self._train_text[1] if running else self._train_text[0]
+            if data.get("training_active"):
+                state, text, icon = "running", self._train_text[1], FluentIcon.PAUSE
+            elif data.get("connecting"):
+                # 接入中：既没在跑、也不该让用户再点一次「开始」
+                state, text, icon = "connecting", self._train_connecting_text, FluentIcon.SYNC
+            else:
+                state, text, icon = "idle", self._train_text[0], FluentIcon.PLAY
             if self._btn_train.text() != text:
                 self._btn_train.setText(text)
-            icon = OKIcon.STOP if running else FluentIcon.PLAY
-            # 不用 `is` 比图标：PySide 每次返回的都是新包装对象，
-            # `is` 永远判「变了」→ 每 500ms 重设一次图标。
-            if self._btn_train.icon() != icon:
+            if self._train_state != state:
                 self._btn_train.setIcon(icon)
+                self._train_state = state
         for key, switch in (("quick_enabled", self._switch_quick),):
             if switch is None or key not in data:
                 continue

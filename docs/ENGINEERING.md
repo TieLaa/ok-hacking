@@ -79,7 +79,7 @@
 ```
 
 - `docs/shots/expected.json` 是断言表：截图 → 应该命中的 handler。
-- `tests/test_training_rules.py` 是决策断言：选哪张卡、点哪个位置、体力怎么解析。回归图只能验证「命中谁」，验证不了「决策对不对」。
+- `tests/test_training_rules.py` 是决策断言：选哪张卡、点哪个位置、专注怎么解析。回归图只能验证「命中谁」，验证不了「决策对不对」。
 - 改 handler 顺序 = 改行为。顺序调整后必须重跑全量。
 - `--all-hits` 列出「同一张图有多个 handler 返回 True」。这些不一定是 bug（顺序正确就安全），但**新增**的多命中要确认不是新 handler 判据过宽。
 - `check_architecture()`：禁止在判断分支里写 handler 名字（依赖要进 `handlers/__init__.py` 的声明表）。

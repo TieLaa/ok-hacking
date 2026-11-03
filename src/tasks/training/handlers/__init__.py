@@ -14,6 +14,7 @@ from .weekend import WeekendHandlers
 from .match import MatchHandlers
 from .entry import EntryHandlers
 from .fishing import FishingHandlers
+from .theme import ThemeHandlers
 
 HANDLERS = (
     # 注册球员收尾流程必须排在 handle_popup 之前：它有「关闭」按钮，
@@ -30,6 +31,10 @@ HANDLERS = (
     MatchHandlers.handle_match_intro,
     MatchHandlers.handle_in_match,
     TrainingHandlers.handle_training_result,
+    # 笔记/球星卡「学习」页（开局装备的笔记触发，不可跳过动画 + 右下「学习」）。
+    # 必须排在 handle_street / handle_event_choice 之前：这页带「评分」，
+    # 旧版被 handle_street 当成扭蛋详情页点了右上角「返回」（2026-11-02 01:22）。
+    TrainingHandlers.handle_note_study,
     MatchHandlers.handle_match_result,
     MatchHandlers.handle_skill_select,
     # 佐久间雨乃的天赋「钓鱼」：两页都是整页三选一/转盘，且带「确定」，
@@ -37,6 +42,13 @@ HANDLERS = (
     FishingHandlers.handle_fishing_ground,
     FishingHandlers.handle_fishing_wheel,
     TrainingHandlers.handle_boost_training,
+    # SSR 角色天赋触发的「请选择一个题材」三选一（2026-11-02）：
+    # 页面右上角有「跳过」，必须排在 handle_dialog_continue / handle_story_arrow 之前，
+    # 否则又变成「点快进图标，什么都不推进」（同炒股页那次事故）。
+    ThemeHandlers.handle_theme_select,
+    # 同一事件的收尾页「WARD文档」里的「交稿」：也带「跳过」快进图标，
+    # 同样必须排在 handle_dialog_continue / handle_story_arrow 之前。
+    ThemeHandlers.handle_manuscript_submit,
     TrainingHandlers.handle_subject_select,
     MatchHandlers.handle_event_choice,
     # 比赛日进店必须排在「赛前准备」之前：比赛日主界面可能直接就是
@@ -100,4 +112,22 @@ LEAVE_RESETS = {
     },
     # 训练科目页的选择缓存：离开科目页就清空
     "handle_subject_select": {"_picked_subject": False, "_picked_index": 0},
+    # 训练日主界面的「第几拍」和「等出行按钮」计数：离开这一页就清零。
+    # `_hub_ticks` 是「头一拍不决策」的依据（见 HUB_SETTLE_TICKS），
+    # 不清就会把第二天的页面当成「已经看过好几拍」→ 又回到淡入那一拍就决策。
+    # `_lounge_snapshot_done`：进休息室的六维/精力/零用钱快照，**每次进这一页只拍一次**
+    # （2026-11-03 用户口径），所以离开时必须清掉，第二天才会重新拍。
+    "handle_training_day": {"_hub_ticks": 0, "_outing_wait": 0,
+                            "_lounge_snapshot_done": False},
+    # 笔记学习页的等待/点击计数：离开这页就清零（下次遇到重新等、重新点）
+    "handle_note_study": {"_note_study_wait": 0, "_note_study_clicks": 0},
+    # 题材三选一的「已点确定」时间戳：离开这页就清掉，下次重新判颜色
+    "handle_theme_select": {"_theme_confirmed_at": 0.0},
+    # 「WARD文档」交稿的点击锁：离开这页就清掉
+    "handle_manuscript_submit": {"_submit_confirmed_at": 0.0},
+    # 加强训练页的「第几拍 / 已点确定的时刻」：离开这页就清零，
+    # 否则下一张加强训练卡会被当成「已经看过好几拍」→ 又回到淡入那一拍就点（空点击）
+    "handle_boost_training": {"_boost_ticks": 0, "_boost_confirmed_at": 0.0},
+    # 训练结果浮层的点击锁：离开就清，免得下次这页第一拍被误判成「刚点过」
+    "handle_training_result": {"_result_click_at": 0.0},
 }

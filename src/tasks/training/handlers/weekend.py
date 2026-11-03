@@ -69,6 +69,7 @@ class WeekendHandlers:
         return True
 
     # 详情弹窗里「这个按钮现在点不动」的文字证据（2026-10-31 餐厅实测「精力不足」）。
+    # 「体力不足」是同一状态的别名（旧文案/玩家说法），留着不冲突。
     BLOCKED_HINTS = ("精力不足", "体力不足", "条件不足", "无法选择", "无法前往",
                      "不可选择", "尚未满足")
 
@@ -177,13 +178,18 @@ class WeekendHandlers:
     STOCK_TYPES = ("稳健型", "平衡型", "风险型")
 
     def handle_stock_pick(self, texts):
-        """天赋「股神!」的模拟炒股：在**买得起**的卡里选第一张，再点确定。
+        """天赋「股神!」的模拟炒股：在**买得起**的卡里选**队友最多**的那张，再点确定。
 
         用户 2026-10-29 真机截图：
         - 三张卡「稳健型/平衡型/风险型」，价格 24/120/200，买不起的价格显示红色；
         - 黄色角标 + 头顶台词挂在游戏推荐的那张（两次分别在第一张、第二张），
-          所以「角标」不是可靠判据，可靠的是**价格 ≤ 当前零用钱**；
-        - 用户口径：选第一个（最左）能买的那张。
+          所以「角标」不是可靠判据，可靠的是**价格 ≤ 当前零用钱**。
+        - 当时口径：选第一个（最左）能买的那张。
+
+        用户 2026-11-02 改口径（实拍 1102-234130_stock03：左 1 个队友、右 2 个）：
+        **默认选队友多的那张**；队友一样多才按老规则（买得起→价格高的）。
+        队友数 = 卡片头顶那排 chibi 头像的个数（`stock_teammate_counts` 数嘴），
+        **不是气泡数** —— 气泡一张卡最多一句，2 个队友也只冒一句，数不出人数。
         """
         if self.match_text(texts, self.STOCK_TITLE) is None:
             return False
@@ -193,29 +199,38 @@ class WeekendHandlers:
         money = self.read_money(texts)
         if money is None:
             money = self.stock_money(texts)
-        cards = []
-        for name in self.STOCK_TYPES:
-            box = self.exact_text(texts, (name,))
-            if box is None:
+        pairs = []
+        seen = []
+        for t in texts:
+            # 三张卡的类型名**可能重复**（实拍 1102-234130：风险型 / 风险型 / 稳健型），
+            # 旧写法「按名字各取一个」会漏掉中间那张 —— 按 x 收集、同列去重。
+            # 名字用**包含**匹配（OCR 偶尔多带一个字符），只认这三种 3 字词。
+            if not any(k in t.name for k in self.STOCK_TYPES):
                 continue
-            price = self.stock_card_price(texts, box)
-            cards.append((box, price))
-        if not cards:
+            cx = t.x + t.width / 2
+            if any(abs(cx - (b.x + b.width / 2)) < self.width * 0.05 for b in seen):
+                continue
+            seen.append(t)
+        for card_box in seen:
+            pairs.append((card_box, self.stock_card_price(texts, card_box)))
+        if not pairs:
             self.log_warning("炒股：认不出三张卡片，点第一个类型附近兜底")
             self.click(int(self.width * 0.25), int(self.height * 0.55), after_sleep=0.6)
             return True
-        cards.sort(key=lambda pair: pair[0].x)
+        pairs.sort(key=lambda pair: pair[0].x)
+        mates = self.stock_teammate_counts([b for b, _p in pairs])
+        if not any(mates):
+            # 一个头像都没认出来（换了 UI / 分辨率怪）→ 退回气泡判据，别把这条规则废掉。
+            mates = [self.stock_card_marks(texts, b) for b, _p in pairs]
+        cards = [(b, p, m) for (b, p), m in zip(pairs, mates)]
         detail = "、".join(
-            f"{b.name}={p}{'·队友' * m}"
-            for (b, p), m in ((pair, self.stock_card_marks(texts, pair[0]))
-                              for pair in cards))
-        affordable = [(b, p, self.stock_card_marks(texts, b)) for b, p in cards
-                      if money is None or p is None or p <= money]
+            f"{b.name}={p}{'·队友' + str(m) if m else ''}" for b, p, m in cards)
+        affordable = [c for c in cards if money is None or c[1] is None or c[1] <= money]
         if not affordable:
             self.log_warning(f"炒股：都没有买得起的（零用钱 {money}｜{detail}）→ 放弃")
             self.click_button("give_up", after_sleep=0.6, must=False)
             return True
-        # 用户口径：买得起的里**有队友推荐（头顶气泡）优先**，同档价格高的优先。
+        # 用户口径：买得起的里**队友多**优先，同档价格高的优先。
         pick, price, marks = max(
             affordable, key=lambda x: (x[2], x[1] if x[1] is not None else -1))
         badge = f"·队友{marks}" if marks else ""
@@ -228,10 +243,16 @@ class WeekendHandlers:
         return True
 
     def dump_stock_frame(self, texts):
-        """炒股页限流存帧（每局最多 6 张）：用来量「头顶队友头像有几个」。"""
+        """炒股页限流存帧（每局最多 6 张）：用来量「头顶队友头像有几个」。
+
+        存的是**本拍识别用的那一帧**（`_tick_frame`），和同目录的 `.txt` 是同一屏 ——
+        读 `self.frame` 会拿到点击之后的新帧，图上的头像和 OCR 框对不上。
+        """
         if getattr(self, "_stock_dumps", 0) >= 6:
             return
-        frame = self.frame
+        frame = getattr(self, "_tick_frame", None)
+        if frame is None:
+            frame = self.frame
         if frame is None or not frame.any():
             return
         try:
@@ -249,10 +270,14 @@ class WeekendHandlers:
             self.log_debug(f"炒股帧存证失败: {type(e).__name__}: {e}")
 
     def stock_card_marks(self, texts, label_box):
-        """卡片头顶的台词气泡（「相信奇迹!」「一定能赚!」「我梭哈了」）= 队友推荐。
+        """卡片头顶的台词气泡（「相信奇迹!」「一定能赚!」「我梭哈了」）= 有队友推荐。
 
         气泡是**短文本 + 感叹号**，按 x 关联到最近的卡片（±0.12 屏宽）。
-        OCR 偶尔把「!」吃掉，那就当这张没有标记（退化成按价格取高）。
+        OCR 偶尔把「!」吃掉，那就当这张没有标记。
+
+        2026-11-02 起它只是**兜底**：气泡一张卡最多一句，2 个队友也只冒一句，
+        数不出人数。真正的「队友几个」由 `stock_teammate_counts`（数头像的嘴）给，
+        只有在头像一个都没认出来时才退回这里。
         """
         if label_box is None:
             return 0
@@ -344,7 +369,7 @@ class WeekendHandlers:
         实机界面（2026-10-26）：
         - 左侧商品卡：名称 + 剩余数量 + 价格（100 / 60 / 45），**卡片底色 = 品质色**；
         - 右侧是选中商品的详情和**黄色购买条**（价格就在条上）；
-        - 右上角 X 关闭；顶栏金币是体力条右边那个独立数字。
+        - 右上角 X 关闭；顶栏金币是专注条右边那个独立数字。
 
         用户口径（2026-10-26）：
         - 平时只买金卡和紫卡（蓝/白不买），零用钱 **≥300** 才进店；
@@ -558,14 +583,14 @@ class WeekendHandlers:
             cards, stamina, stamina_max, money)
         if best is None:
             self.log_info(f"扭蛋：{detail} → 没有可买的"
-                          f"（零用钱 {money}，体力 {stamina}），退出")
+                          f"（零用钱 {money}，精力 {stamina}），退出")
             self.leave_street()
             return True
 
         self.click(best["x"], best["y"], after_sleep=0.5)
         self.log_info(f"扭蛋：{detail} → 选「{best['name']}」"
                       f"（{best['quality']}，{best['price']}币，"
-                      f"零用钱 {money}，体力 {stamina}）")
+                      f"零用钱 {money}，精力 {stamina}）")
 
         if self.click_button("confirm", after_sleep=0.8, must=False):
             self.log_info("扭蛋：确定")
@@ -679,7 +704,7 @@ class WeekendHandlers:
         # 2026-10-30 用户截图（野上泷周五额外周末）：对话框里有一句
         # 「今天可以出行哦！要不…」，click_text("出行") 会命中这句**台词**
         # （日志 `left_click 今天可以出行哦！要不 (950, 182)`），不是右侧按钮。
-        # 2026-10-31：判据收进 parsers.find_go_out_button（只认整词「出行」，
+        # 2026-10-31：判据收进 parsers.find_go_out_button（只认整词/短词，
         # 多个候选时优先右下按钮区），训练日那边也用它，别各写一份。
         action, reason = self.outing_offer(texts, block_if_used=False)
         if action == "点按钮":
@@ -688,14 +713,10 @@ class WeekendHandlers:
             self.log_info(f"周末：点「出行」进地图"
                           f"@({target.x + target.width // 2},"
                           f"{target.y + target.height // 2})")
-        elif self.click_text("出行", region_name="go_out", after_sleep=0.6,
-                             must=False):
-            # 兜底：按钮上除了「出行」还带了箭头之类的字，整词匹配不到
-            self.log_info("周末：点「出行」进地图（按钮区兜底）")
         else:
-            # 只有台词、没有按钮：这一拍什么都不点，等对话先推进。
-            # 注意：这里**不点台词**（训练日那个入口才点）——
-            # 周末首页的台词不是按钮，点它会点到句子中间（2026-10-30 实跑）。
+            # 只有台词、没有按钮：这一拍什么都不点，等下一拍按钮出来。
+            # 注意：这里**不点台词** —— 周末首页的台词不是按钮，
+            # 点它就是对话框里的空点击（2026-10-30、2026-11-02 实跑）。
             return False
         return True
 

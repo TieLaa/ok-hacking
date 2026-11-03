@@ -9,8 +9,8 @@
 
 选哪个（用户 2026-10-30 / 2026-11-01）：
 
-- **训练流**：周六 → 划船（属性+，不再满体力吃野餐）；
-  周日 → 体力 < `周末野餐阈值` 就野餐补精力，否则划船。
+- **训练流**：周六 → 划船（属性+，不再满精力吃野餐）；
+  周日 → 精力 < `周末野餐阈值` 就野餐补精力，否则划船。
   今天选过一次就记住（`park_choice`），不反复改。
 - **其它流派**：用配置项 `公园选项` 指定的优先项（默认野餐）。
 
@@ -70,13 +70,13 @@ class ParkPlace:
                 threshold = int(self.config.get("周末野餐阈值"))
                 if stamina is not None and stamina < threshold:
                     st["park_choice"] = "野餐"
-                    self.log_info(f"周日体力 {stamina} < {threshold} → 野餐补精力")
+                    self.log_info(f"周日精力 {stamina} < {threshold} → 野餐补精力")
                 else:
                     st["park_choice"] = "划船"
-                    self.log_info(f"周日体力 {stamina} ≥ {threshold} → 划船（属性+）")
+                    self.log_info(f"周日精力 {stamina} ≥ {threshold} → 划船（属性+）")
             else:
                 st["park_choice"] = "划船"
-                self.log_info("周六公园：划船（属性+，不再满体力吃野餐）")
+                self.log_info("周六公园：划船（属性+，不再满精力吃野餐）")
 
         return (st["park_choice"],) + tuple(
             x for x in labels.PARK_OPTIONS if x != st["park_choice"])

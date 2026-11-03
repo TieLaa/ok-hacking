@@ -33,6 +33,11 @@
   "2026-10-27-register-2-team.png": "handle_register_player",
   "2026-10-29-event-sim-software.png": "handle_event_choice",
   "2026-10-31-gacha-discount.png": "handle_street",
+  "2026-11-02-manuscript-submit.png": "handle_manuscript_submit",
+  "2026-11-02-note-study-result.png": "handle_note_study",
+  "2026-11-02-note-study-wait.png": "handle_note_study",
+  "2026-11-02-theme-select-tie.png": "handle_theme_select",
+  "2026-11-02-theme-select.png": "handle_theme_select",
   "restaurant_cards.png": "handle_restaurant",
   "restaurant_detail_blocked.png": "handle_activity_go"
 }

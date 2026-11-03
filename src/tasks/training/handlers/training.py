@@ -14,6 +14,34 @@ from src.tasks.ui import labels
 
 class TrainingHandlers:
 
+    # 训练日「出行」按钮是页面淡入后出现的：实测（2026-10-31 19:31 / 2026-11-02
+    # 01:03 起共 13 次）**下一拍**（约 0.45 秒）就能 OCR 到。
+    # 台词「今天可以出行哦！要不」是静态提示，点它什么都不会推进
+    # （用户 2026-11-02：队长的头像右边的对话框里出现了无用的空点击），
+    # 所以先等几拍；等不到才退回「点台词推进」这条老路。
+    GO_OUT_WAIT_TICKS = 2
+
+    # 训练日主界面的「决策拍」同样要躲开淡入：整页刚出现的那一拍，右侧「出行」
+    # 还没画出来，`outing_offer` 返回 None → 直接按默认去训练（专注一去不回）
+    # 或去休息（这一天就过去了）。实测 2026-11-02 08:56:47 / 08:57:36 两次都是
+    # 头一拍没读到「出行」，隔一拍（08:57:38）就读到了。
+    # 代价：每天多等一拍（≈0.5 秒）。换的是一次不可撤销的错误点击。
+    HUB_SETTLE_TICKS = 1
+
+    # 加强训练（「球队经理的帮助」那页）同样要躲淡入：头一拍只观察不点。
+    # 2026-11-02 用户实机反馈「两次空点击」：第一拍卡片还在滑入，点下去不生效，
+    # 紧接着的「确定」也就白点了。
+    #
+    # 等待时长**可调**（用户 2026-11-02：「等待时间减少 1 秒，看看效果」）：
+    # 旧值 0.35 + (0.55-0.35) + 0.35 ≈ 0.9 秒额外等待，现在 ≈ 0.05 秒，
+    # 剩下的「躲淡入」靠**跳过一整拍**（BOOST_SETTLE_TICKS）实现，不再叠加 sleep。
+    # 调这页速度只改这三个数，别再去动 handler 结构。
+    BOOST_SETTLE_TICKS = 1        # 头一拍只观察、不点（躲淡入，别设 0）
+    BOOST_SETTLE_SLEEP = 0.0      # 那一拍不额外等（原 0.35）
+    BOOST_CARD_SLEEP = 0.40       # 点完卡片的等待（原 0.55）
+    BOOST_CONFIRM_GAP = 0.05      # 卡片→确定 的额外间隔（原 0.35）
+    BOOST_CONFIRM_LOCK = 1.2      # 点过确定后的静默期（原 2.0）
+
     def handle_training_result(self, texts):
         """训练结果浮层：精力降低了X / 属性提升了 / 触发训练后事件。
 
@@ -22,14 +50,70 @@ class TrainingHandlers:
         """
         if self.match_text(texts, ("精力降低了", "属性提升了", "触发训练后事件")) is None:
             return False
+        # 2026-11-02：这页点一下就该收起，页面正在淡出时再点就是**空点击**
+        # （用户反馈「经理帮助事件连着两次空点击」的第一下就是 22:34:49 这次）。
+        # 加个短锁：点过就等 1.5 秒，等不到新的一帧才允许再点。
+        if time.monotonic() - getattr(self, "_result_click_at", 0.0) < 1.5:
+            self.sleep(0.3)
+            return True
         self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=0.6)
+        self._result_click_at = time.monotonic()
         self.log_info("训练结果：点屏幕继续")
+        return True
+
+    def handle_note_study(self, texts):
+        """笔记/球星卡「学习」页：**不可跳过的动画 + 右下角「学习」按钮**。
+
+        用户 2026-11-02 口径：这是**开局装备的笔记**触发的界面，动画跳不过，
+        动画放完右下角才出现「学习」按钮，点它才算过、才能拿加成。
+
+        坑（2026-11-02 01:22 实跑，用户当场看到）：
+        - 动画期间 OCR 只剩「契合度：优 / 评分 / 技能名」，没有一个 handler 认 →
+          落 unknown 兜底，**点屏幕中央两次空点击**；
+        - 更糟：这页带「评分」，被 handle_street 当成扭蛋详情页 →
+          **点右上角「返回」找关闭键**。
+        所以这个 handler 必须排在 handle_street / handle_event_choice 之前。
+
+        两条动作：
+        - 读到整词「学习」→ 点它**真实的文本框**（不写死坐标，按钮位置随分辨率变）；
+        - 只有「契合度」、还没读到按钮 → **等**，一下都不点（动画没放完，点了是空点击）。
+
+        同一页最多点 3 下：点完游戏要放过场，这一拍 OCR 可能还是旧帧；
+        不限次数就会变成连点（用户 2026-11-02 说的「空点击」）。
+        """
+        if self.match_text(texts, labels.NOTE_STUDY_MARKS) is None:
+            return False
+        # 选卡页（选择笔记/选择器材）也可能弹出卡片详情带「契合度」——
+        # 那是开局流程的页，交给 handle_note_select / handle_equipment，别在这儿等。
+        if self.match_text(texts, ("选择笔记", "选择器材")) is not None:
+            return False
+        clicked = getattr(self, "_note_study_clicks", 0)
+        if self.exact_text(texts, labels.BUTTONS["study"]) is not None:
+            if clicked >= 3:
+                self.log_debug("笔记学习页：本页已点 3 下「学习」，等过场")
+                self.sleep(0.5)
+                return True
+            self._note_study_wait = 0
+            self._note_study_clicks = clicked + 1
+            self.click_button("study", texts=texts, after_sleep=0.8)
+            self.log_info(f"笔记学习：点「学习」完成触发事件（第 {clicked + 1} 下）")
+            return True
+        # 动画中：等按钮出来。等太久（10 拍≈10 秒）就放手交给兜底，避免死等。
+        self._note_study_wait = getattr(self, "_note_study_wait", 0) + 1
+        if self._note_study_wait > 10:
+            self.log_warning("笔记学习页：等了 10 拍仍没读到「学习」→ 交给兜底")
+            return False
+        self.log_debug(f"笔记学习页：动画中，等「学习」按钮（第 {self._note_study_wait} 拍）")
+        self.sleep(0.5)
         return True
 
     def handle_training_hub(self, texts):
         """训练日主界面：六维属性 + 右下角主按钮。
 
         只有右下角真的写着「比赛 / VS / 训练」时才点，避免在科目选择页误触。
+
+        六维不需要在这里读：这一页的刷新点是 `handle_training_day` 的决策拍
+        （`parsers.snapshot_lounge`，每次进休息室拍一次）。
         """
         action = self.texts_in_region(texts, "main_action")
         if self.match_text(action, ("VS", "比赛", "训练")) is None:
@@ -107,22 +191,51 @@ class TrainingHandlers:
             return False
         if self.match_text(texts, "休息") is None:
             return False
-        if self.ensure_speed(texts):
+        # 这一页的第几次命中（0 = 刚出现的第一拍）。离开这页时由 LEAVE_RESETS 清零。
+        self._hub_ticks = getattr(self, "_hub_ticks", 0) + 1
+        hub_seen = self._hub_ticks - 1
+        # 头一拍不碰倍速：整页还在淡入时，右上角图标可能还没画出来，
+        # 像素判据会把「没画出三角」读成「还有空心三角」（2026-11-02 23:41:34
+        # 炒股页回来后的第一拍就这么把 3x 点成了 OFF）。下一页拍图标就位了。
+        if hub_seen >= self.HUB_SETTLE_TICKS and self.ensure_speed(texts):
             return True
         # 2026-10-29 用户补充：野上泷周五也能出行 —— 训练日主界面上出现「出行」时，
         # 先把这次外出机会用掉（一天一次），再回来训练/休息；否则练完这天就过去了。
         action, reason = self.outing_offer(texts)
         if action == "点按钮":
+            self._outing_wait = 0
             button = self.find_go_out_button(texts)
             self.click_box(button, after_sleep=0.6)
             self.mark_outing_used()
             self.log_info(f"训练日有「出行」按钮 → 先外出（一天一次）：{reason}")
             return True
         if action == "推进对话":
+            # 只等按钮淡入，**不点台词**：台词点不出任何东西，
+            # 反而在对话框里留一下空点击（用户 2026-11-02 反馈）。
+            self._outing_wait = getattr(self, "_outing_wait", 0) + 1
+            if self._outing_wait <= self.GO_OUT_WAIT_TICKS:
+                self.log_info(f"训练日：{reason}（先等按钮淡入，不点台词）")
+                return True
             line = self.match_text(texts, "出行")
             self.click_box(line, after_sleep=0.6)
-            self.log_info(f"训练日：{reason}")
+            self.log_info(f"训练日：{reason}"
+                          f"（等 {self.GO_OUT_WAIT_TICKS} 拍还没有按钮 → 才点台词）")
             return True
+        self._outing_wait = 0
+        # 头一拍不决策：右侧「出行」还在淡入，OCR 读不到它。
+        # 只有「今天还没出过行」时才等 —— 已经出过的日子不必为空等。
+        if hub_seen < self.HUB_SETTLE_TICKS and not self.outing_used():
+            self.log_info(f"训练日：头一拍先不决策（{reason}）→ 等「出行」按钮淡入")
+            self.sleep(0.5)
+            return True
+        # 进休息室 = 训练日主界面出现。**只在这一刻**给监控页拍一次快照：
+        # 六维 + 精力 + 零用钱（2026-11-03 用户口径）。
+        # 校门口/地图没有六维面板；周末加的是零碎属性，回头累加对不上面板。
+        # 放在「决策拍」之后：躲开整页淡入时读到的半截数字。
+        # 一次性由 `_lounge_snapshot_done` 保证，离开页面时由 LEAVE_RESETS 清掉。
+        if not getattr(self, "_lounge_snapshot_done", False):
+            self._lounge_snapshot_done = True
+            self.snapshot_lounge(texts)
         action, reason = self.training_day_action(texts)
         area = self.texts_in_region(texts, "main_action")
         if action == "休息":
@@ -146,7 +259,7 @@ class TrainingHandlers:
         返回 (left, right)，每个是 {"x","y","label","score"} 或 None。
         判据（用户口径：优先级 = 属性/等级 > 精力）：
         - 出现「等级 / 属性 / 训练」→ 100 分（这类是给训练等级或六维的）；
-        - 只有「精力 / 体力」→ 0 分（纯回精力，不选）；
+        - 只有「精力」（含别名「体力」）→ 0 分（纯回精力，不选）；
         - 其它能用 `_effect_ev` 读出 +N 的，按真实属性总量算。
         """
         h = self.height
@@ -289,10 +402,10 @@ class TrainingHandlers:
                 f"｜装备 {r['equip']}｜满经验 {r['full']}｜金框 {r['gold']}"
                 f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}")
 
-        attr_values = self.read_attribute_values(texts)
-        if attr_values:
-            self.info["attrs"] = attr_values   # 监控页「六维 / 分数预测」用
-            self.log_debug(f"六维当前值：{attr_values}")
+        # 六维当前值：进休息室时已经拍过快照（`parsers.snapshot_lounge`），
+        # 这里**优先用那一份**，只有独立调用（回归 / 不带主循环）时才现场补读一次。
+        # 注意：这里读它只为了排行「当前值低的科目优先」，**不是**面板的刷新点。
+        attr_values = dict(self.info.get("attrs") or {}) or self.read_attribute_values(texts)
 
         def rank(name):
             """分数 → 当前数值低的 → 屏幕上靠前的（兜底）。推荐属性已取消。"""
@@ -463,6 +576,29 @@ class TrainingHandlers:
         if self.match_text(texts, "加强训练") is None:
             return False
 
+        # 2026-11-02 用户实机反馈：「每次经理的帮助事件，鼠标都有两次空点击——
+        # 第一下点卡片没点下去，然后又点了继续又没点中」。日志（22:34:49~52）：
+        #   22:34:49 训练结果：点屏幕继续      ← 页面在切换，中央是空的
+        #   22:34:51/52 连点两次「确定」       ← 卡片那一下没生效，确定也跟着白点
+        # 两个原因，各修一处：
+        # 1. **页面淡入那一拍就点**：卡片还在滑入，点下去不生效 → 头一拍只观察；
+        # 2. **点完卡片立刻点确定**（0.35s）：选中还在动画里 → 卡片与确定之间留出
+        #    间隔，并且确定只点一次（`_boost_confirmed_at` 锁），避免下一拍重复点。
+        # 计数**只在离开这页时**清零（LEAVE_RESETS），不要按「指纹变了」清零：
+        # 这页的百分比/收益数字每次 OCR 都可能少一个字，指纹一变就重新「等一拍」，
+        # 实测同一页会连打两次「头一拍先不点」，白等两拍（2026-11-02 22:57 日志）。
+        self._boost_ticks = getattr(self, "_boost_ticks", 0) + 1
+        if self._boost_ticks <= self.BOOST_SETTLE_TICKS:
+            self.log_info("加强训练：头一拍先不点（卡片还在淡入）→ 等一拍")
+            self.sleep(self.BOOST_SETTLE_SLEEP)
+            return True
+        if (time.monotonic() - getattr(self, "_boost_confirmed_at", 0.0)
+                < self.BOOST_CONFIRM_LOCK):
+            # 刚点过「确定」，页面正在切走：这一拍什么都别点
+            self.log_debug("加强训练：已点过确定，等页面切走（不重复点）")
+            self.sleep(0.3)
+            return True
+
         rates = [t for t in texts if labels.PERCENT_RE.match(t.name.strip())]
         gains = [t for t in texts if labels.GAIN_RE.match(t.name.strip())]
         if not rates:
@@ -475,12 +611,15 @@ class TrainingHandlers:
             if cards:
                 best = max(cards, key=lambda c: (c["score"], -c["x"]))
                 self.click(int(best["x"] * self.width),
-                           int(best["y"] * self.height), after_sleep=0.35)
+                           int(best["y"] * self.height),
+                           after_sleep=self.BOOST_CARD_SLEEP)
                 self.log_info("加强训练（文字效果）："
                               + "｜".join(f"{c['label']}={c['score']:.0f}"
                                           for c in cards)
                               + f" → 选「{best['label']}」")
+                self.sleep(self.BOOST_CONFIRM_GAP)   # 同上：等选中生效再点确定
                 self.click_button("confirm", after_sleep=0.6, must=False)
+                self._boost_confirmed_at = time.monotonic()
                 return True
             # 实在认不出卡片：不盲点卡片，先按默认选择点「确定」，下一拍再判
             self.click_button("confirm", must=False)
@@ -534,8 +673,15 @@ class TrainingHandlers:
         ev, v, p, card_cx = max(picks, key=lambda x: x[0])
         # 点**卡片正中**：只点成功率文字框（在卡片顶部）实测会落在两卡之间偏上的位置
         # （用户 2026-10-27 录屏：两张卡中间出现了一次多余点击）。
-        self.click(int(card_cx * self.width), int(self.height * 0.5), after_sleep=0.35)
-        self.click_button("confirm", after_sleep=0.6)
+        # 点**卡片正中**：只点成功率文字框（在卡片顶部）实测会落在两卡之间偏上的位置
+        # （用户 2026-10-27 录屏：两张卡中间出现了一次多余点击）。
+        # 2026-11-02：点完卡片**等选中动画走完**再点确定（旧版 0.35s 太短，
+        # 用户看到「点卡片没点下去 → 又点确定也没点中」两次空点击）。
+        self.click(int(card_cx * self.width), int(self.height * 0.5),
+                   after_sleep=self.BOOST_CARD_SLEEP)
+        self.sleep(self.BOOST_CONFIRM_GAP)
+        self.click_button("confirm", after_sleep=0.6, must=False)
+        self._boost_confirmed_at = time.monotonic()
         detail = "  ".join(f"{pp}%/+{vv}={e:.0f}" for e, vv, pp, _cx in picks)
         self.log_info(f"加强训练：{detail} → 选 {p}%/+{v}")
         return True

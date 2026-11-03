@@ -45,14 +45,14 @@ DEFAULT_LAYOUT = {
          "label": "指定队长",
          "hint": "取消勾选 = 不接开局，只跑已有局",
          "show_quick_match": True, "show_auto_training": True,
-         "start_text": "开始", "pause_text": "暂停"},
+         "start_text": "开始", "pause_text": "暂停", "starting_text": "启动中…"},
         {"type": "hero", "height": 204,
          "kicker": "当前进度",
          "title": "第 {week} 周 {day}",
          "fallback": "等待开始",
          "right_ratio": 0.5,
          "stats": [
-             {"label": "体力", "value": "{stamina}", "suffix": "/{stamina_max}",
+             {"label": "专注", "value": "{stamina}", "suffix": "/{stamina_max}",
               "bar": True, "bar_key": "stamina_pct", "bar_width": 150},
              {"label": "零用钱", "value": "{coin}"},
              {"label": "流派", "value": "{style}"},
@@ -62,7 +62,7 @@ DEFAULT_LAYOUT = {
             {"id": "today", "title": "今日计划", "rows": [
                 ["比赛倒计时", "{match_countdown}"],
                 ["周末去处", "{weekend_plan}"],
-                ["野餐阈值", "体力 < {picnic_threshold}"],
+                ["野餐阈值", "精力 < {picnic_threshold}"],
             ]},
             {"id": "shop", "title": "商店", "rows": [
                 ["购买策略", "{buy_strategy}"],
@@ -382,18 +382,19 @@ class MonitorTab(CustomTab):
             "shop_today": info.get("shop_today") or "否",
             "fail_rate": info.get("fail_rate") or info.get("当前失败率") or MISSING,
             "captain": (config.get("指定队长") or "").strip(),
-            # 第一栏总开关的状态：**只表达「游戏接上了没有」**。
-            # 2026-11-02 修正：旧版用 `not executor.paused` 当判据，
-            # 那是**执行器**的运行态，不是连接态 —— 结果第二栏点【暂停】
-            # 里的 `task.unpause()` 会调 `executor.start()` 把 paused 置回 False，
-            # 第一栏立刻从「启动」顶回「停止」= 第二栏带动了第一栏。
-            # 连接态的真相在 device_manager 上：capture_method 在 = 截着图。
+            # 第一栏总开关的状态：**会话在跑没有**（截帧通道活着 **且** 执行器
+            # 没暂停，见 `_connected()`）。只看 capture_method 会在启动时就为真
+            # —— 框架启动时会自动刷新设备并建 WGC 截图会话，按钮一进页面
+            # 就显示【停止】，看着像「默认已经开始了」。
             "connected": self._connected(),
             # 第二栏按钮的状态：自动训练任务在跑 / 在队列里等
             "training_running": self._running_of(task),
             # 第二栏按钮文案要区分「真在跑」和「只是排上队了」：
             # 只有 running 才算在跑；enabled 但没 running = 还没开始。
             "training_active": self._active_of(task),
+            # 正在接入游戏（第二栏【开始】触发的自动启动，或第一栏【启动】）：
+            # 接入期间按钮显示【启动中…】，免得用户以为点了没反应。
+            "connecting": self._starting(),
             "attrs": attrs,
             "score": score,
             "skill_color": skills["color"],
@@ -437,16 +438,24 @@ class MonitorTab(CustomTab):
 
     @staticmethod
     def _connected() -> bool:
-        """游戏接上了没有 —— 第一栏【启动/停止】的唯一判据。
+        """游戏会话在跑没有 —— 第一栏【启动/停止】和第二栏【开始】的唯一判据。
 
-        **不看执行器的 paused**（2026-11-02 修正）：
-        旧版第一栏用 `not executor.paused` 当「已连接」，那是执行器的运行态，
-        和「有没有截到游戏画面」是两回事 —— 第二栏点【暂停】会调
-        `task.unpause()` → `executor.start()` → `paused` 变回 False，
-        第一栏就自己从「启动」跳回「停止」了（= 第二栏带动第一栏）。
+        **两个条件都要**（2026-11-02 第二次修正，用户口径「进去的时候默认就
+        开始了」）：
 
-        连接态的真相在 device_manager：`capture_method` 有对象才说明
-        截帧通道是活的（框架的 `executor.connected()` 就是这个意思）。
+        1. 截帧通道活着：`device_manager.capture_method` 在且 `connected()` 为真；
+        2. 执行器没被暂停：`executor.paused` 为假。
+
+        只满足第 1 条不够：框架**启动时就会自动刷新设备**
+        （日志里能看到 `RefreshAdb ... windows_graphics:start_or_stop start WGC
+        capture`），app 一打开 `capture_method` 就已经有对象了 —— 旧版只看它，
+        于是第一栏一进页面就显示【停止】，看起来像「已经开始了」。
+        执行器启动时是 `paused=True`，加上第 2 条才能把「截着图」和
+        「真在跑」分开。
+
+        **仍然不看任务状态**（第二栏）：第二栏点【暂停】只 `task.disable()`，
+        不碰执行器，所以不会把第一栏顶回去（旧版的坑是 `task.unpause()` →
+        `executor.start()`，那个调用已经删了）。
         """
         try:
             device_manager = getattr(og, "device_manager", None)
@@ -456,9 +465,12 @@ class MonitorTab(CustomTab):
             if capture is None:
                 return False
             connected = getattr(capture, "connected", None)
-            if callable(connected):
-                return bool(connected())
-            return True
+            if callable(connected) and not connected():
+                return False
+            executor = getattr(og, "executor", None)
+            if executor is None:
+                return False
+            return not bool(getattr(executor, "paused", True))
         except Exception:  # noqa: BLE001
             return False
 
@@ -575,13 +587,17 @@ class MonitorTab(CustomTab):
             self._connection_start()
 
     def _connection_start(self):
-        """启动 = 接入游戏 + 开跑。
+        """启动 = 接入游戏 + 开跑自动训练 —— **执行器归它拉起来**。
 
         交给 `start_controller.start(task)`：它会刷新设备、必要时拉起游戏 exe、
         把训练任务 enable 并入队、启动执行器 —— 一条龙。
 
         为什么带 task：只调 `start()`（不带 task）只会连上设备，
         训练任务没被 enable，界面上「已连接」但**什么都不跑**。
+
+        分工（用户 2026-11-02 口径）：执行器由这里拉起，**不是**由第二栏【开始】
+        或快速比赛开关拉起 —— 那两处只是「顺手」唤醒（`_wake_executor`），
+        拉游戏 / 连设备这种接入动作只在这里做。
 
         注意：这里 enable 训练任务**不算**「第二栏被第一栏带动」——
         第一栏的语义是「接入游戏并开跑」，本来就包含让脚本跑起来。
@@ -595,7 +611,7 @@ class MonitorTab(CustomTab):
         self._update_data()
 
     def _connection_stop(self):
-        """断开游戏：任务停掉 + 执行器暂停 + 截图会话释放 + 第二栏复位。
+        """断开游戏 = 关掉执行器这个「运行基础」：两栏的开关一起复位。
 
         顺序有讲究：先把任务 disable（任务线程下一拍就退出），
         再暂停执行器（不再取帧），最后才关截图会话。
@@ -603,18 +619,23 @@ class MonitorTab(CustomTab):
         关截图会话可能等正在取的那一帧（最多 4 秒），所以放到后台线程做，
         不然界面会卡住不动。
 
-        **第二栏复位**（用户 2026-11-02 口径）：断开游戏后第二栏必须回到
-        未启动状态（显示【开始】）。否则用户会看到一个「暂停」按钮，
-        但游戏已经断开、点了也没用 —— 那是断开链路没收尾。
+        **执行器是唯一的运行基础，只有这里能动它**（用户 2026-11-02 口径）：
+        运行基础关掉了，挂在它上面的两个模块开关都得跟着关 ——
+        - 第二栏复位成【开始】（`_stop_auto_training(reset_button=True)`）；
+        - 「快速比赛」开关复位成「关」（`_stop_quick_match`）。
+
+        反过来不成立：第二栏【暂停】和快速比赛拨「关」**只 disable 自己的任务**，
+        绝不去 pause 执行器 —— 关执行器不是它们该管的事。
         """
         self._stop_auto_training(reset_button=True)
+        self._stop_quick_match()
         try:
             if self.executor is not None and not getattr(self.executor, "paused", True):
                 self.executor.pause()
         except Exception as e:  # noqa: BLE001
             logger.error(f"暂停执行器失败: {e}")
         self._close_capture_async()
-        logger.info("监控页：已停止（断开游戏，第二栏已复位成「开始」）")
+        logger.info("监控页：已停止（断开游戏：第二栏复位成「开始」、快速比赛复位成「关」）")
         self._update_data()
 
     @staticmethod
@@ -660,23 +681,82 @@ class MonitorTab(CustomTab):
         self._update_data()
 
     def set_quick_match(self, enabled):
+        """队长栏右侧的「快速比赛」开关 —— **只管快速比赛这个模块**。
+
+        规则（用户 2026-11-02 口径，两个模块对称）：
+
+        1. **执行器**（`og.executor`）是唯一的运行基础，**只有第一栏
+           【启动/停止】能动它**：启动 = 接入 + `executor.start()`，
+           停止 = 两个开关复位 + `executor.pause()` + 释放截图会话。
+        2. **开**：enable `QuickMatchTask`，执行器还停着就**顺手**
+           `executor.start()`（`_wake_executor`，拉游戏 / 连设备仍归【启动】）。
+        3. **关**：只 `task.disable()` —— **绝不去 pause 执行器**，
+           关执行器不归它管（第二栏【暂停】也一样）。
+        4. **执行器被关掉时**（第一栏【停止】）：本开关跟着复位成「关」
+           （`_stop_quick_match`），运行基础没了就别装作还在跑。
+
+        分工上两个模块无关：自动训练自己处理养成里的比赛；快速比赛管
+        **养成之外**的比赛（全国大赛 / 圣山战 / 竞技场），养成跑着时它自动让位
+        （`next_task()` 里 onetime 优先）。
+
+        旧版只 `task.enable()`：`TriggerTask` 只在执行器没被暂停时才会被调度，
+        于是开关拨到「开」什么都不动，非得有人先按第二栏【开始】——
+        用户看到的就是「快速比赛跟第二栏的开始绑在一起」，其实是没人唤醒执行器。
+        """
         task = self._task_by_name("QuickMatchTask")
         if task is None:
             logger.warning("监控页：没找到「快速比赛」任务")
             return
+        try:
+            if enabled:
+                task.enable()
+            else:
+                task.disable()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"快速比赛 → {'开' if enabled else '关'}失败: {e}")
+            self._update_data()
+            return
         if enabled:
-            task.enable()
+            # 开：执行器还停着就顺手唤醒（不是必须，接入仍归【启动】）
+            self._wake_executor()
+            logger.info("监控页：快速比赛 → 开")
         else:
-            task.disable()
-        logger.info(f"监控页：快速比赛 → {'开' if enabled else '关'}")
+            # 关：只关自己。执行器归第一栏【停止】管，这里不碰
+            logger.info("监控页：快速比赛 → 关（不动执行器）")
+        self._update_data()
+
+    def _wake_executor(self):
+        """顺手把执行器从「暂停」里放出来 —— **只唤醒，不接入**。
+
+        `executor.start()` 只是把 `paused` 置 False 并唤醒调度循环；刷新设备、
+        拉起游戏 exe 这些「接入」归第一栏【启动】（`start_controller`）。
+        所以这里是「顺手而不是必须」：游戏没开着时唤醒也拿不到帧，
+        用户还是得按【启动】。返回是否真的动过执行器。
+        """
+        try:
+            if self.executor is not None and getattr(self.executor, "paused", True):
+                self.executor.start()
+                logger.info("监控页：顺手唤醒执行器（接入游戏仍是第一栏【启动】的事）")
+                return True
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"唤醒执行器失败: {e}")
+        return False
 
     def toggle_auto_training(self):
         """第二栏按钮：【开始 / 暂停】—— 只管自动训练脚本自己。
 
-        不碰「接入游戏」：那是第一栏总开关的事。
-        - 开始：把训练任务 enable 起来（**前提是已经接上游戏**，
-          否则任务只会排在队列里一帧都不跑）；
-        - 暂停：把训练任务 disable（跑完当前动作就退出，状态回到「未开始」）。
+        跟快速比赛开关**对称**的规则（用户 2026-11-02 口径）：
+
+        1. **执行器**是唯一的运行基础，只有第一栏【启动/停止】能动它；
+        2. **开始**：enable 训练任务；执行器还停着就**顺手**
+           `executor.start()`（`_wake_executor`）。没接上游戏时先走
+           `_auto_start()` 接入（接入链路本身会 enable 任务 + 拉起执行器）；
+        3. **暂停**：只 `task.disable()` —— **绝不去 pause 执行器**
+           （关执行器不归第二栏管，快速比赛拨「关」也一样）；
+        4. **执行器被关掉时**（第一栏【停止】）：本栏复位成【开始】
+           （`_stop_auto_training(reset_button=True)`），快速比赛开关同时复位。
+
+        **不碰「快速比赛」**：它有自己那一行开关，由它自己管自己。
 
         **不调 `task.unpause()`**（2026-11-02 修正）：
         框架的 `unpause()` 实体是 `self._paused = False; self.executor.start()`，
@@ -691,21 +771,69 @@ class MonitorTab(CustomTab):
             return
         if getattr(task, "running", False) or getattr(task, "enabled", False):
             self._stop_auto_training(reset_button=True)
+        elif not self._connected():
+            # 没接上游戏：不 enable（任务只会躺在队列里，一帧都不跑，
+            # 界面也不会有任何变化），改成主动接入 —— 见 `_auto_start`。
+            self._auto_start()
         else:
-            if not self._connected():
-                logger.warning("监控页：还没接上游戏，先按第一栏【启动】再开始自动训练")
-                self._update_data()
-                return
             try:
                 task.enable()
-                # 任务只是入队；执行器要是还停着就没人取它。
-                # 这里唤醒执行器**不影响第一栏**（第一栏看的是连接态）。
-                if self.executor is not None and getattr(self.executor, "paused", True):
-                    self.executor.start()
+                # 任务只是入队；执行器要是还停着就没人取它 —— **顺手**唤醒一下
+                # （执行器真正归第一栏【启动】管，这里不是必须）。
+                # 唤醒执行器**不影响第一栏**（第一栏看的是连接态）。
+                self._wake_executor()
                 logger.info("监控页：自动训练 → 开始")
             except Exception as e:  # noqa: BLE001
                 logger.error(f"开始自动训练失败: {e}")
         self._update_data()
+
+    def _auto_start(self):
+        """第二栏【开始】的前置：没接上游戏时**主动接入**（用户 2026-11-02 口径）。
+
+        走第一栏 `_connection_start()` 的同一条链路（`start_controller.start(task)`：
+        刷新设备 → 必要时拉起游戏 exe → 等窗口稳定 → enable 任务 → 执行器启动），
+        所以这里**不能**再自己 `task.enable()`：
+        1. `start_controller` 自己会 enable 这个 task（`_mark_task_enabled`）；
+        2. 还没接上就 enable，任务只会排在队列里等，按钮文案也不会变
+           —— 就是上一版「点了没反应」的样子。
+
+        接入是异步的（`start()` 只是 post 到 handler 线程，几秒到几十秒），
+        期间再点一次不重复发起，否则队列里会堆好几个 `do_start`、重复拉游戏窗口。
+        """
+        if self._starting():
+            logger.info("监控页：正在接入游戏，稍候…（不重复发起）")
+            return
+        logger.info("监控页：还没接上游戏 → 主动接入（等同第一栏【启动】）")
+        self._connection_start()
+
+    @staticmethod
+    def _starting() -> bool:
+        """`start_controller.start()` 已发起、还没跑完（框架的 `starting` 标志）。
+
+        界面靠它把第二栏显示成【启动中…】：接入要等窗口稳定 + 设备就绪，
+        这期间按钮既不是「开始」也不是「暂停」，不显示点什么就又像「没反应」。
+        """
+        controller = getattr(getattr(og, "app", None), "start_controller", None)
+        return bool(getattr(controller, "starting", False))
+
+    def _stop_quick_match(self):
+        """执行器被关掉时把「快速比赛」也关掉，开关复位成「关」。
+
+        运行基础（执行器 + 截图会话）没了，挂在上面的模块开关就不能还是「开」：
+        否则界面显示「开」而实际一帧都拿不到 —— 那是断开链路没收尾。
+        同类复位还有第二栏（`_stop_auto_training(reset_button=True)`）。
+
+        **只在断开时做**：快速比赛拨「关」只 disable 它自己，
+        绝不会反过来 pause 执行器（关执行器不是它该管的事）。
+        """
+        task = self._task_by_name("QuickMatchTask")
+        if task is None or not getattr(task, "enabled", False):
+            return
+        try:
+            task.disable()
+            logger.info("监控页：断开游戏 → 快速比赛已关闭（开关复位成「关」）")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"关闭快速比赛失败: {e}")
 
     def _stop_auto_training(self, reset_button=False):
         """停掉自动训练任务（**只停这个任务，不碰执行器和连接**）。

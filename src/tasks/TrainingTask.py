@@ -30,6 +30,7 @@ from src.tasks.training.handlers.weekend import WeekendHandlers
 from src.tasks.training.handlers.match import MatchHandlers
 from src.tasks.training.handlers.entry import EntryHandlers
 from src.tasks.training.handlers.fishing import FishingHandlers
+from src.tasks.training.handlers.theme import ThemeHandlers
 
 
 class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin,
@@ -37,7 +38,22 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
                    MapPlace, StreetPlace, RestaurantPlace, ParkPlace,
                    ArcadePlace, ShopPlace,
                    PopupHandlers, TrainingHandlers, WeekendHandlers,
-                   MatchHandlers, EntryHandlers, FishingHandlers, BaseGirlsTask):
+                   MatchHandlers, EntryHandlers, FishingHandlers,
+                   ThemeHandlers, BaseGirlsTask):
+
+    def load_config(self):
+        """加载配置前先把老「体力」键名搬成「专注 / 精力」（2026-11-02 规范用词）。
+
+        时机不能改：`Config.__init__` → `verify_config()` 会**丢掉**所有
+        `default_config` 里没有的键，旧键在那之后就找不回来了。
+        见 `training/config_spec.migrate_saved_config`。
+        """
+        try:
+            if config_spec.migrate_saved_config(self.__class__.__name__):
+                self.log_info("配置迁移：旧键名「体力 / 专注」已按「精力」改写，值保留")
+        except Exception as e:                      # noqa: BLE001
+            self.log_warning(f"配置迁移跳过（{type(e).__name__}: {e}）")
+        super().load_config()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

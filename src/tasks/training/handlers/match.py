@@ -697,7 +697,7 @@ class MatchHandlers:
         """按用户规则挑选项，返回 (选中项, 理由)。
 
         用户口径（2026-10-26，2026-10-27 确认多选同样适用）：
-        1. **纯回精力**的选项不参与竞争（只补 10 点体力，不如一点属性）；
+        1. **纯回精力**的选项不参与竞争（只补 10 点精力，不如一点属性）；
            全部都是回精力时才退回按数值取最大；
         2. 其余按「收益×概率」的期望值取最高；同分取靠右（二选一时）。
         竖向排列是剧情三选一，仍然固定选第一个。
@@ -921,7 +921,7 @@ class MatchHandlers:
             ev = self._effect_ev(effects)
             attrs = any(any(a in t.name for a in labels.TRAINING_SUBJECTS)
                         for t in effects)
-            # 「纯回精力」= 只补体力、不加任何六维属性。带属性的（「精力+10，投射+5」）不算，
+            # 「纯回精力」= 只补精力、不加任何六维属性。带属性的（「精力+10，投射+5」）不算，
             # 否则会把好选项也一起排除掉。
             flat_stamina = (any("精力" in t.name for t in effects) and not attrs)
             infos.append({"x": bx, "y": by, "box": (bx, by, bw, bh),

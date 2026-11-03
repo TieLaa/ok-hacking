@@ -76,8 +76,15 @@ class SystemUIHandlers:
         """当前倍速档位。返回 (文字标签, 是否到顶, 是否 OFF)。
 
         文字标签只用来记日志 —— 策略不依赖它（OCR 小字会漏）。
+
+        像素判读用的是**本拍识别用的那一帧**（`flow.run` 存在 `_tick_frame`），
+        不是 `self.frame`：`self.frame` 是采集线程的最新画面，读到它时页面可能已经
+        翻页/淡入到一半，和 `texts` 描述的不是同一屏。
         """
-        at_max = topbar.speed_at_max(self.frame)
+        frame = getattr(self, "_tick_frame", None)
+        if frame is None:
+            frame = self.frame
+        at_max = topbar.speed_at_max(frame)
         label = topbar.speed_label(texts, self.width, self.height)
         off = topbar.off_text(texts, self.width, self.height)
         return label, at_max, off
@@ -96,6 +103,10 @@ class SystemUIHandlers:
 
         只在「训练日主界面 / 赛前准备」这两个确定安全的时机调用，
         避免在结算页、商店页乱点顶栏。
+
+        **判不出来就不点**（`speed_at_max` 返回 None）：这条横带里没画倍速图标
+        （别页面 / 页面还在淡入）时，「有空心 = 没到顶」是假的 ——
+        2026-11-02 23:41:34 就是这样把 3x 点成了 OFF（炒股页回来后第一拍）。
         """
         if self.match_text(texts, labels.WEEK_RE) is None:
             return False
@@ -103,7 +114,8 @@ class SystemUIHandlers:
         week = int(week_m.group(1)) if week_m else None
 
         label, at_max, off = self.speed_level(texts)
-        if at_max is None:                       # 帧读不出来：不猜、不乱点
+        if at_max is None:                       # 帧读不出来 / 这页没有倍速图标：不猜、不乱点
+            self.log_debug("倍速：这一拍判不出图标状态（可能页面还在淡入）→ 不点")
             return False
         if at_max and not off:                   # 已经没有空心三角 = 到顶了
             return False

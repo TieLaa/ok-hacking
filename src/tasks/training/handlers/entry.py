@@ -386,7 +386,7 @@ class EntryHandlers:
         return True
 
     def handle_confirm_team(self, texts):
-        """确认编队：开始训练会扣体力且中途取消不返还，默认要用户先允许。"""
+        """确认编队：开始训练会扣专注且中途取消不返还，默认要用户先允许。"""
         if self.match_text(texts, "确认编队") is None:
             return False
         if self.no_captain_mode:
@@ -410,7 +410,7 @@ class EntryHandlers:
         # 选择笔记页的限流标记清零，否则下一轮不会自动选择
         self._note_auto_done = False
         self._note_next_tries = 0
-        self.log_info("开始训练（已扣体力，不可退）｜流派：" + self.style
+        self.log_info("开始训练（已扣专注，不可退）｜流派：" + self.style
                       + ("" if self.style_known else "（待日历识别队长）"))
         return True
 

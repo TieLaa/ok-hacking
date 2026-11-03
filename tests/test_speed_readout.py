@@ -99,6 +99,20 @@ class SpeedReadoutTest(unittest.TestCase):
             self.skipTest(f"缺少样本 {path}")
         self.assertTrue(topbar.speed_at_max(cv2.imread(path)))
 
+    def test_frames_without_the_icon_are_not_judged(self):
+        """右上角不是倍速图标（炒股页的金币徽章）→ 返回 None，绝不能点。
+
+        2026-11-02 23:41:34 实跑事故：炒股页回来后第一拍，这条横带里倍速图标
+        还没画出来（实心 0.00 / 空心 1.00）→ 旧判据「有空心 = 没到顶」成立 →
+        点一下把正在跑的 3x 打成了 OFF，再补 3 下才回到 3x。
+        样本是当天的炒股选股页整帧（右上角那颗金币就在倍速图标的坐标附近）。
+        """
+        path = os.path.join(STATE_DIR, "not_topbar_stock.png")
+        if not os.path.exists(path):
+            self.skipTest(f"缺少样本 {path}")
+        frame = cv2.imread(path)
+        self.assertIsNone(topbar.speed_at_max(frame))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

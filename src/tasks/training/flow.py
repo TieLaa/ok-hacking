@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 
 from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,
-                                          THURSDAY_REST_THRESHOLD,
+                                          TUESDAY_REST_THRESHOLD,
                                           WEEKEND_PLAN)  # noqa: F401
 from src.util.emergency_stop import STOP
 
@@ -57,7 +57,7 @@ UI_AREAS = {
 UI_EVENT_LIMIT = 12
 
 # 监控页「最近动作」详情列 = 本拍识别到的文字。
-# 一帧 OCR 常有 20~40 条（体力、金币、按钮、顶栏都算），单行放不下，
+# 一帧 OCR 常有 20~40 条（专注、金币、按钮、顶栏都算），单行放不下，
 # 取前几条去重后截断；保留顺序（OCR 的检测顺序），不排序 —— 排序会让
 # 「第 N 周」「训练」这些关键界面词乱序，反而不像原界面。
 UI_TEXT_LIMIT = 8
@@ -159,7 +159,7 @@ class TrainingFlowMixin:
             self._tick_frame = frame
             self._tick_clicks = []
             texts = self._ocr_region(frame=frame)
-            # 本拍 OCR 结果留给 top_bar()：**裁剪顶栏再 OCR 会把体力条的「/」吃掉**
+            # 本拍 OCR 结果留给 top_bar()：**裁剪顶栏再 OCR 会把专注条的「/」吃掉**
             # （`0/130` → `301130`），STAMINA_RE 要求有斜杠 → stamina 恒为 None，
             # 「精力不够就改选不耗精力那张」的规则全部失效（2026-10-31 餐厅实跑）。
             # 整帧这份是免费的，直接复用。
@@ -322,6 +322,11 @@ class TrainingFlowMixin:
         self._note_next_tries = 0
         # 钓鱼转盘：点一次后锁定 8 秒（后面是动画，界面文字不变）
         self._fishing_clicked_at = 0.0
+        # 上一局的六维不能带进新的一局（换角色 / 换存档时监控页会显示别人的数值）。
+        # 下一次进休息室会拍新快照（见 parsers.snapshot_lounge），很快就填回来。
+        info = getattr(self, "info", None)
+        if isinstance(info, dict):
+            info.pop("attrs", None)
 
     def snap_event(self, handler_name, texts, frame=None):
         """事件命中时存一帧 + 一份 OCR 摘要，供报告页「事件 ↔ 截图」配对。
@@ -639,11 +644,10 @@ class TrainingFlowMixin:
     def rest_threshold(self, day=None):
         """今天「精力低于多少就休息」。
 
-        用户 2026-10-30：**周四**体力低于 75 就休息 —— 把体力留给周五的周末
-        （周五扭蛋流要打工/抽扭蛋）。原来的周五特殊阈值（训练流以外 55、
-        商店流 80）已取消，周五回到配置里的「休息体力阈值」。
+        用户 2026-11-02：**周二**精力低于 60 就休息；**周四不再有特殊阈值**
+        （旧的 75 已取消），回到配置里的「休息精力阈值」。
         """
-        base = int(self.config.get("休息体力阈值"))
-        if day == "四":
-            return max(base, THURSDAY_REST_THRESHOLD)
+        base = int(self.config.get("休息精力阈值"))
+        if day == "二":
+            return max(base, TUESDAY_REST_THRESHOLD)
         return base

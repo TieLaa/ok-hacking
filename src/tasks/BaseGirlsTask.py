@@ -17,6 +17,7 @@ from ok import BaseTask, og
 from src.tasks.attempt import AttemptSupport
 from src.tasks.ui import Defs
 from src.tasks.ui import labels
+from src.tasks.ui import topbar_day
 
 
 class BaseGirlsTask(AttemptSupport, BaseTask):
@@ -239,9 +240,14 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         return ok
 
     # 这些页面是「任务可以正常工作」的起点（不一定在大厅）
+    # 2026-11-02 补写小说事件的两页：「请选择一个题材」（三选一）和「WARD文档」
+    # （汇报页，右下「交稿」）。这两页都带「跳过」快进图标、没有返回入口，
+    # 回大厅必然失败；但 handler 本来就能处理它们，不加进白名单会让 MCP
+    # `reset_to_start()` 直接返回 False（实跑：22:50 `reset_refused`，整轮起不来）。
     START_MARKS = ("星期", "出行", "失败率", "训练剧本", "赛前准备",
                    "跳过比赛", "训练核心", "选择队友", "选择笔记", "选择器材",
-                   "涨跌幅", "股票走势", "收益排名")
+                   "涨跌幅", "股票走势", "收益排名",
+                   "请选择一个题材", "WARD文档", "收集到的idea", "交稿")
 
     def is_startable(self, texts=None):
         """当前界面能不能直接开始跑任务（大厅 or 已知流程页）。
@@ -352,7 +358,9 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         if "赛事" in names and "训练" in names:
             return False
         # 有弹窗/对话框时一律放行（弹窗盖在大厅上，背景那些入口文字还在，
-        # 但这时候该由 handle_resume_training / handle_popup 处理）
+        # 但这时候该由 handle_resume_training / handle_popup 处理）。
+        # 「删档」只是弹窗上的**识别信号**，用来判断这不是纯子菜单页：
+        # 脚本永远不会点它（开训练扣的专注删档不返还，2026-11-02 用户口径）。
         if any(k in names for k in ("训练确认", "继续训练", "删档",
                                     "确定", "确认", "关闭", "下一步")):
             return False
@@ -585,15 +593,44 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
 
     # ---------- 顶栏状态 ----------
 
-    def top_bar(self, texts=None):
-        """解析顶栏：周数 / 星期几 / 体力 / 金币。解析不到的字段为 None。
+    def _retry_day_by_region(self):
+        """星期几被 OCR 丢字时，裁那块放大重读。返回 "X" 或 None。
 
-        体力**只在含「/」的那个文本框里找**：OCR 常把「第1周」的「1」和体力粘在一起
+        为什么要它（2026-11-02 实测 1136 帧）：
+        整帧 OCR **从来没读错**星期几，但会**丢字** —— 「一」只有一条横线，
+        检测框把它并进「期」里，整词变成「星期」两字。丢字率 9.9%，
+        其中「星期一」丢 67.7%、「星期六」被读成「期大」。
+
+        星期几是**当天状态**的日期键（`daycycle.day_state` 用 (周, 星期)），
+        读不到 → `day_state()` 沿用旧状态 → 周末计划、去处全乱。
+
+        **按帧缓存**：`top_bar()` 一拍里被 20 多个地方调用，
+        每次都重 OCR 会让整拍慢一倍。缓存键是帧对象，下一帧自动失效。
+        """
+        frame = getattr(self, "_tick_frame", None)
+        cache = getattr(self, "_day_retry_cache", None)
+        if isinstance(cache, dict) and cache.get("frame") is frame:
+            return cache.get("value")
+        value = None
+        try:
+            value = topbar_day.read_day(self, frame)
+        except Exception as e:                          # noqa: BLE001
+            self.log_debug(f"星期区域重读失败: {type(e).__name__}: {e}")
+            value = None
+        self._day_retry_cache = {"frame": frame, "value": value}
+        if value:
+            self.log_info(f"星期几被丢字 → 区域重读为「星期{value}」")
+        return value
+
+    def top_bar(self, texts=None):
+        """解析顶栏：周数 / 星期几 / 专注 / 金币。解析不到的字段为 None。
+
+        专注**只在含「/」的那个文本框里找**：OCR 常把「第1周」的「1」和专注粘在一起
         （曾出现 3 + 101/115 → 31101），整段拼接再匹配必错。
 
         2026-10-26 补：还会出现 `369/115`（周数 3 粘在 69 前面）。做法是把前面的
         数字逐位去掉，取第一个 `0 < cur <= max` 的组合；多个候选时取最右边那个
-        （体力条在周数右边）。
+        （专注条在周数右边）。
 
         2026-10-31 改：**优先用整帧 OCR 文本**（调用方传 `texts`，或本拍
         `flow.run()` 存下的 `_tick_texts`），只按 top_bar 区域过滤一下；
@@ -604,6 +641,13 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         stamina 恒为 None。于是「精力 23 < 打工 25 → 改选不耗精力那张」这条
         规则从来没生效过，脚本一路点到灰掉的「前往当服务员」卡死 4 分钟。
         扭蛋清空精力阈值、公园野餐阈值也是同一条链上的受害者。
+
+        2026-11-02 补：**星期几读不出时用区域重读兜底**（见 `topbar_day`）。
+        实测整帧 OCR 从没读错星期几，但会**丢字**：「一」只有一条横线，
+        检测框把它并进「期」里，整词变成「星期」两字，丢字率 9.9%
+        （1136 帧里 113 帧），其中「星期一」丢 67.7%、「星期六」被读成
+        「期大」。星期几是**当天状态**的日期键（`daycycle.day_state`），
+        读不到就整天状态都不对 —— 所以必须兜住。
         """
         pool = texts if texts is not None else getattr(self, "_tick_texts", None)
         texts = self.texts_in_region(pool, "top_bar") if pool else []
@@ -616,6 +660,12 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
             state["week"] = int(m.group(1))
         if m := labels.DAY_RE.search(joined.replace(" ", "")):
             state["day"] = "日" if m.group(1) == "天" else m.group(1)
+
+        # 星期几读不出（丢字）→ 裁那块放大重读。
+        # 只在**确实读不出**时才做，且**按帧缓存**：
+        # `top_bar()` 一拍里会被 20 多个地方调用，每次都重 OCR 会拖慢一倍。
+        if state["day"] is None:
+            state["day"] = self._retry_day_by_region()
 
         best = None
         for t in texts:
@@ -634,7 +684,7 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
                         cur = cand
                         break
             if 0 <= cur <= mx:
-                # 取最右边的候选（体力在周数右边；金币没有斜杠）
+                # 取最右边的候选（专注在周数右边；金币没有斜杠）
                 if best is None or t.x >= best[0]:
                     best = (t.x, cur, mx)
         if best is not None:

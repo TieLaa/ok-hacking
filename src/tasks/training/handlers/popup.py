@@ -22,7 +22,7 @@ from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 class PopupHandlers:
 
     def handle_rest_confirm(self, texts):
-        """「休息需要一整天，可恢复体力，是否要休息？」确认框：点「确定」。
+        """「休息需要消耗一天，可恢复精力，是否要休息？」确认框：点「确定」。
 
         必须排在 handle_popup 之前。旧逻辑把「取消」当通用弹窗关闭词，
         结果点了休息→确认框→点取消→再点休息，永远休息不了（实训 2026-10-26）。
@@ -44,34 +44,33 @@ class PopupHandlers:
         return False
 
     def handle_resume_training(self, texts):
-        """大厅「训练确认」弹窗：继续上次没跑完的训练。
+        """大厅「训练确认」弹窗：**只继续训练，永不删档**。
 
         实机（2026-10-26 用户截图）：标题「训练确认」+ 主角名 + 目标
         「赢得与XXX的比赛」，按钮是 [删档]（青色，左）[继续训练]（黄色，右）。
-        必须点「继续训练」，**绝不能点「删档」**（会清掉这一局）。
         这个弹窗盖在大厅上，背景还能 OCR 到「赛事 / 社团GO / 训练中」，
         所以优先级要排在 handle_lobby 前面，否则会被当成大厅反复点「训练」。
+
+        用户 2026-11-02 口径：**开训练消耗的专注在删档时不会返还**，所以
+        删档是纯亏损操作，脚本里不允许存在这个动作。「新一局删档」开关
+        已从 config_spec 删除；即使旧配置里残留 True 也不会再被读。
         """
         if self.match_text(texts, "训练确认") is None:
             return False
-        # 想开新的一局：先删掉上一局的存档（旧局已经跑完，删档不会误伤进度）
-        if self.config.get("新一局删档"):
-            wipe = self.exact_text(texts, ("删档",))
-            if wipe is not None:
-                self.click_box(wipe, after_sleep=0.9)
-                confirm = self.exact_text(self._ocr_region(), labels.BUTTONS["confirm"])
-                if confirm is not None:
-                    self.click_box(confirm, after_sleep=0.9)
-                self.log_info("训练确认：删档 → 开新的一局")
-                return True
-        target = self.match_text(texts, "继续训练")
+        # 按钮按整词找；match_text 的兜底会返回「最长的框」，在弹窗里可能
+        # 落到别的按钮上 —— 这里只接受名字里真的含「继续训练」的框。
+        target = self.exact_text(texts, ("继续训练",))
+        if target is None:
+            cands = [t for t in texts if "继续训练" in t.name]
+            target = max(cands, key=lambda t: len(t.name)) if cands else None
         if target is not None:
             self.click_box(target, after_sleep=0.9)
             self.log_info("训练确认：继续上次训练")
             return True
-        # 认不出文字时用实测相对坐标（黄色主按钮中心）
+        # 认不出文字时用实测相对坐标（黄色主按钮中心）。
+        # 左边青色的是「删档」——不能套用「点最左 / 最右按钮」这类通用规则。
         self.click(int(self.width * 0.65), int(self.height * 0.75), after_sleep=0.9)
-        self.log_warning("训练确认：没认出「继续训练」，按固定坐标点黄色按钮")
+        self.log_warning("训练确认：没认出「继续训练」，按固定坐标点黄色按钮（不点删档）")
         return True
 
     def handle_popup(self, texts):

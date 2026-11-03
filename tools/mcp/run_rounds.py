@@ -1,4 +1,9 @@
-"""连跑 N 轮养成训练，每轮用同一个指定队长（每轮都开新局，会删档）。
+"""连跑 N 轮养成训练，每轮用同一个指定队长。
+
+⚠️ **不再自动删档**（2026-11-02 用户口径）：开训练消耗的专注在删档时
+不返还，脚本只会在「训练确认」弹窗点「继续训练」。所以要连跑多轮，
+每轮结束后必须**人工**在大厅开新局 —— 本脚本只能保证队长和轮次切换，
+保证不了存档是新的。不做人工开新局时，后续「轮次」实际都跑同一个存档。
 
 为什么要这个脚本而不是在 shell 里拼命令：队长名是中文，PowerShell 5.1 读
 UTF-8 无 BOM 的脚本会把中文当 ANSI 弄成乱码，写进 next_captain.json 的队长名
@@ -24,8 +29,8 @@ DEFAULT_CAPTAIN = "佐久间雨乃"
 def write_captain(captain):
     os.makedirs(os.path.dirname(CAPTAIN_FILE), exist_ok=True)
     with open(CAPTAIN_FILE, "w", encoding="utf-8") as f:
-        json.dump({"captain": captain, "allow_delete": True}, f, ensure_ascii=False)
-    print(f"[runner] next_captain.json = {captain}, allow_delete=True", flush=True)
+        json.dump({"captain": captain}, f, ensure_ascii=False)
+    print(f"[runner] next_captain.json = {captain}", flush=True)
 
 
 def main():

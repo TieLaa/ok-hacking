@@ -5,11 +5,11 @@
 **为什么要有这一层**（2026-11-01 实测的三个问题）：
 
     ① **默认值写在两处**。`default_config` 声明了 40，而调用处又写了一遍
-       `self.config.get("休息体力阈值", 40)` —— 那个 40 **永远不生效**
+       `self.config.get("休息精力阈值", 40)` —— 那个 40 **永远不生效**
        （config 一定命中 default_config）。但它让人以为「默认值在这里」，
        改它没用。实测 21 处调用点里 20 处是这种死代码。
 
-    ② **有配置项用户在 GUI 里配不到**。`扭蛋清空体力阈值`（weekend.py 读了）
+    ② **有配置项用户在 GUI 里配不到**。`扭蛋清空精力阈值`（weekend.py 读了）
        和 `技能按键`（AutoBattleTask.py 读了）**没在 default_config 里声明** →
        GUI 上没有这一项，用户改不了。
 
@@ -57,12 +57,11 @@ class Spec:
 
 # ---------- 训练 ----------
 TRAINING = [
-    Spec("失败率上限(%)", 50, INT, "训练科目页失败率高于这个值就直接回主界面休息（失败率高说明体力撑不住了）"),
+    Spec("失败率上限(%)", 50, INT, "训练科目页失败率高于这个值就直接回主界面休息（失败率高说明专注撑不住了）"),
     Spec("失败率超限改休息", True, BOOL, "失败率超限时是休息还是硬练"),
-    Spec("休息体力阈值", 40, INT, "体力低于这个值就休息一天（周四另有 75 的硬阈值）"),
+    Spec("休息精力阈值", 40, INT, "精力低于这个值就休息一天（周二另有 60 的硬阈值）"),
     Spec("允许开始训练", True, BOOL, "关掉后只逛不练"),
     Spec("无队长不接开局", True, BOOL, "指定队长留空时生效：只跑你手动开好的局，遇到大厅/启程/选人/笔记/器材/确认编队这些开局页面就停下，不替你开局。勾上队长后自动恢复"),
-    Spec("新一局删档", False, BOOL, "遇到「训练确认」弹窗时点「删档」开新的一局；只在旧局已经跑完时打开"),
     Spec("指定队长", "", STR,
          "填角色名（如「真崎辉世」「佐久间」）→ 按这个角色的流派跑，开局就定好、不点日历；"
          "留空 = 快速接手：进训练后点一次日历，按「XX的训练计划」里队长的流派跑"),
@@ -72,7 +71,7 @@ TRAINING = [
 WEEKEND = [
     Spec("公园选项", "野餐", DROP, "野餐 = 精力++；划船 = 属性+；散步 = 零用钱+",
          options=["野餐", "划船", "散步"]),
-    Spec("周末野餐阈值", 60, INT, "周日体力低于这个值才野餐；否则选划船（属性+）"),
+    Spec("周末野餐阈值", 60, INT, "周日精力低于这个值才野餐；否则选划船（属性+）"),
     Spec("允许进步行街", True, BOOL, "关掉后周末不去步行街抽扭蛋"),
     Spec("允许进游戏厅", True, BOOL, "关掉后周末不去游戏厅玩小游戏"),
     Spec("游戏厅付费", True, BOOL, "游戏厅没有「跳过」时，花钱（≥64 零用钱）买一个「自动」小游戏换属性；关掉就沿用旧逻辑直接退出"),
@@ -90,8 +89,8 @@ GACHA = [
     Spec("扭蛋品质优先", ["彩", "金", "紫"], LIST,
          "扭蛋只买这些品质，靠前的优先：默认 彩 > 金 > 紫（彩色是训练等级提升后解锁的）；"
          "同等情况先「增强款」、再有队友加成的，都相同才买便宜的；蓝卡/其他一律不买"),
-    Spec("扭蛋清空体力阈值", 30, INT,
-         "体力低于这个值才买「消耗/清空所有精力」的扭蛋（拿体力换属性）；体力够时一律不买"),
+    Spec("扭蛋清空精力阈值", 30, INT,
+         "精力低于这个值才买「消耗/清空所有精力」的扭蛋（拿精力换属性）；精力够时一律不买"),
 ]
 
 # ---------- 比赛 / 技能 ----------
@@ -137,3 +136,49 @@ def build_config_type():
 def build_description():
     """生成 `config_description` 的内容（键 → 说明）。"""
     return {s.key: s.desc for s in ALL if s.desc}
+
+
+# ---------- 老键名 → 新键名（2026-11-02 规范用词）----------
+# 顶栏那个数字在训练里叫 **精力**（打工/公园/扭蛋清空消耗它）。旧配置里叫过
+# 「体力」和「专注」，改名后值不能丢：`Config.verify_config()` 只保留
+# `default_config` 里有的键，旧键连同值会被直接扔掉，所以必须在 Config
+# 构造**之前**把它搬过去。一个键有多个旧名时按顺序取第一个存在的值。
+LEGACY_KEYS = {
+    "休息精力阈值": ("休息专注阈值", "休息体力阈值"),
+    "扭蛋清空精力阈值": ("扭蛋清空体力阈值",),
+}
+
+
+def migrate_saved_config(name, folder="configs"):
+    """把 `configs/<name>.json` 里的旧键名改成新键名。
+
+    返回改过没有。读不到文件（第一次跑）/ JSON 坏了都当「不用迁移」。
+    """
+    import json
+    import os
+
+    path = os.path.join(os.getcwd(), folder, f"{name}.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(saved, dict):
+        return False
+    changed = False
+    for new_key, old_keys in LEGACY_KEYS.items():
+        # 新键已经有值（用户改过）就保留新键，旧键只负责清掉
+        values = [saved.pop(k) for k in old_keys if k in saved]
+        if not values:
+            continue
+        changed = True
+        if new_key not in saved:
+            saved[new_key] = values[0]
+    if not changed:
+        return False
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(saved, f, ensure_ascii=False, indent=4)
+    except OSError:
+        return False
+    return True
