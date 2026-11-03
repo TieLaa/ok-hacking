@@ -24,8 +24,8 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from src.tasks.ui.topbar_energy import (strip_icon_digit,  # noqa: E402
-                                        strip_icon_reading)
+from src.tasks.ui.topbar import (strip_icon_digit,  # noqa: E402
+                                 strip_icon_reading)
 
 
 class _Text:

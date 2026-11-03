@@ -18,11 +18,18 @@
 - **实心占比 ≈ 0 表示「这条横带里没有倍速图标」**（换页、淡入、别页面的金币徽章…），
   这时不能按「没有空心三角 = 到顶」「有空心 = 没到顶」去判 —— 一律返回 None，让调用方不点。
 
+除了倍速，顶栏还有一个「读数」问题：**精力条左端的 ⚡ 图标会被 OCR 并进数字**
+（`3 54/130` / `3130/130`），斜杠还会被吃成 `1`（`3921130` = `3 92/130`）。
+清洗也在本文件（`strip_icon_digit` / `strip_icon_reading`，纯文本判据、不看坐标），
+调用点是 `BaseGirlsTask._ocr_region`（全项目唯一的 OCR 出口）。
+
 这里只放**纯函数**（帧 / OCR 结果 → 状态），不依赖 ok-script 运行时，方便用 `logs/topbar/` 里的整帧离线校验。
 
 关于阈值：本文件里的数字都是**UI 版式阈值**（三角在屏幕上画在哪、白色空心有多亮），
 不是游戏进度量（上限、解锁、次数）。游戏以后加档位只会改变「三角个数」，不会改变这些版式阈值。
 """
+
+import re
 
 # 三个三角所在的一行（含可能出现第 4/5 个三角的余量），相对坐标
 SPEED_TRI_BAND = (0.742, 0.012, 0.786, 0.048)
@@ -122,3 +129,82 @@ def speed_label(texts, width, height):
         if low and low[-1] == "x" and low[:-1].isdigit():
             best = low[:-1] + "x"
     return best
+
+
+# ---------- 精力条左端 ⚡ 图标的识别噪声 ----------
+
+# A：首位多出来的数字 + 真实数字 + /上限
+_ICON_PREFIX_RE = re.compile(r"^(\d)(\d{1,3})/(\d{1,3})$")
+
+# B：斜杠被吃成 '1' —— 前缀 + '1' + 3 位上限
+_SLASH_LOST_RE = re.compile(r"^(\d{1,4})1(\d{3})$")
+
+# 同一帧里「读对了」的 3 位上限（用来给 B 支定上限，防止把别的数字改坏）
+_CLEAN_CAP_RE = re.compile(r"^\d{1,4}/(\d{3})$")
+
+# 精力上限的量级（实测 121 / 130 / 145 / 164）。超过这个量级的 3 位数
+# （零用钱、六维之类的尾数）一律不碰。
+MIN_CAP, MAX_CAP = 100, 250
+
+
+def _known_cap(texts):
+    """同一帧里唯一那个「读对了」的 3 位上限；没有或不止一个就返回 None。"""
+    caps = set()
+    for t in texts:
+        name = (getattr(t, "name", "") or "").replace(" ", "").strip()
+        m = _CLEAN_CAP_RE.match(name)
+        if m and MIN_CAP <= int(m.group(1)) <= MAX_CAP:
+            caps.add(int(m.group(1)))
+    return caps.pop() if len(caps) == 1 else None
+
+
+def strip_icon_digit(name, known_cap=None):
+    """`3 54/130` → `54/130`、`3921130` → `92/130`；不像噪声就原样返回。"""
+    s = (name or "").replace(" ", "").strip()
+
+    m = _ICON_PREFIX_RE.match(s)
+    if m:
+        cap = int(m.group(3))
+        if not MIN_CAP <= cap <= MAX_CAP:
+            return name                      # 上限量级不对 → 不是精力条，别碰
+        if int(m.group(1) + m.group(2)) <= cap:
+            return name
+        return f"{m.group(2)}/{m.group(3)}"
+
+    m = _SLASH_LOST_RE.match(s)
+    if not m:
+        return name
+    value, cap_text = m.group(1), m.group(2)
+    cap = int(cap_text)
+    if cap_text.startswith("0") or not MIN_CAP <= cap <= MAX_CAP:
+        return name
+    if known_cap is not None and cap != known_cap:
+        return name
+    if int(value) > cap:
+        # 前缀 > 上限 ⇒ 首位是图标，丢掉那一位
+        value = value[1:]
+        if not value or int(value) > cap:
+            return name
+    elif len(value) < 2:
+        # 没图标又只剩一位数（`11228` 这种 5 位数）→ 分不清是「零用钱」还是
+        # 「1/228」，宁可不洗。实测 52/130、45/130 这类都是两位值。
+        return name
+    return f"{value}/{cap_text}"
+
+
+def strip_icon_reading(texts):
+    """就地把一批 OCR 结果里被图标污染的文本改干净，返回同一个列表。
+
+    只改 `name`，`x/y/width/height` 原样保留 —— 下游按坐标做的判读
+    （`texts_in_region`、点击点）不受影响。
+    """
+    texts = texts or []
+    known_cap = _known_cap(texts)
+    for t in texts:
+        name = getattr(t, "name", None)
+        if not name:
+            continue
+        fixed = strip_icon_digit(name, known_cap=known_cap)
+        if fixed != name:
+            t.name = fixed
+    return texts

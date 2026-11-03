@@ -17,8 +17,8 @@ from ok import BaseTask, og
 from src.tasks.attempt import AttemptSupport
 from src.tasks.ui import Defs
 from src.tasks.ui import labels
+from src.tasks.ui import topbar
 from src.tasks.ui import topbar_day
-from src.tasks.ui import topbar_energy
 
 
 class BaseGirlsTask(AttemptSupport, BaseTask):
@@ -299,13 +299,13 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
 
         返回前先滤掉两类图标噪声：
         - 顶栏「历史记录 / 菜单」图标被读成的假汉字（见 `drop_icon_noise`）；
-        - 精力条左端 ⚡ 图标被并进数字的那一位（见 `topbar_energy`）。
+        - 精力条左端 ⚡ 图标被并进数字的那一位（见 `topbar.strip_icon_reading`）。
         """
         if box is None and region_name:
             box = self.box_of_screen(*Defs.region(region_name))
         try:
             texts = self.drop_icon_noise(self.ocr(box=box, frame=frame) or [])
-            return topbar_energy.strip_icon_reading(texts)
+            return topbar.strip_icon_reading(texts)
         except Exception as e:
             self.log_debug(f"ocr failed: {e}")
             return []

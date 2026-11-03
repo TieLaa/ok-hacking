@@ -208,7 +208,7 @@
 返回的是空列表；只有被并进数字框、要求「输出一串字符」时才会被猜成 3。
 
 **2026-11-03 已实现清洗**（用户口径：「把 ⚡ 排除出去，反正没有用，只是多个图标好看」）：
-`ui/topbar_energy.py: strip_icon_digit / strip_icon_reading`，同样挂在 `_ocr_region` 上，
+`ui/topbar.py: strip_icon_digit / strip_icon_reading`，同样挂在 `_ocr_region` 上，
 不复制帧、不动画面。判据只用文本 —— **当前值 > 上限** 就是图标（真实精力不可能
 超过上限），丢掉那一位：
 
@@ -234,7 +234,7 @@
 
 代码：`ui/Defs.py: SPEED_ICON_CLICK / TOP_ICON_POINTS / ICON_NOISE_RE`、
 `ui/topbar.py: speed_at_max / off_text / speed_label`、
-`ui/topbar_energy.py: strip_icon_digit / strip_icon_reading`、
+`ui/topbar.py: strip_icon_digit / strip_icon_reading`、
 `handlers/match.py: ensure_speed / speed_level`、
 `tasks/BaseGirlsTask.py: EXIT_TEXTS / find_exit_control / drop_icon_noise`。
 
