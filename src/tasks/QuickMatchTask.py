@@ -16,10 +16,13 @@
 
 from ok import TriggerTask
 
+import re
+
 from src.tasks.BaseGirlsTask import BaseGirlsTask
 from src.tasks.training.handlers.match import MatchHandlers
 from src.tasks.training.parsers import TrainingParsersMixin
 from src.tasks.training.scoring import TrainingScoringMixin
+from src.tasks.training.systemui import SystemUIHandlers
 
 # 常驻任务没有看门狗：判据误命中时会每 0.5 秒点同一处、永远不停
 # （2026-10-27 实机：全中「对手实力」点了 30 秒）。所以这里自己数：
@@ -31,9 +34,14 @@ REPEAT_RETRY_TICKS = 20
 # 比赛内 HUD / 开场 ▶▶ 本来就该连续点（画面对它来说是"同一页"），不参与限流
 REPEAT_EXEMPT = ("handle_in_match", "handle_match_intro")
 
+# 画面指纹里要抹掉的「会自己变、但不代表换了页面」的内容：数字。
+# 比赛画面的倒计时（05:47→05:44）和比分（8:1→10:1）每拍都在变，
+# 直接拿整帧文字做指纹的话同一页永远算「新画面」，限流一次都不会触发。
+DIGITS_RE = re.compile(r"[0-9０-９]+")
+
 
 class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
-                     BaseGirlsTask, TriggerTask):
+                     SystemUIHandlers, BaseGirlsTask, TriggerTask):
 
     # 顺序即优先级：先认比赛类界面，赛前准备放最后（它的「跳过/前往」是唯一的入口）
     HANDLERS = (
@@ -79,6 +87,26 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
         # 是否「在比赛中」：技能三选一 / 事件二选一这两类 handler 形态太通用
         # （大厅「强化」页三张升级卡也能凑成横向多选一），必须先进了比赛才允许动。
         self._in_match = False
+
+    @staticmethod
+    def _screen_sig(texts):
+        """画面指纹：**把数字统一成 `#`** 后再比对。
+
+        2026-11-03 实机（限时比赛活动）：比赛画面带 `05:47 → 05:44` 倒计时和
+        `8:1 → 10:1` 比分，旧指纹 `frozenset(全部文本)` 每拍都不同，
+        于是 `_note_hit` 的计数一直从 1 开始 —— `handle_event_choice` 在同一页
+        连点 20 次，`REPEAT_LIMIT` 一次都没触发（10-27「对手实力」事故重演）。
+
+        为什么替换成 `#` 而不是删掉：保留「这行是数字/时间」的结构，
+        `05:47 → #:#`、`115/115 → #/#`、`2× → #×` 都还能区分形态；
+        整条都是数字的条目不会因为被删空而互相吞并。
+        """
+        sig = set()
+        for t in texts:
+            s = DIGITS_RE.sub("#", t.name.strip())
+            if s:
+                sig.add(s)
+        return frozenset(sig)
 
     def _is_muted(self, sig):
         """停手期判断：同一画面已经连点 N 拍没变化就先不动，过期后自动重试一次。"""
@@ -138,7 +166,7 @@ class QuickMatchTask(MatchHandlers, TrainingParsersMixin, TrainingScoringMixin,
         if self.is_lobby_subpage(texts):        # 大厅子菜单：不操作
             return False
 
-        sig = frozenset(t.name.strip() for t in texts)
+        sig = self._screen_sig(texts)
         if self._is_muted(sig):
             return False
 

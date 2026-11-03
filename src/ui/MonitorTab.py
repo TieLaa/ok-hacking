@@ -414,15 +414,18 @@ class MonitorTab(CustomTab):
 
     @staticmethod
     def _style_from_config(config: dict) -> str:
-        """配置里的指定队长 → 流派；查不到就按训练流（和 flow.style 的兜底一致）。"""
+        """配置里的指定队长 → 流派；查不到就按训练流（和 flow.style 的兜底一致）。
+
+        2026-11-03 改成走 `style_for_name`：错字别名（羽漱川湊 → 羽濑川湊）
+        和「带稀有度前缀 / 丢间隔点」的归一化都只在那一处，别在这里再实现一遍。
+        """
         name = (config.get("指定队长") or "").strip()
         if name:
             try:
-                from src.tasks.training.constants import STYLE_BY_NAME
-                from src.tasks.ui.labels import name_matches
-                for full, style in STYLE_BY_NAME.items():
-                    if name_matches(name, full):
-                        return style
+                from src.tasks.training.parsers import TrainingParsersMixin
+                style = TrainingParsersMixin.style_for_name(name)
+                if style:
+                    return style
             except Exception:  # noqa: BLE001
                 pass
         return "训练流"

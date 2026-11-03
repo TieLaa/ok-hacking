@@ -20,7 +20,7 @@ from ok.feature.Box import Box
 from src.tasks.ui import Defs  # noqa: F401
 from src.tasks.ui import labels
 from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,  # noqa: F401
-                                          STYLE_BY_NAME)
+                                          STYLE_ALIASES, STYLE_BY_NAME)
 
 # 科目按钮外圈「框」的判定门限（比例 = 环带上命中像素 / 环带总像素）。
 # 2026-10-27 第六局实跑 + 用户当场复核：
@@ -1113,18 +1113,33 @@ class TrainingParsersMixin:
     def style_for_name(name):
         """角色名（可能只有姓氏）→ 流派；查不到返回 None。
 
-        查表用 STYLE_BY_NAME（抄自 docs/roster/ssr_roster.json）。
-        日历标题只显示姓氏，所以按前缀匹配；多个前缀都命中（「羽」→ 羽田 / 羽漱川）
+        查表用 STYLE_BY_NAME（SSR 来自 docs/roster/ssr_roster.md，SR 来自
+        docs/roster/sr_roster.json）。
+        日历标题只显示姓氏，所以按前缀匹配；多个前缀都命中（「羽」→ 羽田 / 羽濑川）
         时取**更长的那个**，长度一样才算歧义（返回 None，宁可不动）。
 
         2026-10-31：两侧都先过 `labels.norm_name` —— 游戏里「亚理纱·贾斯敏」可能被 OCR
         读成「亚理纱贾斯敏」，底部名字行还可能带「SR-」前缀，带间隔点直接比会漏。
+
+        2026-11-03：错字别名（STYLE_ALIASES）**也参与前缀匹配** —— 日历/队长页
+        可能写成「羽漱川」，只映射全名的话姓氏前缀就查不到了（回归测试抓到的）。
         """
         if not name:
             return None
         s = labels.norm_name(name).replace(" ", "").strip()
+        # 错字先归到规范名（2026-11-03：羽漱川湊 → 羽濑川湊）。
+        # 别名只做查询兼容，不进 STYLE_BY_NAME —— 那张表是监控页下拉的数据源。
+        for wrong, right in STYLE_ALIASES.items():
+            if s == labels.norm_name(wrong):
+                s = labels.norm_name(right)
+                break
+        variants = list(STYLE_BY_NAME.items())
+        for wrong, right in STYLE_ALIASES.items():
+            style = STYLE_BY_NAME.get(right)
+            if style is not None:
+                variants.append((wrong, style))
         best, best_len, tie = None, 0, False
-        for full, style in STYLE_BY_NAME.items():
+        for full, style in variants:
             f = labels.norm_name(full)
             if s == f:
                 return style

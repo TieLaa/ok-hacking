@@ -2920,6 +2920,45 @@ class EmergencyStopSmoke(unittest.TestCase):
         self.assertIsNotNone(stop._poll_thread)
 
 
+class CaptainRoster(unittest.TestCase):
+    """队长列表（监控页下拉）的数据源：一个角色只能出现一次。
+
+    2026-11-03 用户发现下拉里有两个「羽?川湊」——采集脚本把「濑」认成「漱」，
+    旧表为了兼容把两种写法都收进 STYLE_BY_NAME，而那张表同时是下拉的数据源。
+    现在错字走 STYLE_ALIASES，只做查询兼容、不进列表。
+    """
+
+    def test_no_duplicate_names_in_dropdown(self):
+        from src.ui.MonitorTab import MonitorTab
+        from src.tasks.ui.labels import norm_name
+        groups = MonitorTab._captains()
+        names = [n for names in groups.values() for n in names]
+        norms = [norm_name(n) for n in names]
+        self.assertEqual(len(norms), len(set(norms)), f"下拉里有重复角色: {names}")
+
+    def test_wrong_spelling_still_resolves_style(self):
+        from src.tasks.training.parsers import TrainingParsersMixin
+        self.assertEqual(TrainingParsersMixin.style_for_name("羽漱川湊"), "扭蛋流")
+        self.assertEqual(TrainingParsersMixin.style_for_name("羽濑川湊"), "扭蛋流")
+
+    def test_every_roster_character_has_a_style(self):
+        """docs/roster 里的 SSR / SR 全部要能查到流派，否则当队长会掉回训练流。"""
+        from src.tasks.training.constants import STYLE_ALIASES, STYLE_BY_NAME
+        known = set(STYLE_BY_NAME) | set(STYLE_ALIASES)
+        missing = []
+        for f in ("ssr_roster.json", "sr_roster.json"):
+            with open(os.path.join(ROOT, "docs", "roster", f),
+                      encoding="utf-8") as fh:
+                data = json.load(fh)
+            missing += [c["name"] for c in data if c["name"] not in known]
+        self.assertEqual(missing, [], f"角色表缺: {missing}")
+
+    def test_monitor_style_from_config_handles_alias(self):
+        from src.ui.MonitorTab import MonitorTab
+        self.assertEqual(MonitorTab._style_from_config({"指定队长": "羽漱川湊"}), "扭蛋流")
+        self.assertEqual(MonitorTab._style_from_config({"指定队长": "澪奈·贾妮丝"}), "训练流")
+
+
 class QuickMatchRepeatGuard(unittest.TestCase):
     """常驻任务没有看门狗：同一画面连点 N 拍必须自己停手（2026-10-27 实机连点 30 秒）。"""
 
@@ -2967,6 +3006,42 @@ class QuickMatchRepeatGuard(unittest.TestCase):
         self.assertIsNone(t._mute_sig)
         self.assertEqual(t.dumps, [])
 
+    # --- 指纹归一（2026-11-03 限时比赛活动实机）---
+    # 比赛画面每拍都有倒计时（05:47→05:44）和比分（8:1→10:1）在变，
+    # 旧指纹取整帧文字 → 同一页永远算「新画面」→ 限流一次都没触发，
+    # handle_event_choice 在同一页连点了 20 次。
+
+    def test_timer_and_score_do_not_change_sig(self):
+        from src.tasks.QuickMatchTask import QuickMatchTask
+        first = [box(60, 30, "05:47", 90, 40),
+                 box(1120, 20, "8", 40, 30),
+                 box(1258, 762, "佐久间", 90, 40)]
+        later = [box(60, 30, "05:44", 90, 40),
+                 box(1120, 20, "10", 40, 30),
+                 box(1258, 762, "佐久间", 90, 40)]
+        self.assertEqual(QuickMatchTask._screen_sig(first),
+                         QuickMatchTask._screen_sig(later))
+
+    def test_sig_still_separates_different_pages(self):
+        from src.tasks.QuickMatchTask import QuickMatchTask
+        a = [box(884, 644, "继续匹配", 144, 43)]
+        b = [box(516, 644, "暂时退出", 141, 44)]
+        self.assertNotEqual(QuickMatchTask._screen_sig(a),
+                            QuickMatchTask._screen_sig(b))
+
+    def test_repeat_guard_fires_while_timer_ticks(self):
+        """端到端：倒计时在走也要能数到第 3 拍、存证停手。"""
+        from src.tasks.QuickMatchTask import QuickMatchTask, REPEAT_LIMIT
+        t = self._bare()
+        texts = [box(60, 30, "05:47", 90, 40),
+                 box(1258, 762, "佐久间", 90, 40)]
+        for i in range(REPEAT_LIMIT):
+            sig = QuickMatchTask._screen_sig(texts)
+            QuickMatchTask._note_hit(t, texts, sig, "handle_event_choice")
+            texts[0] = box(60, 30, f"05:{44 - i:02d}", 90, 40)     # 倒计时在走
+        self.assertEqual(len(t.dumps), 1, "同一页第 3 拍必须存证停手")
+        self.assertIsNotNone(t._mute_sig)
+
 
 class QuickMatchTaskSmoke(unittest.TestCase):
     """常驻快速比赛模块：类装配是否正确（不启动游戏）。"""
@@ -2979,6 +3054,23 @@ class QuickMatchTaskSmoke(unittest.TestCase):
         for name in ("init_match_state", "handle_prepare", "handle_result",
                      "handle_in_match", "handle_match_intro"):
             self.assertTrue(hasattr(QuickMatchTask, name), name)
+
+    def test_system_ui_methods_available(self):
+        """▶▶ 快进这类系统级控件搬到 SystemUIHandlers 后，装配必须跟上。
+
+        2026-11-03 实机报错：`'QuickMatchTask' object has no attribute
+        'click_match_fast_forward'` —— handlers/match.py 的 handle_in_match
+        已经改成调 SystemUIHandlers.click_match_fast_forward，但 QuickMatchTask
+        只继承了 MatchHandlers，没继承 SystemUIHandlers（TrainingTask 补了，它漏了）。
+        单元测试当时只断言 handler 可调用，没跑进 handle_in_match 的那条分支。
+        """
+        from src.tasks.QuickMatchTask import QuickMatchTask
+        from src.tasks.training.systemui import SystemUIHandlers
+        missing = [name for name in dir(SystemUIHandlers)
+                   if not name.startswith("_") and not hasattr(QuickMatchTask, name)]
+        self.assertEqual(missing, [])
+        self.assertIs(QuickMatchTask.click_match_fast_forward,
+                      SystemUIHandlers.click_match_fast_forward)
 
     def test_registered_as_trigger_task(self):
         from src.config import config
@@ -3082,6 +3174,40 @@ class MatchIntroFastForward(unittest.TestCase):
         task = FakeTask(texts)
         task._tick_frame = self.frame_with_pill()
         self.assertFalse(task.handle_match_intro(texts))
+        self.assertEqual(task.actions, [])
+
+
+class ActivityMatchResume(unittest.TestCase):
+    """限时比赛活动赛程页（2026-11-03 用户截图）。
+
+    页面文字：`第1轮进行中 / 已晋级A组 / 胜利·失败 / 暂时退出 / 继续匹配`，
+    **没有「下一步」**。旧代码会被 RESULT_TITLE_RE 的「胜利/失败」认成结算页，
+    再掉进「点屏幕中央」的兜底（点不动）；而事件 handler 更会把「暂时退出」
+    当竖向选项点掉 = 直接退出活动。
+    """
+
+    TEXTS = [box(324, 138, "第1轮进行中", 186, 43),
+             box(705, 235, "已晋级A组", 137, 34),
+             box(450, 479, "胜利", 65, 37),
+             box(595, 479, "失败", 67, 37),
+             box(516, 644, "暂时退出", 141, 44),
+             box(884, 644, "继续匹配", 144, 43)]
+
+    def test_result_handler_clicks_continue_match(self):
+        task = FakeTask(list(self.TEXTS))
+        self.assertTrue(task.handle_match_result(task._texts))
+        self.assertEqual(task.actions[-1][1], "继续匹配")
+
+    def test_event_handler_does_not_quit_activity(self):
+        task = FakeTask(list(self.TEXTS))
+        self.assertFalse(task.handle_event_choice(task._texts))
+        self.assertEqual(task.actions, [])
+
+    def test_quit_button_alone_is_still_excluded(self):
+        """只剩「暂时退出」时也不能被当成事件选项点掉。"""
+        texts = [box(516, 644, "暂时退出", 141, 44)]
+        task = FakeTask(texts)
+        self.assertFalse(task.handle_event_choice(texts))
         self.assertEqual(task.actions, [])
 
 

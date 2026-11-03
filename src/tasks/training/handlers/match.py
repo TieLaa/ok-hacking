@@ -149,7 +149,20 @@ class MatchHandlers:
         会进入**注册球员编队** —— 那是这一局的终点，任务停在这里。
         判据：只有评价等级大字（A/S/B 单独成框）+ 没有顶栏周数，才点「下一步」；
         点完看到「选择器材/确认编队」等编队页文字后，run() 直接 return 结束。
+
+        限时比赛活动（2026-11-03 用户截图，活动赛赛程页）：页面上是
+        「第1轮进行中 / 已晋级A组 / 胜利·失败 / 暂时退出 / 继续匹配」，
+        **没有「下一步」**。但它有单独的「胜利」「失败」大字，会被下面的
+        RESULT_TITLE_RE 认成结算页，然后掉进「点屏幕中央」的兜底 —— 点不动。
+        所以「继续匹配」必须在这条兜底之前认领，且优先级最高。
         """
+        # 活动赛：只有一个可靠的推进按钮。放在最前，别让任何其它判据抢先。
+        resume = self.exact_text(texts, labels.BUTTONS["continue_match"])
+        if resume is not None:
+            self.click_box(resume, after_sleep=1.2)
+            self.log_info("活动赛：继续匹配")
+            self._match_intro_at = 0.0          # 上一局的开场窗口作废
+            return True
         if self.match_text(texts, ("失败率", "决定", "休息")) is not None:
             return False
         # 锦标赛对阵图：只有「赛程已完成 / 距离下场比赛 / 下一场」和学校名，
@@ -733,6 +746,12 @@ class MatchHandlers:
         """
         if self.match_text(texts, ("在公园", "在餐厅", "野餐", "散步", "划船",
                                    "当服务员", "桌游", "扭蛋")) is not None:
+            return False
+        # 限时比赛活动赛程页（2026-11-03 用户截图）：「暂时退出 / 继续匹配」并排，
+        # 没有「下一步」。这一页交给 handle_match_result 点「继续匹配」；
+        # 一旦落到这里，choice_candidates 会把「暂时退出」当竖向选项点掉
+        # （= 直接退出活动）。只要看到其中一个，就说明不是事件选项页。
+        if self.match_text(texts, ("继续匹配", "暂时退出")) is not None:
             return False
         # 周末地图：地点名是导航，不是选项（2026-10-26 把「游戏厅/公园」当选项点了）。
         if len([t for t in texts if t.name.strip() in labels.WEEKEND_PLACES]) >= 2:
