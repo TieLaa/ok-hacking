@@ -15,7 +15,9 @@
 带它才能自动挑战/跳过；没有它的要真人打（打篮球、拼图），
 OCR 跟不上，进去就是白费一个周末日。所以只买带「自动」的卡片。
 
-选卡规则（用户 2026-10-29 口径）：**有队友的优先**，同类里再按奖励上限高的优先；
+选卡规则（用户 2026-11-03 口径，取代 2026-10-29 的「有队友优先」）：
+**买的起的情况下 品质优先：彩 > 金 > 紫 > 蓝**；同品质「有队友」优先，
+都有队友时「队友多的」优先；还打平再按奖励上限高的优先。
 价格从页面读（「打折」下面那个数字），读不到不猜。
 """
 
@@ -56,10 +58,22 @@ class ArcadePlace:
 
     # ---------- 选哪张卡（纯判断） ----------
 
+    # 品质优先级（用户 2026-11-03）：彩 > 金 > 紫 > 蓝。
+    # 排序用 `scoring.QUALITY_RANK` 同一张表，别再各写一份；「其他」= 认不出的白卡，不买。
+    ARCADE_QUALITIES = ("彩", "金", "紫", "蓝")
+
+    @staticmethod
+    def _arcade_mates(card):
+        """这张卡挂了几个人：新字段 `mates`（个数），老夹具只有 `mate`（有/没有）。"""
+        if "mates" in card:
+            return int(card.get("mates") or 0)
+        return 1 if card.get("mate") else 0
+
     def arcade_cards(self, texts):
         """读出游戏厅的卡片列表。
 
-        返回 [{"attr","hi","box","auto","price","quality","hue","sat","mate"}]。
+        返回 [{"attr","hi","box","auto","price","quality","hue","sat","mate","mates"}]；
+        `mates` 是队友个数，`mate` 是它的布尔值（老夹具只有后者）。
         """
         money = self.read_money(texts)
         icons = self.find_teammate_icons(0.0, 1.0)
@@ -93,8 +107,10 @@ class ArcadePlace:
                     for k in range(0, len(v) - 2, 3):
                         prices.append(int(v[k:k + 3]))
             price = min(prices) if prices else None
-            # 品质：取卡片「名字那一行 → 奖励那一行」之间的底色（用户 2026-10-27：
-            # 只买金/紫，蓝卡和白卡不买）。名字框在同一列、奖励上方。
+            # 品质：取卡片「名字那一行 → 奖励那一行」之间的底色。
+            # 排序口径见 `pick_arcade_card`（2026-11-03：彩>金>紫>蓝）；
+            # 这里**不判彩色**（`rainbow=False`）：游戏厅卡面高光会把单色卡误判成彩虹，
+            # 代价只是「彩色卡被当成金卡」，不会买错品质档。
             name_box = next((o for o in texts
                              if o.name.strip() == m.group(1)
                              and abs((o.x + o.width / 2) - cx) < band
@@ -105,33 +121,38 @@ class ArcadePlace:
                                              t.y / self.height)
             # 队友：卡片上方/左上挂的橙色小头像（和餐厅打工同一套判据）。
             # 2026-10-29 实跑：中间那张带队友的卡没被选中 —— 旧逻辑只看奖励上限。
-            mate = self.mates_on_card(t, icons) > 0
+            # 2026-11-03：改成**数个数**（「都有队友时队友多的优先」）。
+            mates = self.mates_on_card(t, icons)
             cards.append({"attr": m.group(1), "hi": int(m.group(3)),
                           "box": t, "auto": auto, "price": price,
-                          "quality": q, "hue": qh, "sat": qs, "mate": mate})
+                          "quality": q, "hue": qh, "sat": qs,
+                          "mate": bool(mates), "mates": int(mates or 0)})
             self.log_debug(f"游戏厅卡片：{m.group(1)} 奖励{m.group(2)}~{m.group(3)}"
-                           f" 自动={auto} 队友={mate} 品质={q}(H={qh:.0f} S={qs:.0f})"
+                           f" 自动={auto} 队友={mates} 品质={q}(H={qh:.0f} S={qs:.0f})"
                            f" 价格={price}")
         return cards
 
     def pick_arcade_card(self, cards, money):
         """选哪张小游戏？返回 (卡片, 原因) 或 (None, 原因)。
 
-        规则：
-        - 只买「自动」+ 金/紫 的卡；
-        - 有队友的优先，其余按奖励上限从高到低（2026-10-29 口径）；
+        规则（用户 2026-11-03）：
+        - 只买「自动」+ 彩/金/紫/蓝 的卡；
+        - **买的起的情况下**按 品质 → 有队友 → 队友多 → 奖励上限 排序；
         - 免费（0 元）优先拿；价格读不到不猜；钱读不到不买（盲买是死循环）。
         """
-        ok_cards = [c for c in cards if c["auto"] and c["quality"] in ("金", "紫")]
+        ok_cards = [c for c in cards
+                    if c["auto"] and c["quality"] in self.ARCADE_QUALITIES]
         if not ok_cards:
-            return None, ("没有「自动」+ 金/紫的小游戏（"
+            return None, ("没有「自动」+ 彩/金/紫/蓝 的小游戏（"
                           + "、".join(f"{c['attr']}/{c['quality']}"
                                       f"{'/自动' if c['auto'] else ''}"
                                       for c in cards) + "）")
 
-        auto_cards = list(ok_cards)
-        # 有队友的优先，其余按奖励上限从高到低（2026-10-29 口径）
-        auto_cards.sort(key=lambda c: (0 if c["mate"] else 1, -c["hi"]))
+        # 品质永远第一档（2026-11-03）；同品质才比队友，队友一样多再比奖励上限。
+        auto_cards = sorted(
+            ok_cards,
+            key=lambda c: (-self.QUALITY_RANK.get(c["quality"], 0),
+                           -self._arcade_mates(c), -c["hi"]))
         for c in auto_cards:
             price = c["price"]
             if price == 0:

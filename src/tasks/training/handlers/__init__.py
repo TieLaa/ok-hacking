@@ -15,6 +15,9 @@ from .match import MatchHandlers
 from .entry import EntryHandlers
 from .fishing import FishingHandlers
 from .theme import ThemeHandlers
+from .cooking import CookingHandlers
+from .wheel import WheelHandlers
+from .unmarked import UnmarkedHandlers
 
 HANDLERS = (
     # 注册球员收尾流程必须排在 handle_popup 之前：它有「关闭」按钮，
@@ -37,10 +40,14 @@ HANDLERS = (
     TrainingHandlers.handle_note_study,
     MatchHandlers.handle_match_result,
     MatchHandlers.handle_skill_select,
-    # 佐久间雨乃的天赋「钓鱼」：两页都是整页三选一/转盘，且带「确定」，
+    # 佐久间雨乃的天赋「钓鱼」：钓鱼场是三选一、带「确定」，
     # 必须排在通用「确定/下一步」类 handler 之前（旧版落到 unknown 兜底，连点 3 次卡死）。
     FishingHandlers.handle_fishing_ground,
-    FishingHandlers.handle_fishing_wheel,
+    # 转盘类事件（钓鱼啦！/ 开始做饭！……）：**一个 handler 共用**。
+    # 用户 2026-11-03 口径：转盘内容随机、不影响决策；「转一转」按钮的位置和文案
+    # 在所有转盘页都是通用的（两页实测按钮框都是 715,781,111,47）。
+    # 判据卡「底部居中」那一条，所以大厅「玩法目录」里那个「转一转」入口不会误伤。
+    WheelHandlers.handle_spin_wheel,
     TrainingHandlers.handle_boost_training,
     # SSR 角色天赋触发的「请选择一个题材」三选一（2026-11-02）：
     # 页面右上角有「跳过」，必须排在 handle_dialog_continue / handle_story_arrow 之前，
@@ -49,6 +56,10 @@ HANDLERS = (
     # 同一事件的收尾页「WARD文档」里的「交稿」：也带「跳过」快进图标，
     # 同样必须排在 handle_dialog_continue / handle_story_arrow 之前。
     ThemeHandlers.handle_manuscript_submit,
+    # 角色天赋特殊事件「做饭」的食材三选一（2026-11-03 实机）：标题条按品质上色，
+    # 按 彩>金>紫>蓝 → 队友多 选一张再点「确定」。必须排在 handle_event_choice
+    # / 通用「确定」类 handler 之前（旧版没人认领，一直落 unknown 点屏幕中央）。
+    CookingHandlers.handle_ingredient_select,
     TrainingHandlers.handle_subject_select,
     MatchHandlers.handle_event_choice,
     # 比赛日进店必须排在「赛前准备」之前：比赛日主界面可能直接就是
@@ -89,6 +100,11 @@ HANDLERS = (
     MatchHandlers.handle_result,
     EntryHandlers.handle_club_members,
     EntryHandlers.handle_story_arrow,
+    # ---- 兜底：**没登记的品质卡页面**（彩>金>紫>蓝 → 队友多）+ logs/unmark 存证 ----
+    # 必须在整张表的最后：任何专属 handler 认领过的页面都轮不到它。
+    # 用户 2026-11-03 口径：不认识的事件页也不能只点屏幕中央，按品质猜一张、
+    # 把这一帧存进 logs/unmark/，人工看过就能补成正式 handler。
+    UnmarkedHandlers.handle_unmarked_cards,
 )
 
 # handler 的**瞬时状态**声明：谁的状态谁声明。
@@ -125,6 +141,12 @@ LEAVE_RESETS = {
     "handle_theme_select": {"_theme_confirmed_at": 0.0},
     # 「WARD文档」交稿的点击锁：离开这页就清掉
     "handle_manuscript_submit": {"_submit_confirmed_at": 0.0},
+    # 「做饭」食材三选一：已点确定的时间戳 + 存证限流（离开这页就清）
+    "handle_ingredient_select": {"_cook_confirmed_at": 0.0, "_cook_dumped_at": 0.0},
+    # 转盘的点击锁：离开这一页就清（下次遇到重新计时）
+    "handle_spin_wheel": {"_wheel_clicked_at": 0.0},
+    # 未登记品质卡页面的存证限流 / 确定锁：换界面就清
+    "handle_unmarked_cards": {"_unmark_dumped_at": 0.0, "_unmark_confirmed_at": 0.0},
     # 加强训练页的「第几拍 / 已点确定的时刻」：离开这页就清零，
     # 否则下一张加强训练卡会被当成「已经看过好几拍」→ 又回到淡入那一拍就点（空点击）
     "handle_boost_training": {"_boost_ticks": 0, "_boost_confirmed_at": 0.0},

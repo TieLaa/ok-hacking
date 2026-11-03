@@ -529,7 +529,11 @@ class MatchHandlers:
         """技能三选一：**按品质算分**（评分公式见 docs/score-model/README.md）。
 
         评分里技能价值：彩色 75 / 金色 50 / 白色 25（蓝、绿图标都算白）。
-        所以品质是第一权重；标签是否与队长匹配只作同品质时的次级参考。
+        排序是**显式档位**，不是加权和（2026-11-03）：
+        品质 → 左上角道具图标 → 技能标签是否与配置优先项匹配。
+        旧版 `gem*100 + quality*10 + has_pref` 里道具权重是品质的 3 倍多，
+        判据一旦误判（左上角金橙像素占比 > 0.03 就算），白卡能压过彩卡 ——
+        和扭蛋「恢复量 38 分压掉有队友的卡」是同一类错误：不同量纲不能加总分。
         """
         if self.match_text(texts, "请选择1个技能") is None:
             return False
@@ -558,22 +562,21 @@ class MatchHandlers:
         def cy_of(i):
             return Defs.SKILL_CARDS[i][1]
 
-        best_idx, best_score, best_quality = 0, -1, 1
+        best_idx, best_key, best_quality = 0, (-1, -1, -1), 1
         detail = []
         for i in range(3):
             card_texts = self._card_texts(texts, i)
             has_pref = 1 if self.match_text(card_texts, tuple(pref)) is not None else 0
             quality = self._card_quality(frame, i)      # 3 彩 / 2 金 / 1 白
-            # 2026-10-29 撤回：曾给「道具角标」加过 +100 权重，但角标只是
-            # 「左上角高饱和像素」的猜测，误判后压过了两张真金边卡（用户当场指出）。
-            # 现在回到「品质优先，标签只做同品质微调」；队友/道具标记只打日志不动权重，
-            # 等拿到真帧再按证据加。
+            # 2026-10-30 用户口径：左上角带装备/道具图标的优先。
+            # 但它只是「左上角金橙像素占比 > 0.03」的猜测，2026-10-29 就误判过一次
+            # （压过两张真金边卡），所以**只能排在品质后面**，不进分数。
             gem = 1 if self.skill_card_item_gem(cx_of(i), cy_of(i)) else 0
-            score = gem * 100 + quality * 10 + has_pref
+            key = (quality, gem, has_pref)
             detail.append(f"{i + 1}:{labels.QUALITY_LABEL[quality]}/标签{has_pref}"
                           f"/道具{gem}({getattr(self, '_gem_ratio', 0):.3f})")
-            if score > best_score:
-                best_idx, best_score, best_quality = i, score, quality
+            if key > best_key:
+                best_idx, best_key, best_quality = i, key, quality
         self.log_info("技能评分 " + " ".join(detail) + f" → 选第 {best_idx + 1} 张")
         self.dump_skill_frame(texts)
 
@@ -705,6 +708,29 @@ class MatchHandlers:
                 return True
         return False
 
+    def stamina_room(self, texts):
+        """当前精力离上限还剩多少；顶栏读不到返回 None。
+
+        「这次真能用上多少精力」必须按余量封顶：满精力时回 30 点一分钱不值
+        （2026-11-03，和扭蛋 `recover_bonus` 同一口径）。
+        """
+        bar = self.top_bar(texts) or {}
+        cur, mx = bar.get("stamina"), bar.get("stamina_max")
+        if cur is None or not mx:
+            return None
+        return max(mx - cur, 0)
+
+    def usable_stamina(self, effs, room):
+        """这组效果**这次真能用上**多少精力（`room` = 离上限还剩多少）。
+
+        属性分永远在前一档，所以读不到精力余量时不猜、直接用原样点数 ——
+        宁可把回精力当同级参考，也不能因为读不到顶栏就让属性卡判输。
+        """
+        gain = self.stamina_gain(effs)
+        if not gain:
+            return 0
+        return gain if room is None else min(gain, room)
+
     @staticmethod
     def _pick_choice(infos, kind):
         """按用户规则挑选项，返回 (选中项, 理由)。
@@ -712,18 +738,28 @@ class MatchHandlers:
         用户口径（2026-10-26，2026-10-27 确认多选同样适用）：
         1. **纯回精力**的选项不参与竞争（只补 10 点精力，不如一点属性）；
            全部都是回精力时才退回按数值取最大；
-        2. 其余按「收益×概率」的期望值取最高；同分取靠右（二选一时）。
+        2. 其余按六维属性的「收益×概率」期望取最高；
+        3. 属性打平时才比**能用上的精力**（`sta`，调用方已按余量封顶），
+           最后取靠右（二选一时）。
         竖向排列是剧情三选一，仍然固定选第一个。
+
+        2026-11-03：精力**不再折成属性分**（旧口径 ×0.2 混进 ev）。
+        「属性+3，精力+30」= ev 3 + 精力 30，不会再变成 9 分去压「属性+8」；
+        满精力时 `sta` 会被调用方封成 0，也不会为了回不上的精力加分。
         """
         if kind == "v":
             return min(infos, key=lambda i: i["y"]), "竖向排列 → 第一个"
+
+        def key(i):
+            return (i["ev"] if i["ev"] is not None else -1,
+                    i.get("sta") or 0, i["x"])
+
         pool = [i for i in infos if not i["flat"]]
         if not pool:
             # 全都是回精力：没有别的选择，取数值最高的那个（不能因此不选）
-            pick = max(infos, key=lambda i: (i["ev"] if i["ev"] is not None else -1,
-                                             i["x"]))
+            pick = max(infos, key=key)
             return pick, "全是回精力 → 取数值最高的"
-        pick = max(pool, key=lambda i: (i["ev"] if i["ev"] is not None else -1, i["x"]))
+        pick = max(pool, key=key)
         why = ("二选一 → 排除纯回精力，取期望最高" if len(infos) == 2
                else "横向多选 → 排除纯回精力，取期望最高")
         if pick["ev"] is None:
@@ -811,16 +847,20 @@ class MatchHandlers:
         # 既不成居中一列、也不被 _yellow_buttons 认出 → 没人认领 → 卡死停任务。
         cards = self._card_choices(texts)
         if len(cards) >= 2:
+            room = self.stamina_room(texts)
             infos = []
             for box, effs in cards:
-                # 统一口径：回精力=flat（不选），期望值见 scoring.effect_value
+                # 统一口径：属性=ev（不含精力）、纯回精力=flat（不选）、
+                # 精力只做属性打平后的次级比较（2026-11-03）
                 ev, flat = self.effect_value(effs)
                 infos.append({"x": box.x, "y": box.y, "box": (box.x, box.y, box.width, box.height),
                               "name": box.name.strip(), "name_box": box,
-                              "ev": ev, "flat": flat})
+                              "ev": ev, "flat": flat,
+                              "sta": self.usable_stamina(effs, room)})
             pick, why = self._pick_choice(infos, "h")
             detail = "、".join(
                 f"{i['name']}({('%.0f' % i['ev']) if i['ev'] is not None else '?'}"
+                f"{'·精力+' + str(i['sta']) if i.get('sta') else ''}"
                 f"{'·回精力' if i['flat'] else ''})" for i in infos)
             self.log_info(f"事件选项（横向卡片）：{detail} → 选「{pick['name']}」（{why}）")
             self.click_box(pick["name_box"], after_sleep=0.45)
@@ -921,6 +961,7 @@ class MatchHandlers:
             best_kind = "v"
 
         infos = []
+        room = self.stamina_room(texts)
         for (bx, by, bw, bh) in buttons:
             inside = []
             for t in texts:
@@ -945,7 +986,8 @@ class MatchHandlers:
             flat_stamina = (any("精力" in t.name for t in effects) and not attrs)
             infos.append({"x": bx, "y": by, "box": (bx, by, bw, bh),
                           "name": name, "name_box": name_box,
-                          "ev": ev, "flat": flat_stamina})
+                          "ev": ev, "flat": flat_stamina,
+                          "sta": self.usable_stamina(effects, room)})
 
         # 框内一个字都没有的，是两卡之间的黄色装饰/空白，点它没用
         # （用户 2026-10-26 反馈：二选一时在中间空白点了两次）。
@@ -956,6 +998,7 @@ class MatchHandlers:
         pick, why = self._pick_choice(infos, best_kind)
         detail = "、".join(
             f"{i['name']}({('%.0f' % i['ev']) if i['ev'] is not None else '?'}"
+            f"{'·精力+' + str(i['sta']) if i.get('sta') else ''}"
             f"{'·回精力' if i['flat'] else ''})" for i in infos)
         self.log_info(f"事件选项：{detail} → 选「{pick['name']}」（{why}）")
         if os.environ.get("OK_DUMP_CHOICES"):

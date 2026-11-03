@@ -297,6 +297,31 @@ class GachaRules(unittest.TestCase):
         self.assertTrue(task.handle_street(task._texts))
         self.assertEqual(task.actions[0][1], 1100)          # 带队友的右边那张
 
+    def test_mate_card_beats_stamina_recovery(self):
+        """2026-11-03 10:11 实跑：三张卡全带「增强款」，买错了中间那张恢复卡。
+
+        实拍（第2周星期五，54/130、398 币）：左蓝「运控专注」50 币 /
+        中紫「精力恢复+」70 币 / 右紫「意识增加+」70 币（**卡头有队友标记**）。
+        日志原文：
+            `精力恢复+(紫·增强·恢复110/70币/138)、意识增加+(紫+队友·增强/70币/100) → 选「精力恢复+」`
+        识别全对 —— 错在恢复量**直接加进了 score**（+38），而队友只是
+        「分数完全相同」时的 tie-break，于是永远轮不到。
+        现在顺序是 品质 → 增强款 → 队友 → 恢复价值 → 便宜：右边那张必须胜出。
+        """
+        texts = gacha_texts([
+            ("运控专注", "消耗所有精力，训练主力获得运控+48"),
+            ("精力恢复+", "立刻恢复60精力，之后每天恢复20点，持续4天"),
+            ("意识增加+", "主力意识+48，队友属性中幅提升"),
+        ], stamina="54/130", money="398",
+            price=[("60", "50"), ("80", "70"), ("80", "70")])
+        # 「增强款」斜标签贴在卡头（y≈0.30），三张都有 —— 实拍帧 OCR 同样读到三份。
+        for x in (480, 960, 1440):
+            texts.append(box(x - 60, 300, "增强款", 100, 40))
+        task = FakeTask(texts, qualities=["蓝", "紫", "紫"],
+                        mates=[False, False, True])
+        self.assertTrue(task.handle_street(texts))
+        self.assertGreaterEqual(task.actions[0][1], 1300)   # 最右边那张（带队友）
+
     def test_plus_suffix_is_not_score(self):
         """名字里的「+」不算分（用户 2026-11-02）。
 
@@ -477,6 +502,11 @@ class GachaRules(unittest.TestCase):
             "立刻恢复90精力，之后每天恢复30点，持续4天，队友属性大幅提升"), 210)
         self.assertEqual(FakeTask.stamina_recover("立刻恢复40精力"), 40)
         self.assertEqual(FakeTask.stamina_recover("每天恢复10点，持续4天"), 40)
+        # 2026-11-03 实拍：「增强款」那句额外恢复是**叠加**在正文恢复量上的
+        # （「增强 立刻额外恢复30精力」+「立刻恢复60精力，之后每天20×4天」= 170）。
+        # 旧版只取第一处 → 110，恢复价值被低估。
+        self.assertEqual(FakeTask.stamina_recover(
+            "增强立刻额外恢复30精力立刻恢复60精力，之后每天恢复20点，持续4天"), 170)
         # 相反效果不能当成恢复
         self.assertEqual(FakeTask.stamina_recover("消耗所有精力，意识训练"), 0)
         self.assertEqual(FakeTask.stamina_recover("清空精力，运气+30"), 0)
@@ -1385,6 +1415,34 @@ class EventCardChoices(unittest.TestCase):
         self.assertTrue(task.handle_event_choice(texts))
         self.assertEqual(task.actions[-1][1], "安心按摩")     # EV 21 > 18 > 10
 
+    def test_stamina_does_not_buy_attribute_points(self):
+        """2026-11-03：混合选项里的精力不能再折成属性分。
+
+        旧实现「属性+3，精力+30」= 3 + 6 = 9 分，会压过「属性+8」= 8 分；
+        精力是好事，但它和属性不是同一把尺子 —— 差的那 5 点属性
+        不可能靠回 30 精力补回来（用户口径：回精力不如一点属性）。
+        精力现在只在属性打平时当次级比较（且要按余量封顶）。
+        """
+        texts = [
+            box(60, 40, "第2周", 90, 34), box(200, 40, "星期四", 90, 34),
+            box(380, 16, "54/130", 210, 53),
+            box(240, 700, "普通训练", 170, 45),
+            box(900, 700, "特训", 170, 45),
+            box(240, 760, "属性+3，精力+30", 260, 37),
+            box(900, 760, "属性+8", 130, 33),
+        ]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_event_choice(texts))
+        self.assertEqual(task.actions[-1][1], "特训")
+
+    def test_usable_stamina_capped_by_room(self):
+        """精力按「这次真能用上」封顶：满精力时回 30 点 = 0 分。"""
+        effs = [box(0, 0, "精力+30", 200, 40)]
+        task = FakeTask([])
+        self.assertEqual(task.usable_stamina(effs, 0), 0)       # 满精力
+        self.assertEqual(task.usable_stamina(effs, 12), 12)     # 只剩 12 点余量
+        self.assertEqual(task.usable_stamina(effs, None), 30)   # 读不到顶栏 → 原样
+
 
 class ResumeTrainingNeverWipes(unittest.TestCase):
     """「训练确认」弹窗只许点「继续训练」，永不删档（2026-11-02 用户口径）。
@@ -1476,18 +1534,23 @@ class ArcadeRules(unittest.TestCase):
         # 买完要先等小游戏自己打完（进场动画没有按钮，别让看门狗判卡死）
         self.assertGreater(task._arcade_wait_since, 0)
 
-    def test_blue_card_is_not_bought(self):
-        """蓝色品质不买（用户 2026-10-27：只买黄/紫 + 带自动）。"""
+    def test_blue_card_is_bought_as_last_resort(self):
+        """蓝色品质是最后一档（用户 2026-11-03），买得起又没有更好的卡时就买。
+
+        2026-10-27 的旧口径是「蓝卡不买」；现在统一成
+        **彩 > 金 > 紫 > 蓝**，蓝卡只在没有更优选择时才买。
+        """
         texts = [
             box(600, 115, "请选择一个小游戏", 220, 36),
             box(199, 236, "自动", 64, 30),
             box(308, 238, "弹跳", 70, 42),
             box(251, 370, "弹跳20~70", 155, 31),
+            box(355, 484, "64", 44, 32),
             box(615, 646, "确定", 71, 39),
         ]
         task = self._task(texts, quality="蓝")
         self.assertTrue(task.handle_arcade(texts))
-        self.assertEqual(task.actions[-1][0], "click")      # 只退出，不买
+        self.assertEqual(task.actions[-2][1], "弹跳20~70")   # 买了，不是直接退出
 
     def test_discount_price_takes_the_lower_number(self):
         """打折时卡片上有两个价格、位置还会偏（用户 2026-10-27），取折后那个。
@@ -1548,10 +1611,26 @@ class EffectExpectation(unittest.TestCase):
         self.assertEqual(self.ev("投射+3"), 3)
         self.assertEqual(self.ev("投射+2，弹跳+3"), 5)
 
-    def test_stamina_is_worth_little(self):
-        """精力只有 1/5 价值（纯回精力在挑选阶段还会被排除）。"""
-        self.assertAlmostEqual(self.ev("精力+10"), 2.0)
-        self.assertAlmostEqual(self.ev("精力+10，投射+5"), 7.0)
+    def test_stamina_is_not_attribute_value(self):
+        """2026-11-03：精力**不进属性分**（旧口径 ×0.2）。
+
+        旧实现「属性+3，精力+30」= 3 + 6 = 9 分，会压过「属性+8」= 8 分 ——
+        满精力时也一样，等于「回精力不如一点属性」这条口径没生效。
+        现在 ev 只算六维属性，精力由 `stamina_gain` 单独算，
+        只在属性打平、且精力还没满时当次级比较。
+        """
+        self.assertIsNone(self.ev("精力+10"))
+        self.assertAlmostEqual(self.ev("精力+10，投射+5"), 5.0)
+        self.assertEqual(
+            FakeTask.stamina_gain([box(400, 300, "精力+10", 300, 40)]), 10)
+        self.assertEqual(
+            FakeTask.stamina_gain([box(400, 300, "精力提升+30", 300, 40)]), 30)
+        # 「消耗/清空精力换属性」是开销，不是收益
+        self.assertEqual(
+            FakeTask.stamina_gain([box(400, 300, "消耗精力，意识+30", 300, 40)]), 0)
+        # 「精力上限+10」是永久上限，不是这次能用的精力
+        self.assertEqual(
+            FakeTask.stamina_gain([box(400, 300, "精力上限+10", 300, 40)]), 0)
 
     def test_probability_multiplies(self):
         self.assertAlmostEqual(self.ev("50%概率 全属性+5"), 15.0)
@@ -2141,19 +2220,52 @@ class PlaceModulesRules(unittest.TestCase):
         self.assertEqual(pick["attr"], "弹跳")
         self.assertIn("免费", reason)
 
-    def test_arcade_skips_blue_cards(self):
-        """游戏厅：只买「自动」+ 金/紫（蓝卡不买）。"""
+    def test_arcade_blue_is_last_resort(self):
+        """游戏厅：品质优先 彩>金>紫>蓝（用户 2026-11-03）。
+
+        蓝卡从「不买」改成**最后才买**：有金卡买得起就不看蓝卡；
+        只剩蓝卡时仍然买（钱换属性，没有别的选择）。
+        """
+        blue = {"attr": "投射", "hi": 100, "box": None, "auto": True, "price": 80,
+                "quality": "蓝", "hue": 0, "sat": 0, "mate": False}
+        gold = {"attr": "弹跳", "hi": 40, "box": None, "auto": True, "price": 80,
+                "quality": "金", "hue": 0, "sat": 0, "mate": False}
+        task = FakeTask([])
+        pick, _ = task.pick_arcade_card([blue, gold], money=500)
+        self.assertEqual(pick["attr"], "弹跳")             # 金卡奖励更低也先买金
+        pick2, _ = task.pick_arcade_card([blue], money=500)
+        self.assertEqual(pick2["attr"], "投射")            # 只剩蓝卡 → 买
+
+    def test_arcade_quality_beats_two_teammates(self):
+        """游戏厅：品质永远第一档（用户 2026-11-03）。
+
+        紫卡挂 2 个队友、金卡没队友 → 买金卡。2026-10-29 的「有队友优先」
+        是在**同品质**内部比的，不能把品质翻过去。
+        """
         cards = [
-            {"attr": "投射", "hi": 100, "box": None, "auto": True, "price": 80,
-             "quality": "蓝", "hue": 0, "sat": 0, "mate": False},
+            {"attr": "投射", "hi": 40, "box": None, "auto": True, "price": 80,
+             "quality": "金", "hue": 0, "sat": 0, "mate": False},
+            {"attr": "弹跳", "hi": 100, "box": None, "auto": True, "price": 80,
+             "quality": "紫", "hue": 0, "sat": 0, "mate": True, "mates": 2},
         ]
         task = FakeTask([])
-        pick, reason = task.pick_arcade_card(cards, money=500)
-        self.assertIsNone(pick)
-        self.assertIn("没有", reason)
+        pick, _ = task.pick_arcade_card(cards, money=500)
+        self.assertEqual(pick["attr"], "投射")
+
+    def test_arcade_more_teammates_wins(self):
+        """游戏厅：同品质都带队友时，队友多的优先（用户 2026-11-03）。"""
+        cards = [
+            {"attr": "投射", "hi": 100, "box": None, "auto": True, "price": 80,
+             "quality": "金", "hue": 0, "sat": 0, "mate": True, "mates": 1},
+            {"attr": "弹跳", "hi": 70, "box": None, "auto": True, "price": 80,
+             "quality": "金", "hue": 0, "sat": 0, "mate": True, "mates": 2},
+        ]
+        task = FakeTask([])
+        pick, _ = task.pick_arcade_card(cards, money=500)
+        self.assertEqual(pick["attr"], "弹跳")
 
     def test_arcade_prefers_teammate_card(self):
-        """游戏厅：有队友的优先（2026-10-29 口径）。"""
+        """游戏厅：同品质时有队友的优先（2026-10-29 口径）。"""
         cards = [
             {"attr": "投射", "hi": 100, "box": None, "auto": True, "price": 80,
              "quality": "金", "hue": 0, "sat": 0, "mate": False},
@@ -2846,47 +2958,66 @@ class StylePlanRules(unittest.TestCase):
             self.assertTrue(task.handle_training_day(texts), style)
             self.assertEqual(task.actions[-1][1], "训练", style)
 
-    # ---------- 餐厅：队友多 → 右边（耗精力）→ 精力不够退回左边 ----------
+    # ---------- 餐厅：默认当服务员，桌游GM 队友多 2 人才改选左边 ----------
 
     def _restaurant(self, stamina=None):
+        # 真实布局（docs/shots/restaurant_cards.png）：桌游GM 在左、当服务员在右。
         texts = [box(700, 100, "在餐厅", 300, 50),
-                 box(600, 500, "当服务员", 200, 60),
-                 box(1000, 500, "桌游GM", 200, 60)]
+                 box(600, 500, "桌游GM", 200, 60),
+                 box(1000, 500, "当服务员", 200, 60)]
         if stamina:
             texts.append(box(380, 16, stamina, 210, 53))
         return texts
 
-    def test_restaurant_tie_picks_right_option(self):
-        """队友一样多（都数不到）→ 选右边那个消耗精力的选项。"""
-        task = FakeTask(self._restaurant())
+    def _restaurant_task(self, stamina=None, mates=None):
+        """mates 按选项名给队友个数（覆盖数脸判据，帧是黑的数不出人）。"""
+        task = FakeTask(self._restaurant(stamina))
         task._style = "商店流"
-        task.find_teammate_icons = lambda *a, **k: []
-        self.assertTrue(task.handle_restaurant(task._texts))
-        self.assertEqual(task.actions[-1][1], "桌游GM")
+        counts = dict(mates or {})
+        task.mate_face_count = lambda b, **k: counts.get(b.name.strip(), 0)
+        return task
 
-    def test_restaurant_picks_option_with_more_teammates(self):
-        """左边卡片左上角挂 3 个队友头像 → 选左边（队友多的优先）。"""
-        task = FakeTask(self._restaurant())
-        task._style = "扭蛋流"
-        task.find_teammate_icons = lambda *a, **k: [(450, 400), (500, 400), (550, 400)]
+    def test_restaurant_tie_picks_servant(self):
+        """队友一样多（都数不到）→ 默认选当服务员（右边、耗精力）。"""
+        task = self._restaurant_task()
         self.assertTrue(task.handle_restaurant(task._texts))
         self.assertEqual(task.actions[-1][1], "当服务员")
 
-    def test_restaurant_low_stamina_takes_left_card(self):
-        """精力不够右边那张（默认按 25 算）→ 改选左边不耗精力的（通用规则）。"""
-        task = FakeTask(self._restaurant(stamina="10/130"))
-        task._style = "商店流"
-        task.find_teammate_icons = lambda *a, **k: []
+    def test_restaurant_gm_with_two_more_teammates_wins(self):
+        """桌游GM 队友 2 个、当服务员 0 个（多两个）→ 选左边的桌游GM。"""
+        task = self._restaurant_task(mates={"桌游GM": 2, "当服务员": 0})
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][1], "桌游GM")
+
+    def test_restaurant_gm_with_three_more_teammates_wins(self):
+        """多三个也比多两个更该选（口径是「多两个及以上」）。"""
+        task = self._restaurant_task(mates={"桌游GM": 3, "当服务员": 1})
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][1], "桌游GM")
+
+    def test_restaurant_gm_with_one_more_teammate_still_servant(self):
+        """只多一个不够 —— 仍然选当服务员（2026-11-03 用户口径）。"""
+        task = self._restaurant_task(mates={"桌游GM": 1, "当服务员": 0})
         self.assertTrue(task.handle_restaurant(task._texts))
         self.assertEqual(task.actions[-1][1], "当服务员")
 
-    def test_restaurant_enough_stamina_takes_right_card(self):
-        """精力够 → 仍然选右边（队友一样多时的默认）。"""
-        task = FakeTask(self._restaurant(stamina="90/130"))
-        task._style = "商店流"
-        task.find_teammate_icons = lambda *a, **k: []
+    def test_restaurant_gm_two_but_servant_one_still_servant(self):
+        """2 个 vs 1 个只差 1 个 → 仍然当服务员。"""
+        task = self._restaurant_task(mates={"桌游GM": 2, "当服务员": 1})
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][1], "当服务员")
+
+    def test_restaurant_low_stamina_takes_gm(self):
+        """精力不够当服务员（默认按 25 算）→ 改选不耗精力的桌游GM。"""
+        task = self._restaurant_task(stamina="10/130")
         self.assertTrue(task.handle_restaurant(task._texts))
         self.assertEqual(task.actions[-1][1], "桌游GM")
+
+    def test_restaurant_enough_stamina_takes_servant(self):
+        """精力够 → 选当服务员（默认那张）。"""
+        task = self._restaurant_task(stamina="90/130")
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][1], "当服务员")
 
     def test_restaurant_reward_text_is_not_a_cost(self):
         """卡片上的「精力+30」是收益，不能当成消耗（否则好选项会被挡掉）。"""
@@ -2894,19 +3025,37 @@ class StylePlanRules(unittest.TestCase):
         texts.append(box(1000, 620, "精力+30", 200, 50))
         task = FakeTask(texts)
         task._style = "商店流"
-        task.find_teammate_icons = lambda *a, **k: []
+        task.mate_face_count = lambda b, **k: 0
         self.assertTrue(task.handle_restaurant(texts))
-        self.assertEqual(task.actions[-1][1], "桌游GM")
+        self.assertEqual(task.actions[-1][1], "当服务员")
 
     def test_restaurant_uses_cost_printed_on_card(self):
-        """卡片写明「精力-30」时以卡片为准：精力 25 不够 → 选左边。"""
+        """卡片写明「精力-30」时以卡片为准：精力 25 不够 → 选桌游GM。"""
         texts = self._restaurant(stamina="25/130")
         texts.append(box(1000, 620, "精力-30", 200, 50))
         task = FakeTask(texts)
         task._style = "商店流"
-        task.find_teammate_icons = lambda *a, **k: []
+        task.mate_face_count = lambda b, **k: 0
         self.assertTrue(task.handle_restaurant(texts))
-        self.assertEqual(task.actions[-1][1], "当服务员")
+        self.assertEqual(task.actions[-1][1], "桌游GM")
+
+    def test_restaurant_counts_faces_on_real_frame(self):
+        """真帧（2026-10-31 1549x871）：桌游GM 头顶 2 个队友、当服务员 1 个。
+
+        旧判据（深蓝胶囊「有/没有」）两张都读成 1 → 平局 → 用户要的
+        「多两个选左边」永远不生效。
+        """
+        path = os.path.join(ROOT, "docs", "shots", "restaurant_cards.png")
+        if cv2 is None or not os.path.exists(path):
+            self.skipTest("缺少样本 %s" % path)
+        frame = cv2.imread(path)
+        task = DryRunTask(frame, self._restaurant())
+        got = {
+            b.name: task.mate_face_count(b)
+            for b in [box(544, 450, "桌游GM", 132, 50),
+                      box(873, 453, "当服务员", 139, 43)]
+        }
+        self.assertEqual(got, {"桌游GM": 2, "当服务员": 1})
 
 
 class EmergencyStopSmoke(unittest.TestCase):
@@ -3839,6 +3988,25 @@ class TalentStockEvent(unittest.TestCase):
                                Defs.SKILL_CARDS[1][0], places=2)
         self.assertIn("道具1", "".join(task.logs))
 
+    def test_skill_quality_beats_item_badge(self):
+        """2026-11-03：品质是第一档，道具图标只做同品质比较。
+
+        旧版 `score = gem*100 + quality*10 + has_pref`：白卡带道具 = 110 > 彩卡 = 30。
+        道具判据只是「左上角金橙像素占比 > 0.03」的猜测，2026-10-29 就误判过
+        （压过两张真金边卡），和扭蛋「恢复量压掉有队友的卡」是同一类错误。
+        """
+        from src.tasks.ui import Defs
+        texts = [box(600, 200, "请选择1个技能", 400, 50),
+                 box(200, 420, "好斗者", 200, 60),
+                 box(700, 420, "远投擅长", 200, 60),
+                 box(1200, 420, "看破擅长", 200, 60)]
+        task = FakeTask(texts)
+        task._card_quality = lambda frame, i: 3 if i == 0 else 1   # 左彩，其余白
+        task.skill_card_item_gem = lambda cx, cy: cx > 0.4          # 中/右有道具
+        self.assertTrue(task.handle_skill_select(texts))
+        self.assertAlmostEqual(task.actions[0][1] / task.width_of_screen(1),
+                               Defs.SKILL_CARDS[0][0], places=2)    # 仍选彩色那张
+
     def test_skill_select_ignores_flyout_frame(self):
         """点完卡后的「退场帧」不能再记一个技能。
 
@@ -3973,11 +4141,14 @@ class TalentStockEvent(unittest.TestCase):
         self.assertGreater(task.actions[0][1], int(task.width * 0.5))   # 点了右边
 
     def test_effect_value_shared_rule(self):
-        """统一口径：纯回精力=flat；等级/属性按 100；属性 +N 按真实总量。"""
+        """统一口径：纯回精力=flat；等级/属性按 100；属性 +N 按真实总量。
+
+        2026-11-03：精力不再折成属性分（`精力提升+30` 的 ev 是 0，不是 6）。
+        """
         def val(*names):
             return FakeTask.effect_value([box(0, 0, n, 100, 40) for n in names])
 
-        self.assertEqual(val("精力提升+30"), (6.0, True))
+        self.assertEqual(val("精力提升+30"), (0.0, True))
         self.assertEqual(val("意识训练的等级增加至2"), (100.0, False))
         self.assertEqual(val("投射+10"), (10.0, False))
         # 同一张卡既给等级又回精力：不算纯回精力
@@ -5227,6 +5398,116 @@ class SpeedEnsureGuard(unittest.TestCase):
         self.assertTrue(task.ensure_speed(task._texts))
         self.assertEqual(len(task.actions), 1)
         self.assertEqual(task.actions[0][:1], ("click",))
+
+
+class CookQualityCards(unittest.TestCase):
+    """做饭食材三选一 + 品质卡排序（2026-11-03）。
+
+    回归图（docs/shots/2026-11-03-cook-ingredient.png）只能证明「这张图被
+    handle_ingredient_select 认领」，证明不了「选的是金卡」—— 决策必须用
+    构造帧测（ENGINEERING §5：回归图管命中，这里管选哪张）。
+
+    颜色取实机实测值（logs/live/cook_now.jpg）：蓝 103/121/197、
+    紫 135/115/188、金 21/251/193（OpenCV 色相 0~180）。
+    """
+
+    H, W = 1080, 1920
+    COLORS = {"蓝": (103, 121, 197), "紫": (135, 115, 188), "金": (21, 251, 193)}
+    NAMES = ("隔夜饭", "菜市场的普通食材", "珍稀食材")
+
+    def _frame(self, qualities):
+        """三列品质色带（每列铺满标题框所在的那一条横带）。"""
+        frame = np.zeros((self.H, self.W, 3), dtype=np.uint8)
+        for cx, quality in zip((0.25, 0.50, 0.75), qualities):
+            bgr = cv2.cvtColor(
+                np.array(self.COLORS[quality], np.uint8).reshape(1, 1, 3),
+                cv2.COLOR_HSV2BGR)[0, 0].tolist()
+            x1, x2 = int(self.W * (cx - 0.06)), int(self.W * (cx + 0.06))
+            frame[520:620, x1:x2] = bgr
+        return frame
+
+    def _texts(self):
+        return [box(int(self.W * (0.25 + i * 0.25)) - 100, 540, name, 200, 60)
+                for i, name in enumerate(self.NAMES)]
+
+    def _task(self, qualities):
+        return DryRunTask(self._frame(qualities), self._texts())
+
+    def test_quality_read_from_title_bar(self):
+        """标题条认品质：蓝/紫/金都要认对（名字 OCR 会截字，不能靠名字）。"""
+        task = self._task(("蓝", "紫", "金"))
+        cards = task.quality_cards(task._texts)
+        self.assertEqual([c["quality"] for c in cards], ["蓝", "紫", "金"])
+
+    def test_pick_gold_over_purple_over_blue(self):
+        """默认顺序 金 > 紫 > 蓝：做饭页选最右的金卡（珍稀食材）。"""
+        task = self._task(("蓝", "紫", "金"))
+        pick, ordered = task.quality_card_order(task.quality_cards(task._texts))
+        self.assertEqual(pick["name"], "珍稀食材")
+        self.assertEqual([c["quality"] for c in ordered], ["金", "紫", "蓝"])
+
+    def test_order_is_rainbow_gold_purple_blue(self):
+        """未登记页面用 彩 > 金 > 紫 > 蓝（用户 2026-11-03 口径）。"""
+        def card(quality, mates=0, x=0):
+            return {"box": box(x, 0, quality), "name": quality,
+                    "quality": quality, "mates": mates}
+        cards = [card("蓝", x=100), card("紫", x=200),
+                 card("彩", x=300), card("金", x=400)]
+        from src.tasks.training.scoring import TrainingScoringMixin
+        pick, ordered = TrainingScoringMixin.quality_card_order(cards)
+        self.assertEqual([c["quality"] for c in ordered], ["彩", "金", "紫", "蓝"])
+
+    def test_mates_break_quality_tie(self):
+        """同品质比队友数：队友多的优先，有队友的优先于没队友的。"""
+        def card(name, mates, x):
+            return {"box": box(x, 0, name), "name": name,
+                    "quality": "紫", "mates": mates}
+        from src.tasks.training.scoring import TrainingScoringMixin
+        pick, _ = TrainingScoringMixin.quality_card_order(
+            [card("没队友", 0, 700), card("一队友", 1, 500), card("两队友", 2, 300)])
+        self.assertEqual(pick["name"], "两队友")
+
+    def test_handler_clicks_gold_then_confirm(self):
+        """handler 的动作顺序：点金卡正文 → 点「确定」（2026-11-03 实机节奏）。"""
+        texts = self._texts() + [box(700, 950, "确定", 110, 60)]
+        texts.append(Box(x=600, y=130, width=280, height=50,
+                         name="请选择要使用的食材"))
+        task = DryRunTask(self._frame(("蓝", "紫", "金")), texts)
+        self.assertTrue(task.handle_ingredient_select(texts))
+        kinds = [a[0] for a in task.actions]
+        self.assertEqual(kinds, ["click", "click_box"])
+        # 点的是最右那列（金卡）的卡片正文，而不是标题条
+        self.assertGreater(task.actions[0][1], int(self.W * 0.70))
+        self.assertEqual(task.actions[1][1], "确定")
+
+    def test_wheel_clicks_once(self):
+        """转盘（钓鱼啦！/ 开始做饭！共用）：只点一次，动画期间（8 秒内）不重复点。"""
+        texts = [box(560, 20, "开始做饭！", 350, 100),
+                 box(700, 780, "转一转", 120, 50)]
+        task = DryRunTask(self._frame(("蓝", "紫", "金")), texts)
+        self.assertTrue(task.handle_spin_wheel(texts))
+        self.assertEqual(len(task.actions), 1)
+        self.assertTrue(task.handle_spin_wheel(texts))     # 动画中再进一拍
+        self.assertEqual(len(task.actions), 1)             # 不许补点
+
+    def test_wheel_ignores_lobby_entry(self):
+        """大厅「玩法目录」里也有「转一转」入口，但那不在底部按钮带里 → 不许点。
+
+        2026-11-03：判据从「只认文字」改成「底部居中那一条」，就是为这个。
+        """
+        texts = [box(600, 480, "转一转", 200, 60),      # cy≈0.48，卡片区
+                 box(1100, 480, "赛事", 160, 60)]
+        task = DryRunTask(self._frame(("蓝", "紫", "金")), texts)
+        self.assertFalse(task.handle_spin_wheel(texts))
+        self.assertEqual(task.actions, [])
+
+    def test_wheel_falls_back_on_known_title(self):
+        """按钮没认出来时：已知转盘标题 + 固定坐标（两页实测同位置 0.5w/0.923h）。"""
+        texts = [box(560, 20, "钓鱼啦！", 350, 100)]
+        task = DryRunTask(self._frame(("蓝", "紫", "金")), texts)
+        self.assertTrue(task.handle_spin_wheel(texts))
+        self.assertEqual(task.actions, [("click", int(task.width * 0.5),
+                                         int(task.height * 0.923))])
 
 
 if __name__ == "__main__":

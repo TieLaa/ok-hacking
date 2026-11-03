@@ -31,6 +31,9 @@ from src.tasks.training.handlers.match import MatchHandlers
 from src.tasks.training.handlers.entry import EntryHandlers
 from src.tasks.training.handlers.fishing import FishingHandlers
 from src.tasks.training.handlers.theme import ThemeHandlers
+from src.tasks.training.handlers.cooking import CookingHandlers
+from src.tasks.training.handlers.wheel import WheelHandlers
+from src.tasks.training.handlers.unmarked import UnmarkedHandlers
 
 
 class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin,
@@ -39,7 +42,8 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
                    ArcadePlace, ShopPlace,
                    PopupHandlers, TrainingHandlers, WeekendHandlers,
                    MatchHandlers, EntryHandlers, FishingHandlers,
-                   ThemeHandlers, BaseGirlsTask):
+                   ThemeHandlers, CookingHandlers, WheelHandlers,
+                   UnmarkedHandlers, BaseGirlsTask):
 
     def load_config(self):
         """加载配置前先把老「体力」键名搬成「专注 / 精力」（2026-11-02 规范用词）。

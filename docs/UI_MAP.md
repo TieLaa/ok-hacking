@@ -45,9 +45,11 @@
 - 地图上步行街上方出现彩色爆炸标签 **「扭蛋增强！」** 时：不管钱和队友，
   直接进步行街（最高优先级）。
 - 去了步行街但**没消费**（没钱 / 没买到）→ 再去餐厅打工；买到东西就不去了。
-- 餐厅打工：**队友多**的优先；一样多选右边（耗精力那张）；**右边精力不够就选左边**。
+- 餐厅打工：默认选**当服务员**（右边、耗精力）；**桌游GM**（左边）的队友比它
+  **多 2 个及以上**才改选桌游GM；当服务员精力不够就选桌游GM。
 - 代码：`constants.WEEKEND_PLAN`、`flow.weekend_priority`、
-  `handlers/weekend.py: prefer_mate_venue / restaurant_order`。
+  `handlers/weekend.py: prefer_mate_venue / restaurant_order`、
+  `places/restaurant.py: restaurant_preference`。
 
 ## 周末地图的标记
 
@@ -250,6 +252,80 @@
 
 代码：`ui/labels.py: MANUSCRIPT_MARKS / BUTTONS["submit"]`、
 `training/handlers/theme.py: handle_manuscript_submit`、`handlers/__init__.py`（紧跟 `handle_theme_select`）。
+
+## 「请选择要使用的食材」（角色天赋特殊事件「做饭」，三选一）
+
+- 出现时机：**角色天赋「做饭」**触发的三选一（用户 2026-11-03 实机，第 1 周星期四，
+  精力 97/130、零用钱 150）。这一页出现在训练日中间，不属于周末地点。
+- 界面（1549x871）：标题「请选择要使用的食材」@(629,134)，三张竖卡横排，
+  **标题条按品质上色**（这是判据，名字不可靠）：
+
+  | 列 | 名字 | 标题条 | 卡底价格 | 说明 |
+  |---|---|---|---|---|
+  | 左 | 隔夜饭 | **蓝** H/S/V=103/121/197 | 0 | 能吃，没写保质期就是没过期！ |
+  | 中 | 菜市场的普通食材 | **紫** 135/115/188（**带黄色四角框＝默认选中**） | 10 | 店长说卖完这筐就回老家！ |
+  | 右 | 珍稀食材 | **金** 21/251/193 | 20 | 最高端的食材往往使用最朴素的烹饪方式！ |
+
+  底部黄色「确定」@(729,765)，左下角「能力详情」，右上角倍速/历史/菜单/返回。
+- 判据：整词 `请选择要使用的食材`（实机帧 OCR 1.00 分，稳定）。
+  **不能按名字**：OCR 会把名字截断最后一个字（实机读到「隔夜…」「菜市场的普通食…」）。
+- 选谁（用户 2026-11-03 口径）：**默认 金 > 紫 > 蓝**，即通用的
+  **彩 > 金 > 紫 > 蓝 → 队友多的 → 有队友的**（见 `scoring.quality_card_order`）。
+  这一页三张卡都没有队友头像，所以实际选金卡「珍稀食材」（也是价格 20 的那张）。
+  取色：`parsers.card_quality_color`（先取标题条，白底时再看卡头），阈值与扭蛋共用。
+- 坑 1：`mates_on_card` 会把**金卡的卡头图标**当成队友（实机数出 2 个）——
+  所以 `parsers.quality_cards` 只数**卡片上沿之上**的小头像。
+- 坑 2：点卡片正文区（标题中心 +0.06h），等 0.3 秒再点「确定」，否则确定点空。
+- 回归样例：`docs/shots/2026-11-03-cook-ingredient.png`。
+
+代码：`ui/labels.py: COOKING_TITLE`、`training/parsers.py: quality_cards / card_quality_color`、
+`training/scoring.py: quality_card_order`、`training/handlers/cooking.py: handle_ingredient_select`、
+`handlers/__init__.py`（排在 `handle_manuscript_submit` 之后、`handle_subject_select` 之前）。
+
+### 转盘类事件：「转一转」（钓鱼啦！/ 开始做饭！……**共用一个 handler**）
+
+- 用户 2026-11-03 口径：转盘转到哪一半是随机的、**内容不影响决策**；
+  「转一转」按钮的位置和文案在所有转盘事件里是**通用**的 → 只写一个 handler。
+- 实测（1549x871，两页 OCR 都是 **0.9997 的「转一转」**，没有掉字）：
+
+  | 页面 | 标题 | 按钮框 | 中心 |
+  |---|---|---|---|
+  | 钓鱼啦！ | @(612,10) | (715,781,111,47) | 0.500w / 0.923h |
+  | 开始做饭！ | @(576,12) | (716,781,110,47) | 0.500w / 0.923h |
+
+- 判据：**底部那一条**（cy ≥ 0.85、cx 0.30~0.70）里的「转一转 / 转一圈」。
+  为什么卡位置：大厅「玩法目录」里也有一个「转一转」入口（`handle_lobby` 用它），
+  只认文字会在大厅点它。
+- 降级：认不出按钮时，已知标题（`WHEEL_TITLES`）+ 固定坐标 (0.500w, 0.923h)。
+  旧代码写的 0.953h 其实落在按钮下沿之外（803 vs 830），这次一起修了。
+- 节奏：**只点一次**，点完锁 8 秒（动画期间只等不点），8 秒后还在这一页才补点。
+- 回归样例：`docs/shots/2026-11-03-cook-wheel.png`。
+
+代码：`ui/labels.py: WHEEL_BUTTONS / WHEEL_TITLES / WHEEL_BUTTON_BAND / WHEEL_BUTTON_POINT`、
+`training/handlers/wheel.py: handle_spin_wheel`、`handlers/__init__.py`
+（在 `handle_fishing_ground` 之后、`handle_boost_training` 之前）。
+
+### 兜底：没登记的「品质卡」页面 → 按品质猜一张 + 存 `logs/unmark/`
+
+- 用户 2026-11-03 口径：**不认识的事件页也不能只点屏幕中央赌一把**。
+- 规则：2~3 张横向并排、标题条按品质上色的卡 → **彩 > 金 > 紫 > 蓝**，
+  同品质比**队友头像数量**（多的优先，有队友优先于没队友），同分取靠右。
+- 存证：`dump_unmark` 写到 **`logs/unmark/`**，一个样本三件套
+  `<时间>_<tag>_s<步数>.jpg` / `.txt`（OCR 原文）/ `.json`（每张卡的品质/队友数/最终选了谁）。
+  和 `logs/unknown/` 的区别：unknown 是「完全认不出来」，unmark 是「猜着选了、等人标注」。
+- 判据底子还是 `parsers.quality_cards`（**至少两张**卡能判出品质色才算选项页），
+  所以普通按钮行、信息栏、结算表格不会被抢走。
+- 位置：`handlers/__init__.py` 的**最末**（`handle_unmarked_cards`），
+  任何专属 handler 认领过的页面都轮不到它。
+- 邻页排除：`labels.QUALITY_CARD_EXCLUDE`（扭蛋/商店/游戏厅/餐厅/题材/笔记/队伍/赛程/
+  结算/结果页）。**排最后 ≠ 安全**：专属 handler 某一拍抛异常或漏判时兜底就上了。
+  2026-11-03 实跑加这张表之前，`--all-hits` 多命中 15 张回归图；加完只剩 2 张
+  （做饭页自己 + 一张排在它前面的页面）。
+- 局限（写在这里免得以后当 bug）：`mates_on_card` 对「深蓝底 + 头像条」只能判有/无，
+  数不出具体个数；颜色是橙色小人的（技能卡那种）才能数出数量。
+
+代码：`training/handlers/unmarked.py: handle_unmarked_cards`、
+`BaseGirlsTask.dump_unmark`。
 
 ## 炒股选股页（`请选择你要投资的股票`，天赋「股神!」）
 

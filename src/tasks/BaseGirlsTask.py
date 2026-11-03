@@ -419,6 +419,49 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         except Exception as e:
             self.log_debug(f"存证失败: {type(e).__name__}: {e}")
 
+    def dump_unmark(self, texts, tag, cards=None, picked=None, note=""):
+        """把「还没登记成正式 handler、只能按品质色猜着选」的页面存到 logs/unmark/。
+
+        和 `dump_unknown` 的区别（2026-11-03 用户口径）：
+          - `logs/unknown/` = **完全认不出来**，只能点屏幕中央；
+          - `logs/unmark/`  = 按品质色**已经猜着选了**，属于「未标注样本」——
+            人工看一眼 json 里的每张卡品质/队友数/最后选了谁，就能把这一页
+            补成正式 handler，或者回填一个更好的判据。
+
+        每个样本三件套：`<时间>_<tag>_s<步数>.jpg` / `.txt`（OCR 原文）/
+        `.json`（候选卡与选中结果）。
+        """
+        try:
+            import json
+            import os
+            import cv2
+            from src.tasks.training.constants import JPEG_PARAMS
+            root = os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))))
+            folder = os.path.join(root, "logs", "unmark")
+            os.makedirs(folder, exist_ok=True)
+            name = f"{time.strftime('%m%d-%H%M%S')}_{tag}_s{getattr(self, '_steps', 0)}"
+            frame = self.frame
+            if frame is not None:
+                cv2.imwrite(os.path.join(folder, name + ".jpg"), frame, JPEG_PARAMS)
+            with open(os.path.join(folder, name + ".txt"), "w", encoding="utf-8") as f:
+                f.write("\n".join(
+                    f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
+            meta = {
+                "tag": tag,
+                "note": note,
+                "picked": picked,
+                "cards": [{"name": c.get("name"), "quality": c.get("quality"),
+                           "mates": c.get("mates"),
+                           "x": c["box"].x, "y": c["box"].y}
+                          for c in (cards or [])],
+            }
+            with open(os.path.join(folder, name + ".json"), "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+            self.log_info(f"未标注样本 logs/unmark/{name}.jpg")
+        except Exception as e:
+            self.log_debug(f"未标注样本存证失败: {type(e).__name__}: {e}")
+
     @staticmethod
     def match_text(texts, names):
         """在一批 OCR 结果里找名字匹配的框。names 支持字符串 / 元组 / 正则。"""

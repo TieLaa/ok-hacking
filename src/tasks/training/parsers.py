@@ -477,9 +477,12 @@ class TrainingParsersMixin:
         if m:
             total += int(m.group(1)) * int(m.group(2))
             s = s.replace(m.group(0), "")
-        # 一次性：立刻恢复 N 精力 / 恢复 N 点
-        if mm := re.search(r"恢复(\d+)(?:精力|点)", s):
-            total += int(mm.group(1))
+        # 一次性：立刻恢复 N 精力 / 恢复 N 点 —— 可能有多句同时出现：
+        # 「增强 | 立刻额外恢复30精力」叠在「立刻恢复60精力」上（2026-11-03 实拍，
+        # 第2周星期五那张「精力恢复+」）。旧版只取第一处 → 110（应为 170），
+        # 恢复价值被低估了三成。
+        total += sum(int(m2.group(1))
+                     for m2 in re.finditer(r"恢复(\d+)(?:精力|点)", s))
         return total
 
     # 「打折」卡的价格药丸里有**两个**数字：左边划掉的原价、右边实付价。
@@ -576,8 +579,8 @@ class TrainingParsersMixin:
                 (n.y + n.height / 2) / self.height - 0.41))
 
             quality, hue, sat = self.card_band_quality(cx)
-            # 彩色 = 2026-11-01 训练等级提升后解锁的最高品质，排在金之前。
-            rank = {"彩": 4, "金": 3, "紫": 2, "蓝": 1}.get(quality, 0)
+            # 彩色 = 2026-11-01 训练等级提升后解锁的最高品质，优先级最高
+            # （顺序口径在 `scoring.QUALITY_RANK` / `places/street.py`，这里只判颜色）。
             mate = self.has_mate_badge(cx)
             # 「增强款」斜标签贴在卡片右上角（2026-10-30 截图：金/蓝卡都有）。
             # 卡内说明里也有「增强 额外获得体能+14」，所以必须限定在卡片顶部
@@ -603,8 +606,9 @@ class TrainingParsersMixin:
                     if title.y + title.height <= n.y < price_top
                     and abs((n.x + n.width / 2) / self.width - cx) < 0.13)
             # 「+」不进分（用户 2026-11-02）：只代表同名卡片之间的档位差，
-            # 没「+」的同名卡本身就是低一级品质，已在 rank 里体现。队友同理只做同分比较。
-            score = rank * 10 + (3 if mate else 0)
+            # 没「+」的同名卡本身就是低一级品质。**这里不再算任何分数** ——
+            # 选谁由 `places/street.gacha_candidates` 按显式档位决定
+            # （品质 → 增强款 → 队友 → 恢复 → 价格），避免两套排序各说各话。
             cards.append({
                 "name": title.name.strip(),
                 "price": int(price) if price is not None else None,
@@ -616,7 +620,6 @@ class TrainingParsersMixin:
                 "effect": effect,
                 "clear": self.is_stamina_clear(effect),
                 "recover": self.stamina_recover(effect),
-                "score": score,
                 "x": int(title.x + title.width / 2),
                 "y": int(title.y + title.height / 2),
             })
@@ -677,6 +680,89 @@ class TrainingParsersMixin:
         frac = counts / float(counts.sum())
         return (int((frac >= RAINBOW_BAND_BIN_FRAC).sum()) >= RAINBOW_BAND_MIN_BINS
                 and float(frac.max()) < RAINBOW_BAND_MAX_TOP)
+
+    # ---------- 通用「品质卡」判定（未登记事件页的兜底，2026-11-03） ----------
+    # 卡片**标题条**按品质上色，色相阈值与扭蛋/游戏厅共用（card_quality_at）。
+    # 2026-11-03 做饭页实测（logs/live/cook_now.jpg，1549x871，取标题条）：
+    #   隔夜饭（蓝）       H/S/V = 103/121/197
+    #   菜市场的普通食材（紫）= 135/115/188
+    #   珍稀食材（金）      = 21/251/193
+    # 用户口径（2026-11-03）：优先级 彩 > 金 > 紫 > 蓝；同品质再比队友数量
+    # （队友多的优先、有队友的优先于没队友的）。**排序**在
+    # `scoring.quality_card_order`，这里只负责「这张卡是什么颜色、几个人」。
+    # 标题条本身没颜色时，再往上看卡片头部这一段（做饭页卡头 ≈ 标题上方 0.014~0.115 屏高）。
+    QUALITY_HEAD_BAND = (0.115, 0.014)
+    # 候选卡片标题的行范围（比例）：做饭页 0.41、技能卡 0.43、餐厅卡 0.53 都在内。
+    QUALITY_CARD_ROWS = (0.28, 0.62)
+    # 同一行的纵向容差：标题中心 y 相差不到 0.06 屏高就算一行。
+    QUALITY_ROW_TOL = 0.06
+
+    def card_quality_color(self, box):
+        """这个标题框所在卡片的品质色（彩/金/紫/蓝/其他）。
+
+        先取**标题条**（box 自己那一条横带）：做饭页三张卡的标题条就是品质色；
+        标题条是白底/透明时，再往上看**卡片头部**。
+        **只看颜色、不看名字** —— 名字 OCR 会被截断（实机帧读到「隔夜…」
+        「菜市场的普通食…」），按名字匹配必然漏。
+        """
+        h = self.height
+        cx = (box.x + box.width / 2) / self.width
+        y1f, y2f = box.y / h, (box.y + box.height) / h
+        quality = self.card_quality_at(cx, y1f, y2f, rainbow=True)[0]
+        if quality != "其他":
+            return quality
+        up, down = self.QUALITY_HEAD_BAND
+        return self.card_quality_at(cx, max(0.0, y1f - up),
+                                    max(0.0, y1f - down), rainbow=True)[0]
+
+    def quality_cards(self, texts):
+        """横向并排的 2~3 张「标题条按品质着色」的卡，按 x 排好返回。
+
+        每项：`{"box", "name", "quality", "rank", "mates"}`；不足两张返回 []。
+        判据（缺一不可）：
+          1. 同一行、2~3 张、横向铺开 ≥ 0.25 屏宽；
+          2. 标题 2~10 个字、不含数字、不是角标/装饰词；
+          3. **至少两张**能判出品质色 —— 只有一张有色的是普通按钮/标题，不是选项页。
+
+        队友数只数**卡片上沿之上**的小头像：食材/扭蛋的卡头本身就是橙金色，
+        照 `mates_on_card` 原样数会把卡头图标当成队友（做饭页金卡实测被数成 2 个）。
+        深蓝头像条的判据仍由 `mates_on_card` 负责，它只看标题上方那一条带。
+        """
+        h, w = self.height, self.width
+        rows = {}
+        for t in texts:
+            s = t.name.strip()
+            if not (2 <= len(s) <= 10) or any(ch.isdigit() for ch in s):
+                continue
+            if self.is_label(s) or self.is_decor(s):
+                continue
+            cy = (t.y + t.height / 2) / h
+            if not (self.QUALITY_CARD_ROWS[0] <= cy <= self.QUALITY_CARD_ROWS[1]):
+                continue
+            rows.setdefault(round(cy / self.QUALITY_ROW_TOL), []).append(t)
+        icons = self.find_teammate_icons(0.0, 1.0)
+        best = []
+        for group in rows.values():
+            if not (2 <= len(group) <= 3):
+                continue
+            group.sort(key=lambda t: t.x)
+            cards = []
+            for t in group:
+                quality = self.card_quality_color(t)
+                head_top = t.y - h * self.QUALITY_HEAD_BAND[0]
+                mates = self.mates_on_card(
+                    t, [p for p in icons if p[1] < head_top])
+                cards.append({"box": t, "name": t.name.strip(),
+                              "quality": quality, "mates": mates})
+            if sum(1 for c in cards if c["quality"] != "其他") < 2:
+                continue
+            span = (cards[-1]["box"].x + cards[-1]["box"].width
+                    - cards[0]["box"].x)
+            if span < w * 0.25:
+                continue
+            if len(cards) > len(best):
+                best = cards
+        return best
 
     def has_mate_badge(self, cx):
         """卡头左上角有没有队友标记（= 这次带队友加成）。
@@ -957,6 +1043,61 @@ class TrainingParsersMixin:
         r = roi[:, :, 2].astype(int)
         deep = (b > r) & (r < 120) & (g < 120) & (b < 160)
         return 1 if float(deep.mean()) > 0.08 else 0
+
+    # ---------- 餐厅打工卡：头顶胶囊里有几个队友（2026-11-03） ----------
+
+    # 现版本餐厅两卡的队友条是「深蓝胶囊 + chibi 头像」，胶囊宽度随人数变，
+    # 但 `mates_on_card` 的深蓝兜底只能给「有/没有」（0 或 1）：
+    # 实测帧 docs/shots/restaurant_cards.png（1549x871）左卡 2 人、右卡 1 人，
+    # 两张都读成 1 → 平局 → 选右边，用户要的「桌游GM 多两个就选左边」永远不生效。
+    # 所以直接**数脸**：同一套 chibi 的脸是同一块很亮的暖肤色，头发/背景/卡面都不是这个色。
+    # 亮暖肤色：r≥232、g≥205、b≥190、r-b≥20（前三条排除深蓝胶囊，最后一条排除纯白/灰白）。
+    MATE_SKIN = (232, 205, 190, 20)   # r, g, b, r-b 下限
+    MATE_FACE_AREA = (0.00020, 0.00160)   # 占整帧面积的比例（1549x871 实测 793~1008）
+    MATE_FACE_AR = (0.55, 1.50)           # 脸块的宽高比（实测 0.73 / 0.97 / 1.16）
+
+    def mate_face_count(self, box, up=6.0, span=1.1):
+        """标题框**上方**那排 chibi 头像有几个（按肤色连通块数）。读不到帧返回 None。
+
+        只在标题上方 `up` 个字高、横向 `span` 个字宽的范围里数
+        （餐厅实测：头像在标题上方 3.3~4.2 个字高、左右各 0.4 个字宽，
+        6.0 个字高足够宽松，也不会碰到相邻那张卡）。
+        面积/宽高比过滤掉环境里的碎块；两个头之间隔着头发，不会粘成一块。
+        """
+        frame = self.frame
+        if frame is None or box is None:
+            return None
+        h, w = frame.shape[:2]
+        hs = max(1, box.height)
+        cx = box.x + box.width / 2
+        x1 = int(max(0, cx - span * box.width))
+        x2 = int(min(w, cx + span * box.width))
+        y1 = int(max(0, box.y - up * hs))
+        y2 = int(max(0, box.y - 0.5 * hs))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        roi = frame[y1:y2, x1:x2]
+        b = roi[:, :, 0].astype(int)
+        g = roi[:, :, 1].astype(int)
+        r = roi[:, :, 2].astype(int)
+        r_lo, g_lo, b_lo, rb_lo = self.MATE_SKIN
+        skin = ((r >= r_lo) & (g >= g_lo) & (b >= b_lo)
+                & ((r - b) >= rb_lo)).astype(np.uint8)
+        if not skin.any():
+            return 0
+        skin = cv2.morphologyEx(skin, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+        n, _lab, stats, _cent = cv2.connectedComponentsWithStats(skin, 8)
+        area_lo, area_hi = (w * h * f for f in self.MATE_FACE_AREA)
+        ar_lo, ar_hi = self.MATE_FACE_AR
+        count = 0
+        for i in range(1, n):
+            ww, hh, area = int(stats[i, 2]), int(stats[i, 3]), int(stats[i, 4])
+            if not (area_lo <= area <= area_hi):
+                continue
+            if not (ar_lo <= ww / max(hh, 1) <= ar_hi):
+                continue
+            count += 1
+        return count
 
     # ---------- 炒股选股页：卡片头顶的「队友头像」（2026-11-02） ----------
 

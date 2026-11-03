@@ -41,6 +41,7 @@ LOG_DIR = os.path.join(ROOT, "logs")
 # (目录, 保留天数, 是否保留同名 txt)
 BY_AGE = [
     ("unknown", 3, True),     # 只删 jpg，txt 全留
+    ("unmark", 3, True),      # 未标注样本（品质卡兜底/做饭）：只删 jpg，txt+json 全留
     ("events", 2, False),
     ("debug", 3, True),
 ]

@@ -38,6 +38,8 @@
   "2026-11-02-note-study-wait.png": "handle_note_study",
   "2026-11-02-theme-select-tie.png": "handle_theme_select",
   "2026-11-02-theme-select.png": "handle_theme_select",
+  "2026-11-03-cook-ingredient.png": "handle_ingredient_select",
+  "2026-11-03-cook-wheel.png": "handle_spin_wheel",
   "restaurant_cards.png": "handle_restaurant",
   "restaurant_detail_blocked.png": "handle_activity_go"
 }

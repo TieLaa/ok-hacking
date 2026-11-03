@@ -1,4 +1,4 @@
-"""佐久间雨乃的天赋「钓鱼」：钓鱼场三选一 + 钓鱼转盘。
+"""佐久间雨乃的天赋「钓鱼」：钓鱼场三选一（转盘已并入 `wheel.py`）。
 
 2026-10-30 用户实机截图（第1周 星期四，79/130，零用钱 120）：
 
@@ -6,8 +6,8 @@
    家门口的小溪（0）/ 普通的钓鱼场（10）/ 专业的钓鱼场（20），
    卡上还有一句说明（水至清则无鱼 / 如果钓上这一条… / 风浪越大，鱼越贵），
    底部黄色「确定」。用户口径：**尽量选高价格的**。
-2. 「钓鱼啦！」大转盘（左「手感一般」/ 右「运气超好」），
-   底部黄色「转一转」。
+2. 「钓鱼啦！」大转盘（左「手感一般」/ 右「运气超好」），底部黄色「转一转」
+   —— 2026-11-03 起归 `handlers/wheel.py: handle_spin_wheel`（和做饭转盘共用）。
 
 价格那三个数字（0/10/20）OCR **读不到**：实测整页只认出三张卡的标题、说明
 和「确定」（logs/debug/1030-152606_nochange3/ocr.txt）。所以按位置取最右那张
@@ -17,11 +17,9 @@
 任务卡死（logs/debug/1030-152608_nochange3）。
 """
 
-import time
-
 
 class FishingHandlers:
-    """钓鱼天赋的两个界面（mixin，方法通过 self 访问任务状态）。"""
+    """钓鱼天赋的界面（mixin，方法通过 self 访问任务状态）。"""
 
     GROUND_NAMES = ("家门口的小溪", "普通的钓鱼场", "专业的钓鱼场")
 
@@ -67,27 +65,6 @@ class FishingHandlers:
         self.log_info("钓鱼场：确定")
         return True
 
-    def handle_fishing_wheel(self, texts):
-        """「钓鱼啦！」转盘：**只点一次**，后面全是动画。
-
-        用户口径（2026-10-30）：点一次「转一转」就够了，转盘动画要几秒；动画
-        期间界面文字还是「钓鱼啦/转一转」，旧版以为没反应就每秒再点一次（一次
-        钓鱼连点 4 次）。现在点完锁 8 秒，期间只等不点；8 秒后如果还停在
-        这一页（上次没点中/动画卡住），才允许再点一次。
-        """
-        btn = self.exact_text(texts, ("转一转",))
-        if btn is None and self.match_text(texts, ("钓鱼啦",)) is None:
-            return False
-        if time.monotonic() - getattr(self, "_fishing_clicked_at", 0.0) < 8.0:
-            self.log_debug("钓鱼转盘：动画播放中，等它转完（不重复点）")
-            self.sleep(0.5)
-            return True
-        self._fishing_clicked_at = time.monotonic()
-        if btn is not None:
-            self.click_box(btn, after_sleep=0.6)
-        else:
-            # 按钮文字没认出来：底部中央固定位置（实测按钮中心 0.50w / 0.953h）
-            self.click(int(self.width * 0.5), int(self.height * 0.953),
-                       after_sleep=0.6)
-        self.log_info("钓鱼：点「转一转」（只点一次，后面是动画）")
-        return True
+    # 「钓鱼啦！」那一页的转盘已并入 `handlers/wheel.py: handle_spin_wheel`
+    # （2026-11-03 用户口径：「转一转」按钮的位置和文案是通用的，转盘内容随机、
+    # 不影响决策）。这里只留钓鱼场三选一。
