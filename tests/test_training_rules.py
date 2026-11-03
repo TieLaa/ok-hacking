@@ -3160,6 +3160,52 @@ class StylePlanRules(unittest.TestCase):
         }
         self.assertEqual(got, {"桌游GM": 2, "当服务员": 1})
 
+    # ---------- 餐厅：数脸准了，但「数不到就退回深蓝兜底」会把人数加脏 ----------
+
+    @staticmethod
+    def _restaurant_frame(faces_on_left=0, navy_on_right=True):
+        """合成一帧：左卡头顶画 N 张 chibi 脸，右卡兜底带里画一块深蓝（= 背心图标）。
+
+        颜色抄生产判据：脸 = 亮暖肤色（r240/g215/b205），深蓝 = (b150,g40,r30)。
+        """
+        frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        for i in range(faces_on_left):
+            x = 560 + i * 80
+            frame[260:292, x:x + 32] = (205, 215, 240)      # BGR
+        if navy_on_right:
+            frame[270:330, 1040:1100] = (150, 40, 30)       # BGR：深蓝（r<120）
+        return frame
+
+    def test_restaurant_face_count_wins_over_deep_fallback(self):
+        """2026-11-03 实跑（logs/events/1103-203745）：左卡 2 张脸、右卡 0 张。
+
+        右卡自己的深蓝背心图标让 `mates_on_card` 的深蓝占比 0.107 > 0.08 →
+        白送 1 个队友 → 「2 人 vs 1 人」只多 1 个 → 规则不生效，点到当服务员。
+        数到脸就只认脸：桌游GM（2）比当服务员（0）多 2 个 → 选左边。
+        """
+        if cv2 is None:
+            self.skipTest("没有 cv2")
+        task = FakeTask(self._restaurant())
+        task._style = "商店流"
+        task._executor.frame = self._restaurant_frame(faces_on_left=2)
+        called = []
+        task.mates_on_card = lambda b, icons: called.append(b.name) or 1
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][1], "桌游GM")
+        self.assertEqual(called, [], "数到脸就不该再走深蓝兜底")
+
+    def test_restaurant_deep_fallback_still_used_without_any_face(self):
+        """整页一个脸都没数到（旧版深蓝圆标记）→ 仍然用深蓝兜底，规则不失效。"""
+        if cv2 is None:
+            self.skipTest("没有 cv2")
+        task = FakeTask(self._restaurant())
+        task._style = "商店流"
+        task._executor.frame = self._restaurant_frame(faces_on_left=0)
+        seen = []
+        task.mates_on_card = lambda b, icons: seen.append(b.name) or 0
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(sorted(seen), ["当服务员", "桌游GM"])
+
 
 class EmergencyStopSmoke(unittest.TestCase):
     """F8 轮询兜底：注册失败也要能启动，ready 必须置位（旧版有竞态）。"""

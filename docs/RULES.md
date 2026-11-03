@@ -120,7 +120,7 @@
 
 ## 1.1 餐厅打工的选项（2026-11-03，通用）
 
-实现：`handle_restaurant` / `restaurant_order` / `restaurant_preference` / `option_selectable` / `card_stamina_cost`
+实现：`handle_restaurant` / `restaurant_order` / `restaurant_preference` / `card_mate_counts` / `option_selectable` / `card_stamina_cost`
 
 | 顺序 | 规则 |
 |---|---|
@@ -134,7 +134,10 @@
   「深蓝胶囊 + chibi 头像」，旧判据（深蓝连通块）只能给「有 / 没有」，
   `docs/shots/restaurant_cards.png` 左卡实际 2 人、右卡 1 人却都读成 1 → 平局。
   现在按「很亮的暖肤色连通块」数人头（同一张卡的头像之间隔着头发，不会粘成一块），
-  数不到时退回旧的「有/没有」判据。
+  **只要有一张卡数到脸就只认脸**；整页一个脸都没数到（旧版深蓝圆标记的界面）才退回
+  旧的「有/没有」判据 —— 那个兜底分不清「队友标记」和「卡片自己的深蓝图标」
+  （2026-11-03 20:37 实跑：当服务员头顶 0 个脸，背心图标却被记成 1 个队友，
+  「2 人 vs 0 人」读成「2 人 vs 1 人」，规则永远差 1 个不触发）。
 - 名字认不出（OCR 截断）时按位置理解：右边当服务员、左边桌游GM。
 - **精力读的是整帧 OCR**（`top_bar(texts)`，2026-10-31 改）：裁剪顶栏重 OCR 会把
   `0/130` 读成 `301130`（斜杠被吃掉）→ `stamina=None`，这条规则就静默失效了。

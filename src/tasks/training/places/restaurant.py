@@ -16,6 +16,13 @@
   今天不再选。
 - 队友个数按**脸**数（`parsers.mate_face_count`，2026-11-03）：现版本的队友条是
   「深蓝胶囊 + chibi 头像」，旧兜底只能给「有/没有」，2 人 vs 1 人被读成平局。
+
+2026-11-03 20:37 实跑补一条（`logs/events/1103-203745_handle_restaurant.jpg`）：
+数脸本身是准的（左卡 2 张脸、右卡 0 张），**是「数不到就退回深蓝兜底」这条把人数加脏了** ——
+右卡自己的深蓝**背心图标**正好落在兜底那条带里（深蓝占比 0.107 > 0.08 阈值），被记成 1 个队友；
+左卡的骑士图标 0.075 刚好没过线 → 「2 人 vs 0 人」读成「2 人 vs 1 人」，差 1 不够 2，
+用户这条规则在**每一局**都不生效（日志 15 次餐厅决策：当服务员 恒为 1 人）。
+所以兜底改成**整页一个脸都没数到**才用（见 `card_mate_counts`）。
 """
 
 import re
@@ -70,7 +77,7 @@ class RestaurantPlace:
         stamina = self.top_bar(texts).get("stamina")
         blocked = self.blocked_activities()
         icons = self.find_teammate_icons(0.0, 1.0)
-        counts = [self.card_mate_count(b, icons) for b in found]
+        counts, how = self.card_mate_counts(found, icons)
         ranked, why = self.restaurant_preference(found, counts)
         free = [b for b in ranked if b.name.strip() not in blocked]
         if not free:
@@ -89,7 +96,7 @@ class RestaurantPlace:
             tail = f"→ {usable[0].name}"
         else:
             tail = f"→ {ranked[0].name}不可选，改 {usable[0].name}"
-        self.log_info(f"餐厅：{detail}｜精力 {stamina}"
+        self.log_info(f"餐厅：{detail}（队友按{how}）｜精力 {stamina}"
                       f"｜今天点不动的 {sorted(blocked) or '无'}"
                       f"｜{why} {tail}")
         return tuple(b.name for b in (usable or free))
@@ -124,12 +131,22 @@ class RestaurantPlace:
         right = max(found, key=lambda b: b.x)
         return WORK_STAMINA_COST if box is right else 0
 
-    def card_mate_count(self, box, icons):
-        """这张卡挂了几个队友头像：先数脸（现版本胶囊），数不到再用旧的「有/没有」判据。"""
-        n = self.mate_face_count(box)
-        if not n:
-            n = self.mates_on_card(box, icons)
-        return n
+    def card_mate_counts(self, found, icons):
+        """两张卡各挂几个队友 → (与 `found` 同序的人数, 用的哪套判据)。
+
+        **先数脸，只要有一张卡数到脸，就只认脸**：现版本（深蓝胶囊 + chibi）的这个
+        判据在真帧上是准的（2026-11-03 四帧实跑：2/0、1/0、2/0 全对）。
+
+        旧版深蓝兜底（`mates_on_card`）**只在整页一个脸都没数到**时才用 —— 它分不清
+        「队友标记」和「卡片自己的图标」，而现版本每张卡的图标都是深蓝的：
+        实跑帧 `logs/events/1103-203745` 里当服务员头顶 0 张脸，背心图标却让兜底那条带
+        的深蓝占比到 0.107（阈值 0.08）→ 白送 1 个队友，2 人 vs 0 人变 2 人 vs 1 人，
+        「桌游GM 多两个就选左边」永远差 1 个。数到脸就不许再走兜底，这个加法就没了。
+        """
+        faces = [self.mate_face_count(b) for b in found]
+        if any(faces):
+            return [f or 0 for f in faces], "数脸"
+        return [self.mates_on_card(b, icons) for b in found], "深蓝兜底"
 
     def option_selectable(self, box, texts, stamina=None, default_cost=0):
         """这张打工卡现在能不能选。
