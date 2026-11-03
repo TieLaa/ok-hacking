@@ -36,6 +36,8 @@ CACHE_DIR = os.path.join(ROOT, "docs", "shots", ".ocr_cache")
 # expected.json 里的这个值表示「该图不该被任何 handler 认领」（防误判样例）
 MISS_MARK = "-"
 
+from tools._console import utf8_stdout, write_report  # noqa: E402
+
 
 def run_ocr(frame):
     from onnxocr.onnx_paddleocr import ONNXPaddleOcr
@@ -96,7 +98,7 @@ class DryRunTask(TrainingTask):
         # 靠「每个调用处都写 `config.get(key, 默认值)`」来兜底。
         # 去掉调用处的死默认值之后（默认值只留在 config_spec 一处），
         # 缺键就会拿到 **None**（falsy）→ 「允许进步行街」被当成 False，
-        # 25 条测试挂掉。**夹具必须和��产一样**，否则测的就不是真实行为。
+        # 25 条测试挂掉。**夹具必须和生产一样**，否则测的就不是真实行为。
         #
         # 例外：`无队长不接开局` 关掉，否则空队长会触发「只跑已有局」的闸门，
         # 开局页全部不再执行，回归就测不到启程/选人/笔记/器材。
@@ -183,6 +185,10 @@ class DryRunTask(TrainingTask):
 
     def info_set(self, *args, **kwargs):
         pass
+
+    def dump_unmark(self, *args, **kwargs):
+        """回归跑不落盘：否则每跑一次 check_handlers 就往 logs/unmark/ 塞一张图。"""
+        return None
 
     # ---------- 日志 ----------
     def log_info(self, msg, **kwargs):
@@ -642,6 +648,34 @@ def load_allowlist():
     return allowed
 
 
+def check_mojibake():
+    """源码里不许出现 U+FFFD —— 那是被 GBK 吃掉的字符，中文已经丢了。
+
+    2026-11-03 用户要求排查 GBK 影响时扫出来的：`src/` 和 `tools/` 共 5 处，
+    全在注释里（例如「接手别人…局时」本该是「接手别人的局时」，中间那个字被吃掉）。
+    乱码进了源码就**读不回来**（原文已丢），所以把它变成门禁：出现即 exit 1。
+    """
+    problems = []
+    for sub in ("src", "tools"):
+        for dp, _, files in os.walk(os.path.join(ROOT, sub)):
+            for f in files:
+                if not f.endswith(".py"):
+                    continue
+                path = os.path.join(dp, f)
+                rel = os.path.relpath(path, ROOT).replace("\\", "/")
+                try:
+                    text = open(path, encoding="utf-8").read()
+                except OSError:
+                    continue
+                for lineno, line in enumerate(text.splitlines(), 1):
+                    if "\ufffd" in line:
+                        problems.append(f"{rel}:{lineno}")
+    print(f"编码门禁：源码里被 GBK 吃掉的字符（U+FFFD）{len(problems)} 处")
+    for item in problems:
+        print(f"  - {item}")
+    return problems
+
+
 def check_labels():
     """文案门禁：按钮词不许在调用处写内联字面量，必须走 labels.BUTTONS。
 
@@ -701,11 +735,13 @@ def check_labels():
 
 
 def main():
+    utf8_stdout()
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     verbose = "--verbose" in sys.argv
     use_cache = "--cache" in sys.argv
     show_all = "--all-hits" in sys.argv
     update = "--update-expected" in sys.argv
+    report = []
 
     if args:
         paths = []
@@ -758,6 +794,9 @@ def main():
             for hname, _ in hits[1:]:
                 print(f"    + 同时命中 {hname}")
 
+        action = describe(hits[0][1]) if hits else "-"
+        report.append(f"{base}\t{first or '-'}\t{want or '-'}\t{action}")
+
     if update:
         save_expected(expected)
         print(f"已更新 {EXPECTED_PATH}（{len(expected)} 条）")
@@ -782,9 +821,20 @@ def main():
     place_problems = check_places()
     inter_problems = check_interactions()
     config_problems = check_config()
+    moji_problems = check_mojibake()
 
-    if fails or misses or arch_problems or label_problems or date_problems \
-            or place_problems or inter_problems or config_problems:
+    failed = bool(fails or misses or arch_problems or label_problems
+                  or date_problems or place_problems or inter_problems
+                  or config_problems or moji_problems)
+    # 中文结果落盘（UTF-8）：stdout 可能被父进程按 cp936 解码（见 tools/_console.py）。
+    lines = ["# check_handlers 报告",
+             f"结果：{'失败' if failed else '通过'}",
+             "# 图片\t实际\t期望\t动作",
+             *report]
+    report_path = write_report("check_handlers.txt", "\n".join(lines) + "\n")
+    print(f"report={report_path}")
+
+    if failed:
         print("回归失败")
         return 1
     print("回归通过")

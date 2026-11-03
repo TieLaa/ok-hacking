@@ -69,6 +69,16 @@
 - 脚本不写业务判据。需要「怎么点」的逻辑，说明它该进 handler。
 - 每个脚本必须有一段 docstring：为什么存在、怎么用、依赖哪些环境（管理员 / 游戏进程 / 缓存）。
 - 回归类脚本必须有退出码语义：通过 `0`，失败 `1`。
+- **中文输出不要依赖控制台编码**（2026-11-03）：
+  - stdout 只保证「不崩」——`tools/_console.utf8_stdout()`（UTF-8 + `errors="replace"`；
+    本机默认 cp936，`✓/✗` 会直接 UnicodeEncodeError，看起来像判据失败）；
+  - 需要**被读**的中文（OCR 结果、回归报告）写 UTF-8 文件：
+    `tools/_console.write_report()` → `logs/reports/`，或同目录的 `ocr.txt`；
+    非交互（`stdout.isatty()` 为假）时只打 ASCII 的件数/路径；
+  - 原因写在 `tools/_console.py` 顶部：本机码页 936，PowerShell 的 cmdlet 会把
+    UTF-8 中文解坏（反过来写 GBK 字节，终端和 cmdlet 两条路都坏）。
+    不要靠在调用处记「别用 cmdlet」，靠工具自己把内容落盘。
+- 源码里不许出现 U+FFFD（被 GBK 吃掉的字符）：`check_handlers.py: check_mojibake()` 是门禁。
 
 ## 5. 回归门禁
 
