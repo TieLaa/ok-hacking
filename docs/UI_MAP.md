@@ -59,6 +59,27 @@
 - 代码：`constants.WEEKEND_PLAN`、`places/map.py: today_places / prefer_mate_venue`、
   `places/restaurant.py: restaurant_preference`。
 
+## 第 7 周以后：每天先逛商店（用户 2026-11-03，优先级最高）
+
+- 出现时机：顶栏 `第N周` 的 N ≥ 7（常量 `LATE_SHOP_FROM_WEEK`）。这时只要赢了就
+  一直有比赛，节奏是「一天休息、一天比赛」，所以**每天**都先把商店逛完再干别的。
+- 入口：右上角 `商店`（图标+文字），实测 `(1724,216,76,38)` → 中心
+  `(0.917, 0.218)`（训练日主界面，`logs/debug/1026-112852_nochange3/ocr.txt`）、
+  `(1389,170,66,37)` → `(0.918, 0.216)`（周末首页，`logs/debug/1029-140118_stall5s/ocr.txt`），
+  都落在 `Defs.region("shop_entry") = (0.78, 0.08, 1.00, 0.32)` 里。
+- 判据（`training/daycycle.py: late_shop_step`，一天的入口 ③，缺一不可）：
+  顶栏 ≥ 第7周 **且** 不是商店内页 **且** 这一页有「星期X」或「出行」
+  **且** 右上角 `shop_entry` 那块真的读到商店按钮（台词里的「商店」不算）
+  **且** 今天还没真进过店。
+- 一天只真进一次：`_shop_day` 在 `handle_shop` 确认看到商店页之后才记；
+  点空不算，下一拍重试，最多 `SHOP_ENTRY_TRIES = 2` 次。
+- 买的仍是商店自己的「购买策略」（默认金/紫），**不是清空**；比赛日 +
+  `赛前清空余额` 打开时才清空。
+- 位置：**只有两处** —— 判据在 `daycycle.late_shop_step`（和「训练/休息」「出行」
+  两个日入口同一个模块），调用点是 `flow.run` 主循环里、`_handle_any` 之前
+  （`if self.late_shop_step(texts): continue`）。**不是**一个独立 handler，
+  所以 `HANDLERS` 里没有它，也不会被别的 handler 抢走。
+
 ## 周末地图的标记
 
 | 标记 | 外观 | 含义 |

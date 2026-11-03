@@ -25,8 +25,10 @@
 
 import time
 
-from src.tasks.ui import labels
-from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,  # noqa: F401
+from src.tasks.ui import Defs, labels
+from src.tasks.training.constants import (JPEG_PARAMS, LATE_SHOP_FROM_WEEK,
+                                          PROJECT_ROOT,  # noqa: F401
+                                          SHOP_ENTRY_TRIES,
                                           STYLE_BY_NAME)  # noqa: F401
 
 
@@ -179,6 +181,62 @@ class DayCycleMixin:
             # 按钮还没出来，这一拍只推进对话（不算用掉当天机会）
             return "推进对话", "对话框提到「出行」但还没按钮 → 先推进对话"
         return None, "「出行」按钮认不出来"
+
+    # ---------- 一天的入口 ③：第 7 周以后，每天先逛商店（2026-11-03） ----------
+
+    def late_shop_step(self, texts):
+        """第 7 周以后：每天先逛一次商店。返回 True = 这一拍已经点过入口。
+
+        用户 2026-11-03 口径（**优先级最高**）：「时间来到第 7 周以后，如果赢了会
+        一直有比赛，按照一天休息一天比赛的顺序，新逻辑就是第 7 周以后每天都进商店
+        买合适的商品」。所以它和上面「训练/休息」「出行」是**同级的一天入口**，
+        判断就写在这里（本模块管「一天」，不要在每个 handler 里各判一次）。
+
+        调用点在 `flow.run` 主循环里、`_handle_any` 之前 —— 一处盖住训练日主界面、
+        比赛日主界面、周末首页三种页面，谁也不会先把手里的这一天用掉。
+        """
+        week, day = self.current_day(texts)
+        if week is None or week < LATE_SHOP_FROM_WEEK:
+            return False                       # 第 7 周之前：这条不生效
+        if self.shop_page(texts):
+            return False                       # 已经在店里 → handle_shop 买/关
+        if (self.match_text(texts, "星期") is None
+                and self.match_text(texts, "出行") is None):
+            return False                       # 不是带日期的主界面（剧情/结算/开局页）
+        box = self.find_shop_button(texts)
+        if box is None:
+            return False
+        # 入口必须在右上角 shop_entry 那块里：`find_shop_button` 的整屏兜底会返回
+        # 台词里的「商店」（「那家商店早上六点会卖打折商品」），那个不能点。
+        x1, y1, x2, y2 = Defs.region("shop_entry")
+        cx = (box.x + box.width / 2) / self.width
+        cy = (box.y + box.height / 2) / self.height
+        if not (x1 - 0.06 <= cx <= x2 and y1 <= cy <= y2):
+            return False
+        key = (week, day)
+        if key == getattr(self, "_shop_day", None):
+            return False                       # 今天已经真进过店（handle_shop 记的账）
+        if day is None:
+            # 星期读不到：退化成「至少隔 60 秒再进一次」，别整天反复点
+            if time.monotonic() - getattr(self, "_shop_at", 0.0) < 60:
+                return False
+            tries = 1
+        else:
+            if (key == getattr(self, "_shop_try_key", None)
+                    and getattr(self, "_shop_try_count", 0) >= SHOP_ENTRY_TRIES):
+                return False                   # 今天点了两次都没打开 → 别空点
+            tries = (getattr(self, "_shop_try_count", 0) + 1
+                     if key == getattr(self, "_shop_try_key", None) else 1)
+        self._shop_try_key, self._shop_try_count = key, tries
+        self._shop_at = time.monotonic()
+        # 买什么不变：按「购买策略」买合适的；只有比赛日 + 赛前清空才清空
+        match_day = self.match_text(texts, ("VS", "跳过比赛", "前往比赛")) is not None
+        self._shop_spend_all = bool(match_day and self.config.get("赛前清空余额"))
+        self.click_box(box, after_sleep=0.9)
+        self.log_info(f"第{week}周（≥{LATE_SHOP_FROM_WEEK} 周）：每天先逛商店"
+                      f"（星期{day or '?'}｜第 {tries}/{SHOP_ENTRY_TRIES} 次点）"
+                      + ("（赛前清空）" if self._shop_spend_all else ""))
+        return True
 
     # ---------- 队长 / 流派：两条解析路径 ----------
 

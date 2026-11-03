@@ -267,6 +267,13 @@ class TrainingFlowMixin:
                 self.log_info("注册球员流程完成（已回大厅）→ 任务完成", notify=True)
                 return True
 
+            # ---- 第 7 周以后：每天先逛商店（用户 2026-11-03，优先级最高）----
+            # 放在所有 handler 之前 —— 一处盖住训练日 / 比赛日 / 周末首页三种入口，
+            # 否则训练、前往比赛、出行会先把这一天用掉（判据见 daycycle.late_shop_step）。
+            if self.late_shop_step(texts):
+                self.sleep(interval)
+                continue
+
             if self._handle_any(texts, frame):
                 self.sleep(interval)
                 continue

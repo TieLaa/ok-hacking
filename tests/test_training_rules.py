@@ -2720,6 +2720,74 @@ class WeekendMapRules(unittest.TestCase):
         self.assertTrue(any("有「扭蛋增强！」" in m and "步行街在打折" in m
                             for m in task.logs), task.logs)
 
+    # ---------- 第 7 周以后：每天都先逛商店（用户 2026-11-03，优先级最高） ----------
+    # 判据本体在 `daycycle.late_shop_step`（一天的入口 ③），调用点是 flow.run 主循环里、
+    # `_handle_any` 之前 —— 所以这里直接测那个方法，不再另立 handler。
+
+    # 训练日主界面实测「商店」框 (1724,216,76,38)（logs/debug/1026-112852_nochange3/ocr.txt），
+    # 周末首页是 (1389,170,66,37)（logs/debug/1029-140118_stall5s/ocr.txt）—— 都在 shop_entry 里。
+    SHOP_BTN = box(1724, 216, "商店", 76, 38)
+
+    def _late_hub(self, week, day="星期三", with_shop=True, extra=()):
+        texts = [box(30, 20, f"第{week}周", 120, 40), box(200, 20, day, 130, 40),
+                 box(380, 16, "100/130", 210, 53),
+                 box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
+        if with_shop:
+            texts.append(self.SHOP_BTN)
+        return texts + list(extra)
+
+    def test_late_shop_enters_every_day_from_week7(self):
+        """第 7 周起：训练日主界面也先进店（先于训练/休息）。"""
+        for week in (7, 8, 12):
+            task = self.styled("扭蛋流", self._late_hub(week))
+            self.assertTrue(task.late_shop_step(task._texts), week)
+            self.assertEqual(task.actions[-1][1], "商店", week)
+
+    def test_late_shop_covers_weekend_home(self):
+        """周末首页（同时有「出行」）同样先逛店。"""
+        home = self._home_texts("星期六")
+        home[0] = box(30, 20, "第8周", 120, 40)
+        task = self.styled("扭蛋流", home + [self.SHOP_BTN])
+        self.assertTrue(task.late_shop_step(task._texts))
+        self.assertEqual(task.actions[-1][1], "商店")
+
+    def test_late_shop_not_before_week7(self):
+        """第 7 周之前一条都不改：一店都不进。"""
+        for week in (1, 5, 6):
+            task = self.styled("扭蛋流", self._late_hub(week))
+            self.assertFalse(task.late_shop_step(task._texts), week)
+            self.assertEqual(task.actions, [], week)
+
+    def test_late_shop_once_per_day_but_retries_empty_click(self):
+        """点空要重试（最多 SHOP_ENTRY_TRIES 次）；真进过店当天就不点了。"""
+        task = self.styled("扭蛋流", self._late_hub(7))
+        self.assertTrue(task.late_shop_step(task._texts))
+        self.assertTrue(task.late_shop_step(task._texts))     # 点空 → 允许再点一次
+        task.actions.clear()
+        self.assertFalse(task.late_shop_step(task._texts))    # 第 3 次停手
+        self.assertEqual(task.actions, [])
+        # handle_shop 确认看到商店页之后记的账
+        task2 = self.styled("扭蛋流", self._late_hub(7))
+        task2._shop_day = (7, "三")
+        self.assertFalse(task2.late_shop_step(task2._texts))
+
+    def test_late_shop_ignores_store_word_in_dialogue(self):
+        """台词里有「商店」但右上角没有入口 → 一下都不点。"""
+        texts = self._late_hub(
+            7, with_shop=False,
+            extra=[box(600, 800, "那家商店早上六点会卖打折商品", 520, 40)])
+        task = self.styled("扭蛋流", texts)
+        self.assertFalse(task.late_shop_step(texts))
+        self.assertEqual(task.actions, [])
+
+    def test_late_shop_steps_aside_on_shop_page(self):
+        """已经在商店内页 → 交给 handle_shop 买/关，别再点入口。"""
+        texts = self._late_hub(7, extra=[box(200, 300, "能力详情", 150, 40),
+                                         box(300, 300, "剩余", 100, 40)])
+        task = self.styled("扭蛋流", texts)
+        self.assertFalse(task.late_shop_step(texts))
+        self.assertEqual(task.actions, [])
+
     def test_saturday_training_style_keeps_old_route(self):
         """训练流周六原设定不变：步行街 → 游戏厅 → 公园。"""
         task = self.styled("训练流", self._map("星期六"))
