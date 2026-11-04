@@ -294,6 +294,47 @@ class MatchHandlers:
         self.log_warning("赛前准备页：跳过和前往都没找到")
         return False
 
+    def handle_training_score(self, texts):
+        """一局结束的「训练评分」页：读**个人评分** → 记录 → 达标就收工。
+
+        为什么必须加（2026-11-04 实跑，`logs/mcp/a0e2b1ea…/run.log` 20:53:21）：
+        这版游戏一局结算页写的是
+
+            训练评分  7728  SS  点击屏幕继续
+
+        而旧代码只认「恭喜获得 / 训练奖励」标题（`SQUAD_AWARD_MARKS`），
+        这一页读不到 → **评分一次都没记**（队列里永远停在上一次的 7096）→
+        一局结束后没人收账 → 大厅又开新局，表现就是「明明 7700 分了还在跑」。
+
+        用户的判定口径（`docs/RULES.md §12`）就是「这个球员的评分 ≥ 目标」，
+        所以这里读到分就立刻记进 `_run_score`，达标直接把本局标记为结束
+        （`_round_done`），让 `advance_queue_after_round` 去收账并提前终止。
+        """
+        score, rating = self.read_training_score(texts)
+        if score is None:
+            return False
+        if time.time() - getattr(self, "_score_click_at", 0.0) < 1.0:
+            return True                          # 刚点过，等翻页
+        if not getattr(self, "_round_score_seen", False):
+            self._round_score_seen = True
+            self._run_score = score
+            queue = getattr(self, "_queue", None)
+            target = queue.target if queue is not None else None
+            self.log_info(f"本局训练评分：{score}（评级 {rating or '?'}）/ 目标 {target}",
+                          notify=True)
+            if queue is not None and queue.target_met(score):
+                self.log_info(f"训练评分 {score} ≥ 目标 {target} → 达标，本局收尾后提前终止",
+                              notify=True)
+                self._round_done = True
+        self._score_click_at = time.time()
+        # 推进这一页：优先点「点击屏幕继续」的文字框，认不出点屏幕中央（这页点哪都走）
+        target_box = self.match_text(texts, ("点击屏幕继续", "继续"))
+        if target_box is not None:
+            self.click_box(target_box, after_sleep=0.6)
+        else:
+            self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=0.6)
+        return True
+
     def handle_register_player(self, texts):
         """一局打完的**注册球员**收尾流程（用户 2026-10-27 提供 6 屏截图）。
 
@@ -368,6 +409,11 @@ class MatchHandlers:
         # **必须整词**：弹窗正文「成为注册球员后…」里的「注册球员」不算，
         # 否则会点在弹窗背后的「下一步」（2026-10-28 18:17 空烧 890 拍）。
         if self.exact_text(texts, ("注册球员", "球员登录", "签约", "入部申请")) is not None:
+            # 多角色队列的达标判据就写在这一页之前（用户 2026-11-04）：
+            # 「恭喜获得 / 训练奖励」页上按位置列了五个球员的四位数评分，
+            # 这里读一次记进 `_run_score`，一局真正结束时由 `flow.finish_run` 判定。
+            # 放在点「下一步」之前：点了就翻页，评分再也读不到了。
+            self.note_run_score(texts)
             target = self.exact_text(texts, labels.BUTTONS["next"])
             if target is None:
                 # OCR 偶尔把「下一步」读成「下一」（丢字），按前缀兜底

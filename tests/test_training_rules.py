@@ -2303,6 +2303,25 @@ class PlaceModulesRules(unittest.TestCase):
         pick, _ = task.pick_shop_item(items, None, "只买金和紫")
         self.assertEqual(pick["name"], "赠品")
 
+    def test_shop_never_spends_all(self):
+        """2026-11-05：**任何日子都不清空**（比赛日也不清空）。
+
+        只有蓝卡时「只买金和紫」必须停手 —— 旧版这条会被「赛前清空余额」
+        变成「金紫买完继续买别的」，钱被花光。现在没有那个分支了。
+        """
+        only_blue = [
+            {"name": "旧货", "price": 45, "quality": "蓝", "x": 100, "y": 100},
+            {"name": "废纸", "price": 30, "quality": "白", "x": 100, "y": 200},
+        ]
+        task = FakeTask([])
+        pick, reason = task.pick_shop_item(only_blue, 500, "只买金和紫")
+        self.assertIsNone(pick)
+        self.assertIn("金/紫", reason)
+        # 签名里不许再出现「把钱花光」的那个开关
+        import inspect
+        params = inspect.signature(task.pick_shop_item).parameters
+        self.assertEqual(list(params), ["items", "money", "policy"])
+
     def test_map_knows_all_places(self):
         """地图模块是**决策层** —— 它知道所有地点（地点模块不许知道别的）。"""
         from src.tasks.training.places.map import MapPlace
@@ -2720,54 +2739,106 @@ class WeekendMapRules(unittest.TestCase):
         self.assertTrue(any("有「扭蛋增强！」" in m and "步行街在打折" in m
                             for m in task.logs), task.logs)
 
-    # ---------- 第 7 周以后：每天都先逛商店（用户 2026-11-03，优先级最高） ----------
+    # ---------- 第 7 周以后：看到「新品上市」提示才进店（用户 2026-11-05） ----------
     # 判据本体在 `daycycle.late_shop_step`（一天的入口 ③），调用点是 flow.run 主循环里、
     # `_handle_any` 之前 —— 所以这里直接测那个方法，不再另立 handler。
+    # 旧口径（2026-11-03「每天都进店」）已作废：没有提示就一下都不点。
 
     # 训练日主界面实测「商店」框 (1724,216,76,38)（logs/debug/1026-112852_nochange3/ocr.txt），
     # 周末首页是 (1389,170,66,37)（logs/debug/1029-140118_stall5s/ocr.txt）—— 都在 shop_entry 里。
     SHOP_BTN = box(1724, 216, "商店", 76, 38)
+    # 提示 = 橙色标签「新品上市」，挂在「商店」按钮**正上方**同一列
+    # （用户 2026-11-05 实机截图：第 3 周 星期一 比赛日主界面，1552×871 里
+    #   标签中心 ≈(0.920,0.156)、按钮中心 ≈(0.920,0.230)，Δcy ≈ 0.07 屏高/75px@1080）。
+    SHOP_BADGE = box(1702, 142, "新品上市", 120, 36)
 
-    def _late_hub(self, week, day="星期三", with_shop=True, extra=()):
+    def _late_hub(self, week, day="星期三", with_shop=True, badge=None, extra=()):
         texts = [box(30, 20, f"第{week}周", 120, 40), box(200, 20, day, 130, 40),
                  box(380, 16, "100/130", 210, 53),
                  box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
         if with_shop:
             texts.append(self.SHOP_BTN)
+        if badge is not None:
+            texts.append(badge)
         return texts + list(extra)
 
-    def test_late_shop_enters_every_day_from_week7(self):
-        """第 7 周起：训练日主界面也先进店（先于训练/休息）。"""
+    def test_late_shop_enters_when_fresh_badge(self):
+        """第 7 周起：商店上方有「新品上市」→ 进店（先于训练/休息）。"""
         for week in (7, 8, 12):
-            task = self.styled("扭蛋流", self._late_hub(week))
+            task = self.styled("扭蛋流",
+                               self._late_hub(week, badge=self.SHOP_BADGE))
             self.assertTrue(task.late_shop_step(task._texts), week)
             self.assertEqual(task.actions[-1][1], "商店", week)
 
-    def test_late_shop_covers_weekend_home(self):
-        """周末首页（同时有「出行」）同样先逛店。"""
-        home = self._home_texts("星期六")
-        home[0] = box(30, 20, "第8周", 120, 40)
-        task = self.styled("扭蛋流", home + [self.SHOP_BTN])
-        self.assertTrue(task.late_shop_step(task._texts))
-        self.assertEqual(task.actions[-1][1], "商店")
-
-    def test_late_shop_not_before_week7(self):
-        """第 7 周之前一条都不改：一店都不进。"""
-        for week in (1, 5, 6):
+    def test_late_shop_skips_without_fresh_badge(self):
+        """没有「新品上市」提示 → 一天都不进店（2026-11-05 取代「每天都进」）。"""
+        for week in (7, 8, 12):
             task = self.styled("扭蛋流", self._late_hub(week))
             self.assertFalse(task.late_shop_step(task._texts), week)
             self.assertEqual(task.actions, [], week)
 
+    def test_late_shop_badge_may_be_read_as_single_word(self):
+        """OCR 只读出「新品」（或「上新」）也认。"""
+        for name in ("新品", "上新"):
+            task = self.styled("扭蛋流",
+                               self._late_hub(7, badge=box(1724, 168, name, 60, 30)))
+            self.assertTrue(task.late_shop_step(task._texts), name)
+            self.assertEqual(task.actions[-1][1], "商店", name)
+
+    def test_late_shop_badge_merged_into_button(self):
+        """提示和按钮被 OCR 读成一整块（框名带「新品上市」）→ 也算有提示。"""
+        merged = box(1702, 142, "新品上市 商店", 120, 110)
+        task = self.styled("扭蛋流", self._late_hub(7, with_shop=False,
+                                                    badge=merged))
+        self.assertTrue(task.late_shop_step(task._texts))
+        self.assertEqual(task.actions[-1][1], "新品上市 商店")
+
+    def test_late_shop_covers_weekend_home(self):
+        """周末首页（同时有「出行」）同样只在有上新提示时进店。"""
+        home = self._home_texts("星期六")
+        home[0] = box(30, 20, "第8周", 120, 40)
+        task = self.styled("扭蛋流", home + [self.SHOP_BTN, self.SHOP_BADGE])
+        self.assertTrue(task.late_shop_step(task._texts))
+        self.assertEqual(task.actions[-1][1], "商店")
+
+    def test_late_shop_not_before_week7(self):
+        """第 7 周之前这条不生效：就算有上新提示也不进店。"""
+        for week in (1, 5, 6):
+            task = self.styled("扭蛋流",
+                               self._late_hub(week, badge=self.SHOP_BADGE))
+            self.assertFalse(task.late_shop_step(task._texts), week)
+            self.assertEqual(task.actions, [], week)
+
+    def test_late_shop_badge_must_sit_above_button(self):
+        """提示必须挂在按钮**头上**：同一行的左边、太高、太远都不算。"""
+        cases = [
+            box(1580, 216, "新品上市", 120, 38),      # 同一行的左边（不是头上）
+            box(1702, 40, "新品上市", 120, 40),       # 太高（贴顶栏）
+            box(400, 170, "新品上市", 200, 40),       # 离太远（正文台词）
+        ]
+        for badge in cases:
+            task = self.styled("扭蛋流", self._late_hub(7, badge=badge))
+            self.assertFalse(task.late_shop_step(task._texts), badge.name)
+            self.assertEqual(task.actions, [], badge.name)
+
+    def test_fresh_badge_ignores_shop_page_timestamp(self):
+        """商店**内页**底部的「上新时间」不是入口提示（`SHOP_FRESH_EXCLUDE`）。"""
+        task = self.styled("扭蛋流", self._late_hub(
+            7, badge=box(1724, 160, "上新时间", 76, 34)))
+        self.assertFalse(task.late_shop_step(task._texts))
+        badge, _ = task.shop_fresh_badge(task._texts, self.SHOP_BTN)
+        self.assertIsNone(badge)
+
     def test_late_shop_once_per_day_but_retries_empty_click(self):
         """点空要重试（最多 SHOP_ENTRY_TRIES 次）；真进过店当天就不点了。"""
-        task = self.styled("扭蛋流", self._late_hub(7))
+        task = self.styled("扭蛋流", self._late_hub(7, badge=self.SHOP_BADGE))
         self.assertTrue(task.late_shop_step(task._texts))
         self.assertTrue(task.late_shop_step(task._texts))     # 点空 → 允许再点一次
         task.actions.clear()
         self.assertFalse(task.late_shop_step(task._texts))    # 第 3 次停手
         self.assertEqual(task.actions, [])
         # handle_shop 确认看到商店页之后记的账
-        task2 = self.styled("扭蛋流", self._late_hub(7))
+        task2 = self.styled("扭蛋流", self._late_hub(7, badge=self.SHOP_BADGE))
         task2._shop_day = (7, "三")
         self.assertFalse(task2.late_shop_step(task2._texts))
 
@@ -2782,8 +2853,9 @@ class WeekendMapRules(unittest.TestCase):
 
     def test_late_shop_steps_aside_on_shop_page(self):
         """已经在商店内页 → 交给 handle_shop 买/关，别再点入口。"""
-        texts = self._late_hub(7, extra=[box(200, 300, "能力详情", 150, 40),
-                                         box(300, 300, "剩余", 100, 40)])
+        texts = self._late_hub(7, badge=self.SHOP_BADGE,
+                               extra=[box(200, 300, "能力详情", 150, 40),
+                                      box(300, 300, "剩余", 100, 40)])
         task = self.styled("扭蛋流", texts)
         self.assertFalse(task.late_shop_step(texts))
         self.assertEqual(task.actions, [])
@@ -3103,14 +3175,14 @@ class StylePlanRules(unittest.TestCase):
         self.assertIsNone(task._style)
         self.assertEqual(task.style, "训练流")      # 还没认出来时的兜底
 
-    # ---------- 周二休息阈值 ----------
+    # ---------- 周四休息阈值 ----------
 
-    def test_tuesday_rest_threshold_by_style(self):
-        """周二硬阈值只对**扭蛋流 / 小游戏流**生效（65）；其它流派周二没有特殊限制。
+    def test_thursday_rest_threshold_by_style(self):
+        """周四硬阈值只对**扭蛋流 / 小游戏流**生效（60）；其它流派周四没有特殊限制。
 
-        用户 2026-11-03 口径（constants.TUESDAY_REST_THRESHOLD_BY_STYLE）：
-        「只有扭蛋流周2精力限制 65，其他流派周二没有限制精力，只遵守全局精力恢复门槛」
-        + 补充「小游戏流也是周二 65」。周四同样没有特殊阈值（旧的 75/60 都已取消）。
+        用户 2026-11-04 口径（constants.THURSDAY_REST_THRESHOLD_BY_STYLE）：
+        「周二的 65 改成周四精力低于 60 就休息」，流派白名单不变
+        （扭蛋流 / 小游戏流）。**周二现在没有任何特殊阈值。**
         """
         base = {"休息精力阈值": 40}
 
@@ -3120,22 +3192,22 @@ class StylePlanRules(unittest.TestCase):
             return task.rest_threshold(day)
 
         for style in ("扭蛋流", "小游戏流"):
-            self.assertEqual(limit(style, "二"), 65, style)
+            self.assertEqual(limit(style, "四"), 60, style)
         for style in ("训练流", "商店流"):
-            self.assertEqual(limit(style, "二"), 40, style)
-        for style in ("训练流", "商店流", "扭蛋流", "小游戏流"):
             self.assertEqual(limit(style, "四"), 40, style)
+        for style in ("训练流", "商店流", "扭蛋流", "小游戏流"):
+            self.assertEqual(limit(style, "二"), 40, style)
             self.assertEqual(limit(style, "五"), 40, style)
             self.assertEqual(limit(style, "一"), 40, style)
-        # 配置里的阈值更高时以配置为准（取 max，不能因为周二就下调）
+        # 配置里的阈值更高时以配置为准（取 max，不能因为周四就下调）
         for style in ("扭蛋流", "小游戏流", "训练流"):
             task = FakeTask([], config={"休息精力阈值": 80})
             task._style = style
-            self.assertEqual(task.rest_threshold("二"), 80, style)
+            self.assertEqual(task.rest_threshold("四"), 80, style)
 
-    def test_tuesday_low_stamina_rests(self):
-        """周二 50 精力：扭蛋流直接休息（门槛 65）。"""
-        texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期二", 130, 40),
+    def test_thursday_low_stamina_rests(self):
+        """周四 50 精力：扭蛋流直接休息（门槛 60）。"""
+        texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期四", 130, 40),
                  box(380, 16, "50/130", 210, 53),
                  box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
         task = FakeTask(texts)
@@ -3145,13 +3217,13 @@ class StylePlanRules(unittest.TestCase):
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "休息")
 
-    def test_tuesday_gacha_rests_5_points_earlier(self):
-        """2026-11-03 用户口径：扭蛋流 / 小游戏流周二门槛 65，其它流派周二没有特殊限制。
+    def test_thursday_gacha_rests_10_points_earlier(self):
+        """2026-11-04 用户口径：扭蛋流 / 小游戏流周四门槛 60，其它流派周四没有特殊限制。
 
-        精力 62：扭蛋流、小游戏流（< 65）→ 休息；训练流/商店流（只守全局 40）→ 训练。
+        精力 59：扭蛋流、小游戏流（< 60）→ 休息；训练流/商店流（只守全局 40）→ 训练。
         """
-        def run(style, stamina):
-            texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期二", 130, 40),
+        def run(style, stamina, day="星期四"):
+            texts = [box(30, 20, "第3周", 120, 40), box(200, 20, day, 130, 40),
                      box(380, 16, f"{stamina}/130", 210, 53),
                      box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
             task = FakeTask(texts)
@@ -3161,20 +3233,23 @@ class StylePlanRules(unittest.TestCase):
             self.assertTrue(task.handle_training_day(texts))
             return task.actions[-1][1]
 
-        self.assertEqual(run("扭蛋流", 62), "休息")
-        self.assertEqual(run("小游戏流", 62), "休息")
-        self.assertEqual(run("训练流", 62), "训练")
-        self.assertEqual(run("商店流", 62), "训练")
-        # 65 是下限（不含）：精力 65 仍照常训练
-        self.assertEqual(run("扭蛋流", 65), "训练")
-        self.assertEqual(run("小游戏流", 65), "训练")
+        self.assertEqual(run("扭蛋流", 59), "休息")
+        self.assertEqual(run("小游戏流", 59), "休息")
+        self.assertEqual(run("训练流", 59), "训练")
+        self.assertEqual(run("商店流", 59), "训练")
+        # 60 是下限（不含）：精力 60 仍照常训练
+        self.assertEqual(run("扭蛋流", 60), "训练")
+        self.assertEqual(run("小游戏流", 60), "训练")
+        # 周二不再有任何硬阈值：精力 59（< 旧的 65）也照常训练
+        self.assertEqual(run("扭蛋流", 59, day="星期二"), "训练")
+        self.assertEqual(run("小游戏流", 59, day="星期二"), "训练")
 
-    def test_thursday_low_stamina_trains(self):
-        """周四 50 精力：回落到配置的 40 → 照常训练（周四不再有特殊阈值）。"""
+    def test_training_and_shop_styles_thursday_below_60_train(self):
+        """周四 50 精力：训练流 / 商店流回落到配置的 40 → 照常训练。"""
         texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期四", 130, 40),
                  box(380, 16, "50/130", 210, 53),
                  box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
-        for style in ("训练流", "商店流", "扭蛋流"):
+        for style in ("训练流", "商店流"):
             task = FakeTask(texts)
             task._style = style
             task.ensure_speed = lambda *a, **k: False
@@ -3676,36 +3751,158 @@ class StoryArrowClicks(unittest.TestCase):
         self.assertEqual(len(task.actions), 1)
 
 
-class StallWatchdog(unittest.TestCase):
-    """5 秒看门狗：只有「界面指纹没变 + 一直没有任何点击」才算卡住。
+class StuckTakeover(unittest.TestCase):
+    """卡住 → **立刻接管**（2026-11-04 用户口径，两条判据都要）。
 
-    只看指纹会误判剧情 ▼ 连点（文字不变但点击在推进，2026-10-26 实测）。
+    ① `点击无响应判定(秒)`（默认 3）：界面指纹超过 3 秒没变、而且这段时间里点过；
+    ② `单日最大点击数`（默认 100）：同一天点击超过 100 下、日期还没更新。
+    两条都走 `flow.stuck_takeover`：存证 + 清当天拦路标记 + 点屏幕中央继续，
+    同一天接管 3 次才停。**没有 2000 步的整局上限了**（用户明确去掉）。
     """
 
-    def make(self, last_click=None):
-        task = FakeTask([])
-        task._last_click_at = last_click or 0.0
+    # 校门口（休息日首页）：顶栏日期 + 右下「出行」
+    GATE = [box(40, 12, "第3周", 120, 40),
+            box(190, 12, "星期六", 130, 40),
+            box(1600, 950, "出行", 160, 60)]
+    # 休息室（训练日主界面）：顶栏日期 + 右下「训练 / 休息」
+    LOUNGE = [box(40, 12, "第2周", 120, 40),
+              box(190, 12, "星期二", 130, 40),
+              box(1450, 950, "训练", 160, 60),
+              box(1650, 950, "休息", 160, 60)]
+    # 没有日期的页面（注册球员 / 比赛）
+    NO_DATE = [box(700, 950, "关闭", 160, 60), box(900, 300, "注册球员", 200, 40)]
+
+    def make(self, texts=None, limit=3, noresp=3):
+        task = FakeTask(list(self.LOUNGE if texts is None else texts))
+        task.config["单日最大点击数"] = limit
+        task.config["点击无响应判定(秒)"] = noresp
+        task.dump_debug = lambda *a, **k: None      # 不在测试里写真图
         return task
 
-    def test_recent_click_is_not_stall(self):
-        task = self.make(last_click=1000.0)
-        self.assertFalse(task._stalled(7, 7, 5, now=1003.0))
+    def day_key(self, task, texts=None):
+        """按指定页面更新日期键（清掉「同一帧只读一次」的缓存，模拟新的一帧）。"""
+        task._day_cache = None
+        task._day_retry_cache = None
+        return task.day_counter_step(task._texts if texts is None else texts)
 
-    def test_no_click_for_five_seconds_is_stall(self):
-        task = self.make(last_click=1000.0)
-        self.assertTrue(task._stalled(7, 7, 5, now=1006.0))
+    def clicks(self, task, n):
+        task._day_clicks = getattr(task, "_day_clicks", 0) + n
 
-    def test_screen_changed_is_not_stall(self):
-        task = self.make(last_click=1000.0)
-        self.assertFalse(task._stalled(8, 7, 5, now=1006.0))
+    # ---------- 判据②：同一天点击数 ----------
 
-    def test_never_clicked_is_not_stall(self):
+    def test_click_count_resets_on_new_day(self):
+        """日期更新以后计数器归零（用户口径）：第二天从头数。"""
         task = self.make()
-        self.assertFalse(task._stalled(7, 7, 5, now=1006.0))
+        self.assertEqual(self.day_key(task), (2, "二"))
+        self.clicks(task, 90)
+        texts = [box(40, 12, "第2周", 120, 40),
+                 box(190, 12, "星期三", 130, 40),
+                 box(1450, 950, "训练", 160, 60)]
+        self.assertEqual(self.day_key(task, texts), (2, "三"))
+        self.assertEqual(task._day_clicks, 0)
+        self.assertTrue(any("日期更新" in str(x) for x in task.logs))
+
+    def test_under_click_limit_does_nothing(self):
+        task = self.make()
+        self.day_key(task)
+        self.clicks(task, 3)
+        task._sig_changed_at = time.time()          # 刚变过界面，3 秒判据不触发
+        self.assertFalse(task.stuck_takeover(task._texts))
+        self.assertEqual(task.actions, [])
+
+    def test_over_click_limit_takes_over(self):
+        task = self.make()
+        self.day_key(task)
+        self.clicks(task, 4)                        # 上限 3，「超过」= 第 4 下
+        task._sig_changed_at = time.time()
+        self.assertTrue(task.stuck_takeover(task._texts))
+        self.assertEqual(task.actions[-1], ("click", 960, 540))   # 点中央继续
+        self.assertEqual(task._day_fixes, 1)
+        self.assertEqual(task._day_clicks, 0)
+        self.assertTrue(any("这一天已经点了" in str(x) for x in task.logs))
+
+    def test_click_limit_counts_pages_without_date(self):
+        """看不到日期的页面也算点击数（不许留「切个画面就绕过」的漏子）。"""
+        task = self.make(self.NO_DATE)
+        self.clicks(task, 4)
+        task._sig_changed_at = time.time()
+        self.assertTrue(task.stuck_takeover(task._texts))
+        self.assertTrue(any("看不到日期" in str(x) for x in task.logs))
+
+    # ---------- 判据①：点击后 3 秒无响应 ----------
+
+    def test_no_response_three_seconds_takes_over(self):
+        """界面 3 秒没变化 + 这段时间点过 → 立刻接管。"""
+        task = self.make()
+        self.day_key(task)
+        now = time.time()
+        task._sig_changed_at = now - 3.5            # 3.5 秒没变
+        task._last_click_at = now - 1.0             # 中间点过
+        self.assertTrue(task.stuck_takeover(task._texts))
+        self.assertTrue(any("秒没变化" in str(x) for x in task.logs))
+
+    def test_no_response_without_click_is_not_stuck(self):
+        """只是干等（没点过）不算无响应 —— 等动画不能误判。"""
+        task = self.make()
+        self.day_key(task)
+        now = time.time()
+        task._sig_changed_at = now - 10.0
+        task._last_click_at = now - 20.0            # 最后一次点击在界面变化之前
+        self.assertFalse(task.stuck_takeover(task._texts))
+        self.assertEqual(task.actions, [])
+
+    def test_screen_changed_is_not_stuck(self):
+        task = self.make()
+        self.day_key(task)
+        task._sig_changed_at = time.time()          # 刚变过
+        task._last_click_at = time.time()
+        self.assertFalse(task.stuck_takeover(task._texts))
+
+    # ---------- 共同：3 次接管才停 / 声明表豁免 ----------
+
+    def test_three_takeovers_then_abort(self):
+        task = self.make()
+        for _ in range(2):
+            self.day_key(task)
+            self.clicks(task, 4)
+            task._sig_changed_at = time.time()
+            self.assertTrue(task.stuck_takeover(task._texts))
+            self.assertIsNone(getattr(task, "_abort_reason", None))
+        self.day_key(task)
+        self.clicks(task, 4)
+        task._sig_changed_at = time.time()
+        self.assertTrue(task.stuck_takeover(task._texts))
+        self.assertIn("接管 3 次", task._abort_reason or "")
+
+    def test_declared_long_runner_is_exempt(self):
+        """比赛快进 / 注册球员（实测连跑 542 拍）声明了豁免 → 两条判据都不算。"""
+        task = self.make()
+        task._last_state = "handle_register_player"
+        task._sig_changed_at = time.time() - 30
+        task._last_click_at = time.time() - 1
+        self.clicks(task, 500)
+        self.assertFalse(task.stuck_takeover(task._texts))
+        self.assertEqual(task.actions, [])
+        # 换个普通页（科目页）就必须管
+        task._last_state = "handle_subject_select"
+        self.assertTrue(task.stuck_takeover(task._texts))
 
     def test_click_point_uses_box_center(self):
         task = self.make()
         self.assertEqual(task._click_point(box(100, 200, "x", 200, 60), -1), (200, 230))
+
+    def test_clear_day_home_brakes_resets_marks(self):
+        task = self.make()
+        task._shop_try_key, task._shop_try_count = (2, "二"), 2
+        task._no_change = 3
+        task._loop_handler, task._loop_count = "handle_x", 9
+        task.day_state()["visited"].add("公园")
+        task._clear_day_home_brakes()
+        self.assertIsNone(task._shop_try_key)
+        self.assertEqual(task._shop_try_count, 0)
+        self.assertEqual(task._no_change, 0)
+        self.assertIsNone(task._loop_handler)
+        self.assertEqual(task.day_state()["visited"], set())
 
 
 class ShopGrid(unittest.TestCase):
@@ -4370,10 +4567,14 @@ class TalentStockEvent(unittest.TestCase):
         task._register_stage = "back"
         task._shop_day = (3, "一")
         task._no_change = 5
+        task._day_key, task._day_clicks = (2, "二"), 90
         task.reset_run_state()
         self.assertIsNone(task._register_stage)
         self.assertIsNone(task._shop_day)
         self.assertEqual(task._no_change, 0)
+        # 上一局攒到 90 多次的点击计数不能带进新的一局（否则开局就误判卡住）
+        self.assertIsNone(task._day_key)
+        self.assertEqual(task._day_clicks, 0)
 
     def test_unknown_effect_falls_back_to_first_option(self):
         """收益读不出来但**另一个是纯回精力** → 必须选这个未知的（2026-10-30 口径）。

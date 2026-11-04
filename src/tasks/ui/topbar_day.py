@@ -37,7 +37,7 @@
 
 import re
 
-import cv2
+from src.tasks.ui import zoom_reread
 
 # 「星期X」的整词正则（严格：整段必须正好三个字）
 DAY_WORD_RE = re.compile(r"^星期([一二三四五六日天])$")
@@ -53,26 +53,18 @@ DAY_REGION = (0.092, 0.000, 0.192, 0.075)
 # 「第N周」框的位置（实测左沿 x ≈ 0.020~0.036，右沿 x ≈ 0.065~0.080）
 WEEK_REGION = (0.012, 0.000, 0.095, 0.070)
 
-# 放大倍数。实测 x3 在 1031 帧上与整帧 OCR 100% 一致（逐星期都是 100%），
+# 放大倍数（实现在 `ui/zoom_reread.py`，这里只是给这两个热点用的默认值）。
+# 实测 x3 在 1031 帧上与整帧 OCR 100% 一致（逐星期都是 100%），
 # x4 反而在「星期一」上有 1/51 读不出，x5 有 6/51，x6 开始连「星期二」都掉。
-ZOOM = 3
+ZOOM = zoom_reread.ZOOM
 
 # 识别置信度下限。区域重读时只信高置信度的整词。
-MIN_SCORE = 0.30
+MIN_SCORE = zoom_reread.MIN_SCORE
 
 
 def crop_region(frame, region):
-    """按归一化区域裁一块出来。frame 为 None 或区域无效返回 None。"""
-    if frame is None or not getattr(frame, "size", 0):
-        return None
-    h, w = frame.shape[:2]
-    x1, y1, x2, y2 = region
-    x1 = max(0, min(w - 1, int(w * x1)))
-    x2 = max(x1 + 1, min(w, int(w * x2)))
-    y1 = max(0, min(h - 1, int(h * y1)))
-    y2 = max(y1 + 1, min(h, int(h * y2)))
-    crop = frame[y1:y2, x1:x2]
-    return crop if crop.size else None
+    """按归一化区域裁一块（实现见 `zoom_reread.crop_px`）。"""
+    return zoom_reread.crop_region(frame, region)
 
 
 def day_from_texts(texts):
@@ -110,52 +102,23 @@ def week_from_texts(texts):
 def read_day(ocr, frame):
     """裁出星期那块、放大重读，返回 "X" 或 None。
 
-    `ocr` 是 ok-script 的 OCR 引擎对象（`self.ocr` 那种，返回 Box 列表）。
+    `ocr` 传 ok-script 的任务实例（`self.ocr(box=..., frame=...)`）或 OCR 引擎
+    （`engine.ocr(img)`）都行，兼容在 `zoom_reread.run_ocr`。
     读不出就返回 None —— **绝不猜**：猜错会让「当天状态」整个重置
     （`daycycle.day_state` 用 (周, 星期) 当日期键）。
     """
-    crop = crop_region(frame, DAY_REGION)
-    if crop is None:
-        return None
-    big = cv2.resize(crop, None, fx=ZOOM, fy=ZOOM, interpolation=cv2.INTER_CUBIC)
-    boxes = _ocr_boxes(ocr, big)
-    return day_from_texts(boxes)
+    texts = zoom_reread.reread_region(frame, ocr, DAY_REGION,
+                                      scale=ZOOM, min_score=MIN_SCORE)
+    return day_from_texts(texts)
 
 
 def read_week(ocr, frame):
     """同样手法读「第N周」，返回 int 或 None。"""
-    crop = crop_region(frame, WEEK_REGION)
-    if crop is None:
-        return None
-    big = cv2.resize(crop, None, fx=ZOOM, fy=ZOOM, interpolation=cv2.INTER_CUBIC)
-    boxes = _ocr_boxes(ocr, big)
-    return week_from_texts(boxes)
+    texts = zoom_reread.reread_region(frame, ocr, WEEK_REGION,
+                                      scale=ZOOM, min_score=MIN_SCORE)
+    return week_from_texts(texts)
 
 
 def _ocr_boxes(ocr, img):
-    """跑一次 OCR，返回 [(文本, 置信度), …]。
-
-    `ocr` 传 ok-script 的 `self.ocr`（签名 ocr(box=..., frame=...)）时
-    返回的是 Box 列表；这里做鸭子类型兼容，两种都能用。
-    """
-    if ocr is None or img is None:
-        return []
-    try:
-        result = ocr.ocr(box=None, frame=img) if hasattr(ocr, "ocr") else ocr(img)
-    except Exception:                                   # noqa: BLE001
-        return []
-    out = []
-    for entry in result or []:
-        name = getattr(entry, "name", None)
-        score = getattr(entry, "confidence", None)
-        if name is None and isinstance(entry, (tuple, list)) and len(entry) >= 2:
-            name, score = entry[0], entry[1]
-        if not name:
-            continue
-        try:
-            score = float(score) if score is not None else 1.0
-        except (TypeError, ValueError):
-            score = 1.0
-        if score >= MIN_SCORE:
-            out.append((name, score))
-    return out
+    """兼容旧调用点：等价于 `zoom_reread.run_ocr`。"""
+    return zoom_reread.run_ocr(ocr, img, min_score=MIN_SCORE)

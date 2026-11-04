@@ -25,6 +25,7 @@ from src.tasks.training.places import (ArcadePlace, MapPlace, ParkPlace,
                                        RestaurantPlace, ShopPlace, StreetPlace)
 from src.tasks.training.handlers import HANDLERS
 from src.tasks.training.handlers.popup import PopupHandlers
+from src.tasks.training.handlers.stamina import StaminaHandlers
 from src.tasks.training.handlers.training import TrainingHandlers
 from src.tasks.training.handlers.weekend import WeekendHandlers
 from src.tasks.training.handlers.match import MatchHandlers
@@ -43,7 +44,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
                    PopupHandlers, TrainingHandlers, WeekendHandlers,
                    MatchHandlers, EntryHandlers, FishingHandlers,
                    ThemeHandlers, CookingHandlers, WheelHandlers,
-                   UnmarkedHandlers, BaseGirlsTask):
+                   StaminaHandlers, UnmarkedHandlers, BaseGirlsTask):
 
     def load_config(self):
         """加载配置前先把老「体力」键名搬成「专注 / 精力」（2026-11-02 规范用词）。
@@ -80,19 +81,29 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         # 周末状态：按「第N周+星期X」区分，跨天自动重置
         self._weekend = {"date": None, "shop_checked": False, "bought": False,
                          "park_choice": None}
-        # 进店只在「比赛日、进比赛之前」（训练流/商店流各一次）；
-        # _shop_day 记当天已经逛过的日期键，_shop_spend_all = 赛前把钱花光。
+        # 进店只在「比赛日、进比赛之前」（训练流/商店流各一次）+ 第 7 周以后的
+        # 「商店上新」；_shop_day 记当天已经逛过的日期键。
         self._shop_day = None
         self._shop_at = 0.0
-        self._shop_spend_all = False
+        self._shop_nobadge_key = None   # 第 7 周以后：这一天已经报过「没上新」了
         # 科目页：记录上次探测结果，防止同一天重复探测
         self._subject_cache = {"date": None, "best": None}
         # 商店：第一次遇到只存证，不买东西（等复盘确认界面）
         self._shop_seen = False
         # 失败率超限时置 True：退出科目页后强制休息
         self._force_rest = False
-        # 最近一次点击的墙钟时间：run() 的「N 秒没点击」看门狗用
+        # 最近一次点击的墙钟时间：只做复盘（点击流水 / 空档统计），
+        # 卡住判据**不再看时间**（2026-11-04 改成数点击/数操作，见 flow.day_stuck_step）。
         self._last_click_at = 0.0
+        # 卡住判据的计数器（2026-11-04 用户口径：按「同一天」算，日期一更新就归零）：
+        #   `_day_key`    = 当前日期键 (周, 星期)；
+        #   `_day_clicks` = 这一天点了多少下（判据②：超过 `单日最大点击数` 就接管）；
+        #   `_day_fixes`  = 这一天接管过几次（到 3 就停）；
+        #   `_sig_changed_at` = 界面指纹最近一次变化的时刻（判据①：点击 3 秒无响应）。
+        self._day_key = None
+        self._day_clicks = 0
+        self._day_fixes = 0
+        self._sig_changed_at = 0.0
         # 当前流派（用户 2026-10-29）：**只由队长决定**。配置里填了队长，
         # run()/点开始训练时直接查表写入；留空则由第一个训练日点日历解析。
         self._style = None

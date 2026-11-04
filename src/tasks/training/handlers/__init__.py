@@ -9,6 +9,7 @@
 """
 
 from .popup import PopupHandlers
+from .stamina import StaminaHandlers
 from .training import TrainingHandlers
 from .weekend import WeekendHandlers
 from .match import MatchHandlers
@@ -20,10 +21,22 @@ from .wheel import WheelHandlers
 from .unmarked import UnmarkedHandlers
 
 HANDLERS = (
+    # 一局结束的「训练评分」弹层（`训练评分 7728 SS 点击屏幕继续`）：
+    # 多角色队列的**达标判据**就靠它读个人评分（2026-11-04 实跑漏读导致「7700 分了还在跑」）。
+    # 必须排在 handle_popup / handle_tap_to_continue 之前 —— 它们会直接点「点击屏幕继续」翻页，
+    # 翻过去评分就再也读不到了。
+    MatchHandlers.handle_training_score,
     # 注册球员收尾流程必须排在 handle_popup 之前：它有「关闭」按钮，
     # 排在后面会被 popup 抢走（用户 2026-10-27 提供的 6 屏流程）。
     MatchHandlers.handle_register_player,
     PopupHandlers.handle_resume_training,
+    # 专注不足弹窗（「训练所需专注还差25，是否进行回复呢？」）必须在 handle_popup
+    # 之前：popup 在没有「确定」时会点「取消」，于是「差 25 → 取消 → 再点训练」死循环。
+    StaminaHandlers.handle_stamina_short,
+    # 「专注恢复」整页（大厅顶栏「+」进来）：三张卡只点「使用」，钻石行永不点。
+    # 排在前面是因为这一页盖在大厅上，背景还能 OCR 到「训练/赛事」，
+    # 交给 handle_lobby 会去点背后的按钮。
+    StaminaHandlers.handle_stamina_recover,
     PopupHandlers.handle_rest_confirm,
     PopupHandlers.handle_popup,
     PopupHandlers.handle_draw,
@@ -60,6 +73,9 @@ HANDLERS = (
     # 按 彩>金>紫>蓝 → 队友多 选一张再点「确定」。必须排在 handle_event_choice
     # / 通用「确定」类 handler 之前（旧版没人认领，一直落 unknown 点屏幕中央）。
     CookingHandlers.handle_ingredient_select,
+    # 「选择憋气难度」页（2026-11-04 实跑）：标题 + 底部「确定」，没有别的判据。
+    # 必须排在通用「确定/下一步」类 handler 之前，否则会被 popup 的「关闭/取消」抢走。
+    TrainingHandlers.handle_breath_difficulty,
     TrainingHandlers.handle_subject_select,
     MatchHandlers.handle_event_choice,
     # 比赛日进店必须排在「赛前准备」之前：比赛日主界面可能直接就是
@@ -152,4 +168,43 @@ LEAVE_RESETS = {
     "handle_boost_training": {"_boost_ticks": 0, "_boost_confirmed_at": 0.0},
     # 训练结果浮层的点击锁：离开就清，免得下次这页第一拍被误判成「刚点过」
     "handle_training_result": {"_result_click_at": 0.0},
+    # 「专注恢复」页喝饮料的点击锁：离开这页就清（下次进来重新计），
+    # `_stamina_ticks` 是「这页连续占了多少拍」的兜底计数（见 STAMINA_PAGE_MAX_TICKS）
+    "handle_stamina_recover": {"_stamina_use_at": 0.0, "_stamina_ticks": 0},
+    # 憋气难度页的「卡片选过没」：离开这页就清，下次重新选
+    "handle_breath_difficulty": {"_breath_picked": False},
 }
+
+
+# 单个 handler **连续命中多少次**就该判定「这一页推不动了」（2026-11-04）。
+#
+# 为什么需要它：`flow` 里那套「点 3 次界面没变化」的看门狗靠**界面指纹不变**来判，
+# 而这一页的顶栏数字/星标每拍都在闪 → 指纹每拍都变 → 看门狗永远不触发。
+# 实测：「选择憋气难度」页把「确定」点了 **1019 次**（第 77~1200 步、27 分钟），
+# 直到撞上「单局最大操作数」才停。
+#
+# 所以给「点了就该翻页」的 handler 单独声明一个上限（合法会长跑在同一个 handler 上的
+# **不要写进来**：比赛快进、赛前准备、科目页选择都会连续命中几十上百拍）。
+STALL_LIMITS = {
+    "handle_breath_difficulty": 12,
+    "handle_stamina_recover": 60,     # 喝饮料：每次 +30/+60，最多几十拍
+}
+
+
+# 会「合法连跑很多拍、而且不换天」的 handler：`flow.day_stuck_step` 的**闸 A**
+# （`单日最大操作数`：同一天在有日期的页面上过了 N 拍 → 判空转）在这些页面上不计数。
+#
+# 为什么需要这张表（2026-11-04）：闸 A 数的是「这一天攒了多少拍」，但下面这些页面
+# 本来就能连跑几十上百拍、而且**不会换天**：
+#   - `handle_register_player`：实测连跑 **542 拍**（注册球员 → 编队 → 保存 → 回大厅）；
+#   - `handle_in_match` / `handle_prepare`：比赛快进、赛前准备（就是上面 STALL_LIMITS
+#     注释里说的「会连续命中几十上百拍」的那几个）。
+# 把它们算进「一天的空转预算」→ 正常流程会被判成卡住（542 拍足够触发 3 次干预 → 停任务）。
+#
+# 判据仍然是「同一个 handler 连续命中」那一套（`_loop_handler`），这张表只声明
+# **谁不算进闸 A**。要加就加「不换天也能合法长跑」的页，别往里塞普通的点一下翻页页。
+DAY_BUDGET_EXEMPT = frozenset({
+    "handle_register_player",
+    "handle_in_match",
+    "handle_prepare",
+})

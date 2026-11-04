@@ -5,7 +5,6 @@
 """
 
 import random
-import re
 import time
 
 import os
@@ -134,6 +133,10 @@ class EntryHandlers:
             return False
         if self.no_captain_mode:
             return self.stop_for_no_captain("大厅")
+        # 专注不够就**主动**去补（用户 2026-11-04：「专注不够用的时候主动去恢复专注」）。
+        # 只在大厅/训练剧本这类「顶栏有 +」的页面点，训练内的顶栏药丸没有「+」。
+        if self.ensure_stamina():
+            return True
         action = self.texts_in_region(texts, "main_action")
         target = self.match_text(action, "训练")
         if target is not None:
@@ -151,6 +154,9 @@ class EntryHandlers:
             return False
         if self.no_captain_mode:
             return self.stop_for_no_captain("训练剧本")
+        # 启程也要扣专注：先看够不够，不够就去恢复页喝饮料（禁止钻石）
+        if self.ensure_stamina():
+            return True
         ok = self.click_text_and_expect(texts, "启程", ("训练核心",), timeout=10)
         if not ok:
             # 兜底：万一 OCR 没认出「启程」，再用实测固定坐标
@@ -413,18 +419,6 @@ class EntryHandlers:
         self.log_info("开始训练（已扣专注，不可退）｜流派：" + self.style
                       + ("" if self.style_known else "（待日历识别队长）"))
         return True
-
-    def is_pre_match_day(self, texts):
-        """今天是不是「比赛前一天」（左上角倒计时 1 天 / 明天比赛）。
-
-        实机文案：左上角「5天 赢得比赛」「1天 赢得比赛」。
-        用户口径：最后一场比赛前一天要把零用钱花光（钱不带进下一场）。
-        """
-        banner = "".join(
-            t.name for t in self.texts_in_region(texts, "today_banner")).replace(" ", "")
-        if "比赛" not in banner and "VS" not in banner:
-            return False
-        return bool(re.search(r"1\s*天", banner)) or "明天" in banner
 
     def _vertical_choice(self, texts):
         """竖排三选一的选项组（剧情三选一，右上角有「跳过」）。

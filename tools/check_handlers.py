@@ -126,8 +126,19 @@ class DryRunTask(TrainingTask):
         self._speed_locked = False
         self._subject_cache = {"date": None, "best": None}
         self._force_rest = False
-        # run() 的 5 秒看门狗依赖这个时间戳（TrainingTask.__init__ 里初始化）
+        # 最近一次点击的墙钟时间（点击流水 / 复盘用；卡住判据已改成数点击）
         self._last_click_at = 0.0
+        # 卡住判据的计数器（TrainingTask.__init__ 里也有，夹具要和生产一致）：
+        # 同一天「点了多少下 / 接管过几次」，日期一更新（`day_counter_step`）归零
+        self._day_key = None
+        self._day_clicks = 0
+        self._day_fixes = 0
+        self._sig_changed_at = 0.0
+        # 本局收账（「训练评分」弹层读分）：夹具也要有默认值，否则 handler 直接 AttributeError
+        self._run_score = None
+        self._round_done = False
+        self._round_score_seen = False
+        self._score_click_at = 0.0
         self._match_intro_at = 0.0
         # 流派识别（2026-10-29）：None = 还不知道，等着开日历认队长
         self._style = None

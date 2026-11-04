@@ -371,12 +371,11 @@ class WeekendHandlers:
         - 右侧是选中商品的详情和**黄色购买条**（价格就在条上）；
         - 右上角 X 关闭；顶栏金币是专注条右边那个独立数字。
 
-        用户口径（2026-10-26）：
-        - 平时只买金卡和紫卡（蓝/白不买），零用钱 **≥300** 才进店；
-        - **赛前一天**（左上角倒计时「1天」）进店并把零用钱花光，金紫优先、
-          买完金紫还有钱就继续买别的（钱不带进下一场，留着没用）。
+        用户口径（2026-10-26 / 2026-11-05）：
+        - 平时只买金卡和紫卡（蓝/白不买）；
+        - **不清空**：比赛日也不把零用钱花光，只按「购买策略」买合适的。
         所以这里一拍只买**一件**：买完不关店，下一拍重新 OCR 再决定；
-        金紫买不起了 / 钱花光了才关店，并把这一天标记为「今天逛过了」。
+        按策略买不动了 / 钱花光了才关店，并把这一天标记为「今天逛过了」。
         """
         if not self.shop_page(texts):
             return False
@@ -390,11 +389,9 @@ class WeekendHandlers:
         items = self.shop_items(texts)
         self.log_info("商店：" + "、".join(
             f"{i['name']}({i['price']}/{i['quality']})" for i in items)
-            + f"｜零用钱 {money}｜策略 {policy}"
-            + ("｜赛前清空" if self._shop_spend_all else ""))
+            + f"｜零用钱 {money}｜策略 {policy}")
 
-        pick, reason = self.pick_shop_item(items, money, policy,
-                                          spend_all=self._shop_spend_all)
+        pick, reason = self.pick_shop_item(items, money, policy)
         if pick is None:
             self.log_info(f"商店：{reason}，关店")
             self.finish_shop(texts)
@@ -423,7 +420,6 @@ class WeekendHandlers:
     def finish_shop(self, texts=None):
         """关店。进店去重由周末首页的 `shop_checked` 负责（一天一次）。"""
         self.close_shop(texts)
-        self._shop_spend_all = False
 
     def close_shop(self, texts=None):
         """点右上角 X 关商店。"""

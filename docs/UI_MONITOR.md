@@ -304,7 +304,7 @@ if self.paused or self._exclusive_owner is not None:
 | `{uptime}` | 本次运行时长 | `task.start_time` |
 | `{timeline}` | 最近 12 条动作（时间线专用） | 同上 |
 | `{fail_rate}` | 最近一次科目页失败率 | `info["当前失败率"]` |
-| `{buy_strategy}` `{clear_balance}` `{fail_limit}` `{picnic_threshold}` `{stuck}` | 配置回显 | `TrainingTask.config` |
+| `{buy_strategy}` `{fail_limit}` `{picnic_threshold}` `{stuck}` | 配置回显 | `TrainingTask.config` |
 | `{device_title}` `{device_meta}` | 设备信息 | `og.device_manager` |
 
 按钮专用（不给卡片用，只给两个按钮的状态）：

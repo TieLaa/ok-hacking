@@ -19,6 +19,7 @@ from ok.feature.Box import Box
 
 from src.tasks.ui import Defs  # noqa: F401
 from src.tasks.ui import labels
+from src.tasks.ui import zoom_reread
 from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,  # noqa: F401
                                           STYLE_ALIASES, STYLE_BY_NAME)
 
@@ -89,6 +90,50 @@ RAINBOW_BAND_BIN_FRAC = 0.10
 RAINBOW_BAND_MAX_TOP = 0.70
 # 代码版本戳（run() 会打到日志里）：排查「改完不生效」时一眼看出跑的是哪份代码
 CODE_VERSION = "2026-11-02b"
+
+
+# ---------- 六维面板读数（2026-11-04）----------
+# 面板每格是「名字 + 等级 + 当前值/上限」，OCR 实测四种写法：
+#     投射B488/1680      3488/1680（等级粘在前面）      体能B 464/+16      意识C 261/1689
+#
+# 旧判据「取这一行第一个 ≥100 的数字」读出过**天文数字**：2026-11-04 实跑
+# `体能 8116`（真值 1016）、`意识 3114`（真值 1114）→ 监控页六维和「分数预测」
+# 从 9k 跳到 1w4。因为 `info["attrs"]` 是合并语义，错值会一直挂到下次进休息室。
+#
+# **只有一条护栏：这一格的值必须 ≤ 这一格的上限。** 上限来源二选一：
+#   - 这帧自己写了（`/1680`）；
+#   - 上次从同一格读到过（`_attr_caps`，面板上限一局内不变）。
+# 上面两个事故值都超上限（8116 > 1680、3114 > 1689），一条规则全覆盖 ——
+# 不做「砍前导位猜回 488」、也不拿「上一次的值 ±窗口」再判一次：
+# 误读就这一格不动（保留上次的值），下一帧读干净了自然补上。
+ATTR_PAIR_RE = re.compile(r"(\d{1,4})\s*/\s*(\d{1,4})")
+ATTR_NUM_RE = re.compile(r"(\d{2,4})")
+ATTR_MIN_VALUE = 100
+ATTR_CAP_MIN, ATTR_CAP_MAX = 500, 9999
+ATTR_KEYS = 6                  # 六维齐全才算得出可信的「分数预测」
+
+
+def attr_value_from(text, cap=None):
+    """一格面板文字 → 当前值；读不出来或**超上限**返回 None。
+
+    `cap` = 这一格的上限；本帧文字里带 `/上限` 时以它为准。
+    """
+    s = (text or "").replace(" ", "").replace("　", "")
+    m = ATTR_PAIR_RE.search(s)
+    if m:
+        value, cell_cap = int(m.group(1)), int(m.group(2))
+        if ATTR_CAP_MIN <= cell_cap <= ATTR_CAP_MAX:
+            cap = cell_cap
+    else:
+        m = ATTR_NUM_RE.search(s)
+        if m is None:
+            return None
+        value = int(m.group(1))
+    if value < ATTR_MIN_VALUE:
+        return None
+    if cap and value > cap:
+        return None                      # 超上限 = 误读（8116/1680、3114/1689）
+    return value
 
 
 def ring_is_border(ratio, baseline=None, floor=GOLD_RING_MIN,
@@ -324,6 +369,202 @@ class TrainingParsersMixin:
                 continue
             return mx, sorted(cands)
         return None, None
+
+    # ---------- 专注恢复页 / 球队评分（2026-11-04） ----------
+
+    def stamina_plus_point(self, texts):
+        """大厅 / 训练剧本页顶栏专注药丸右侧「+」的点击点，返回 (x, y) 像素或 None。
+
+        为什么单独一个方法（用户 2026-11-04：「在大厅点击我标注的红框位置，
+        进入恢复专注页面」）：那个「+」不是文字按钮，OCR 有时把它并进药丸
+        （`108/150+`）、有时单独给一个 `+` 框、有时干脆不读。三条路都要兜住，
+        全都失败就返回 None，由调用方决定要不要按固定坐标点（并告警留痕）。
+
+        **训练内**的顶栏药丸（`40/115`，cx≈0.25）**没有**「+」，所以只在
+        画面右半区的药丸上找，绝不会误点训练日 HUD。
+        """
+        pill = None
+        for t in texts:
+            s = t.name.strip().replace(" ", "")
+            if not labels.STAMINA_RE.search(s):
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if cx < 0.45 or cy > 0.10:
+                continue                      # 训练内 HUD 的药丸在左半边，跳过
+            pill = (t, s, cx, cy)
+            break
+        if pill is None:
+            return None
+        t, s, cx, cy = pill
+        if s.rstrip().endswith("+"):
+            # 「108/150+」：'+' 就在框的最右端，往回收半个字宽
+            return int(t.x + t.width - self.width * 0.006), int(t.y + t.height / 2)
+        # 分开读的「+」：同一行、在药丸右侧
+        for cand in texts:
+            if cand.name.strip() != "+":
+                continue
+            ccy = (cand.y + cand.height / 2) / self.height
+            ccx = (cand.x + cand.width / 2) / self.width
+            if abs(ccy - cy) <= 0.04 and cx < ccx <= cx + labels.STAMINA_PILL_TOL:
+                return (int(cand.x + cand.width / 2),
+                        int(cand.y + cand.height / 2))
+        # 只读到药丸、没读到 '+':按版式贴到药丸右沿外一点点（'+' 是固定宽度的小按钮）
+        self.log_warning(f"专注药丸读到「{s}」但没有「+」框 → 按药丸右沿推算点击点")
+        return (int(t.x + t.width + self.width * 0.010),
+                int(t.y + t.height / 2))
+
+    def in_stamina_item_detail(self, texts):
+        """是不是「专注恢复」页里的**道具详情层**（已点开某一瓶饮料）？
+
+        实测帧 `logs/debug/1104-190912_loop60`（1549x871）：
+        `道具详情` + `专注能量饮料拥有：22` + `使用后可获得30专注。` + `拥有：22`
+        + `1/22`（数量）+ **`使用道具`**（确认按钮）。
+
+        这一层必须点「使用道具」才真的喝下去；点卡上的「使用」只是打开它。
+        """
+        return self.match_text(texts, labels.STAMINA_ITEM_DETAIL) is not None
+
+    def stamina_recover_close_point(self, texts):
+        """恢复页右上角 X 的点击点：优先用 OCR 到的「X」框，返回 (x, y) 或 None。
+
+        为什么不能只用固定坐标：`Defs.STAMINA_RECOVER_CLOSE = (0.942, 0.157)` 在
+        1549x871 上落到 (1459,136)，而实测 X 框中心是 (1448,105) —— y 偏了 31px，
+        点空的 30 次全都没关上这一页（2026-11-04 死循环事故的最后一环）。
+        """
+        for t in texts:
+            name = (t.name or "").strip().upper()
+            if name not in ("X", "×"):
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if cx >= 0.80 and cy <= 0.20:                 # 只认右上角那个 X
+                return int(t.x + t.width / 2), int(t.y + t.height / 2)
+        return None
+
+    def read_stamina_recover_options(self, texts):
+        """「专注恢复」页的三张卡 → `[{title, gain, owned, use, forbidden}]`。
+
+        纯识别，不选：选哪张由 `handlers/stamina.py` 决定。
+        每张卡横向落在「标题/说明」列（x 左侧）→「按钮」列（x 右侧），
+        所以按 **y 带** 把同一行的文字归组，再取带内最右那个按钮框。
+
+        `forbidden=True` 的判据是**两条独立事实**，任一成立就算：
+          1. 标题里出现「钻石」（钻石购买）；
+          2. 按钮框的文字**不是**整词「使用」（钻石行是图标 + 价格数字）。
+        用户口径：**禁止使用钻石恢复专注**，所以这一行连"候选"都不进，
+        连日志里都要显式写出来（方便复盘时确认脚本确实看见了、也确实没点）。
+        """
+        band = 0.055                                  # 卡片内文字的竖向容差（画面比例）
+        rows = []
+        for title in texts:
+            name = title.name.strip()
+            if not name:
+                continue
+            if (labels.STAMINA_RECOVER_TITLE not in name
+                    and not any(w in name for w in labels.STAMINA_RECOVER_FORBIDDEN)):
+                continue
+            cy = (title.y + title.height / 2) / self.height
+            same = [t for t in texts
+                    if abs((t.y + t.height / 2) / self.height - cy) <= band]
+            gain, owned, use, price = None, None, None, None
+            for t in same:
+                s = t.name.strip()
+                m = labels.STAMINA_GAIN_RE.search(s)
+                if m and gain is None:
+                    gain = int(m.group(1))
+                    continue
+                m = labels.STAMINA_OWNED_RE.search(s)
+                if m and owned is None:
+                    owned = int(m.group(1))
+                    continue
+                if s == "使用" and t.x > title.x + title.width * 0.5:
+                    use = t
+                    continue
+                if s.isdigit() and 1 <= len(s) <= 3 and t.x > title.x + title.width * 0.5:
+                    price = int(s)                    # 钻石价格（只有付费行才有）
+            forbidden = any(w in name for w in labels.STAMINA_RECOVER_FORBIDDEN)
+            if price is not None and use is None:
+                forbidden = True                      # 价格数字 = 付费按钮，不是「使用」
+            rows.append({"title": name, "gain": gain, "owned": owned,
+                         "use": use, "price": price, "forbidden": forbidden,
+                         "box": title})
+        rows.sort(key=lambda r: (r["gain"] is None, r["gain"] or 0))
+        return rows
+
+    def read_training_score(self, texts):
+        """一局结束的「训练评分」弹层 → `(评分, 评级)`，不是这一页返回 `(None, None)`。
+
+        实测（2026-11-04 20:53:21，`logs/mcp/a0e2b1ea…/run.log`）：
+
+            训练评分  7728  SS  点击屏幕继续
+
+        `7728` 就是**这个球员这一局的训练评分**（个人分），不是「本周总结」页那种
+        全队评分（那个会从 7708 滚到 10485，不能当判据）。
+        """
+        if self.match_text(texts, labels.TRAINING_SCORE_MARKS) is None:
+            return None, None
+        score, rating = None, None
+        for t in texts:
+            s = (t.name or "").strip().replace(",", "").replace(" ", "")
+            if score is None and s.isdigit() \
+                    and labels.SQUAD_SCORE_MIN <= int(s) <= labels.SQUAD_SCORE_MAX:
+                score = int(s)
+                continue
+            if rating is None and labels.TRAINING_RATING_RE.match((t.name or "").strip()):
+                rating = t.name.strip()
+        return score, rating
+
+    def read_squad_ratings(self, texts):
+        """「恭喜获得 / 训练奖励」页 → `{位置: 评分}`（读不到就是空 dict）。
+
+        用户 2026-11-04 口径：多角色队列的达标判据就是**这一页的球员评分**。
+        这一页只列五个位置（控卫/分卫/小前/大前/中锋）+ 评级 + 四位数评分，
+        **没有名字**，所以按「位置词与评分数字的横向最近」配对，
+        再由调用方用 `constants.POSITION_BY_NAME` 把队长换成位置。
+
+        实测帧 `docs/shots/2026-10-27-register-1.png`（1307x735）：
+        `4822 (0.219) / 3028 (0.336) / 3025 (0.450) / 2915 (0.565) / 2917 (0.679)`，
+        位置词 cy≈0.60、评分 cy≈0.64 → 都在 `SQUAD_SECTION_BAND` 里。
+        评级字母（A+/B/S+）**不参与**配对，只留着打日志。
+        """
+        y1, y2 = labels.SQUAD_SECTION_BAND
+
+        def cy_of(t):
+            return (t.y + t.height / 2) / self.height
+
+        def cx_of(t):
+            return (t.x + t.width / 2) / self.width
+
+        band = [t for t in texts if y1 <= cy_of(t) <= y2]
+        scores, positions, ratings = [], [], []
+        for t in band:
+            s = t.name.strip()
+            if s.isdigit() and labels.SQUAD_SCORE_MIN <= int(s) <= labels.SQUAD_SCORE_MAX:
+                scores.append((cx_of(t), int(s)))
+            elif s in labels.SQUAD_POSITIONS:
+                positions.append((cx_of(t), s))
+            elif labels.SQUAD_RATING_RE.match(s):
+                ratings.append((cx_of(t), s))
+        if not scores or not positions:
+            return {}
+        # 每一列的实际版式（实测 register-1.png）：**评级字母在评分正上方**、
+        # **位置名词在评级右边约 0.075w**、评分在下面。所以先按「位置→最近的评分」
+        # 配对会错一整列（位置整体右移 0.075，正好够跳到下一列去）。
+        # 正确做法：以评分为锚，取「右边 0～0.12w 内最近的那个位置词」。
+        out = {}
+        for sx, value in scores:
+            right = [(px - sx, name) for px, name in positions
+                     if -0.02 <= px - sx <= 0.12]
+            if right:
+                out.setdefault(min(right)[1], value)
+                continue
+            px, name = min(positions, key=lambda p: abs(p[0] - sx))
+            if abs(px - sx) <= 0.12:            # 兜底：位置词落在评分左边
+                out.setdefault(name, value)
+        if out and ratings:
+            self.log_debug(f"球队评分：{out}（评级 {[r[1] for r in ratings]}）")
+        return out
 
     def read_shop_items(self, texts):
         """解析商店左侧商品：名称 + 价格 + 卡片中心点击坐标。
@@ -1398,28 +1639,88 @@ class TrainingParsersMixin:
         """读底部六维面板的当前数值：`{属性名: 当前值}`，读不到的属性不出现。
 
         版式（2026-10-26 实测，三行两列）：每格「名字 + 等级 + 当前值/上限」，
-        OCR 会拆成「999」+「/1450」，也会把等级粘在数值前（「C+354/±90」）。
-        所以按行找名字右侧、从左往右第一个 ≥100 的数字 —— 后面的 /上限、/+加成
-        都比当前值大或小于 100。
+        OCR 会拆成「999」+「/1450」，也会把等级/评级粘在数值前（`C+354/±90`、`3488/1680`）。
+        每格的值必须 **≤ 该格上限**（`attr_value_from`），超了就当误读。
+
+        **读不准的那一格会放大重读一次**（`zoom_reread`，2026-11-04 用户口径：
+        「故障多发的就用这个方法重判」）：裁这一格 → x3 → 重跑 OCR → 再解析。
+        实测那一帧就是这么从 `8116` 救回 `1016` 的（并字/切框错了，放大后重新切框）。
         """
         panel = self.texts_in_region(texts, "attr_panel")
+        values = self._attr_values_from(panel)
+        missing = [n for n in labels.TRAINING_SUBJECTS if n not in values]
+        if missing:
+            values.update(self._attr_values_reread(panel, missing))
+        return values
+
+    def _attr_values_from(self, panel, names=None):
+        """从一批**已经在面板区域内**的 OCR 结果里解析六维（不重读）。"""
+        caps = getattr(self, "_attr_caps", None)
+        if not isinstance(caps, dict):
+            caps = {}
+            self._attr_caps = caps
         values = {}
-        for name in labels.TRAINING_SUBJECTS:
+        for name in (names or labels.TRAINING_SUBJECTS):
             # 必须整词匹配：match_text 的「拼接兜底」会返回面板里最长的框
             # （例如「C+354/±90」），拿来当名字会把整行读错。
             head = self.exact_text(panel, (name,))
             if head is None:
                 continue
             cy = head.y + head.height / 2
+            # 只取**这一格**里的文字：右边界是「名字右沿 + 一格的宽度」。
+            # 不加上界的话，左列那一格会把右列的数值吞进来（2026-11-04 实测：
+            # 运控那行把右边的上限 `1689` 当成自己的当前值）。
+            right_limit = head.x + head.width + self.width * 0.28
             row = [t for t in panel
                    if abs((t.y + t.height / 2) - cy) <= self.height * 0.035
-                   and t.x > head.x + head.width * 0.5]
+                   and head.x + head.width * 0.5 < t.x <= right_limit]
+            cap = caps.get(name)
             for t in sorted(row, key=lambda b: b.x):
-                m = re.search(r"(\d{2,4})", t.name)
-                if m and int(m.group(1)) >= 100:
-                    values[name] = int(m.group(1))
+                m = ATTR_PAIR_RE.search(t.name.replace(" ", ""))
+                if m and ATTR_CAP_MIN <= int(m.group(2)) <= ATTR_CAP_MAX:
+                    cap = caps[name] = int(m.group(2))     # 上限一局内不变，记下来
+                value = attr_value_from(t.name, cap)
+                if value is not None:
+                    values[name] = value
                     break
+            else:
+                if row:
+                    self.log_debug(f"六维「{name}」这一帧读不出可信值 →"
+                                   f"（{[t.name for t in row][:4]}，上限 {cap}）")
         return values
+
+    def _attr_values_reread(self, panel, missing):
+        """读不准的那几格：裁出来放大 x3 重读（`ui/zoom_reread.py`）。
+
+        只裁**这一格**（名字右侧那一小条），不是整个面板：一次重读约 0.1 秒，
+        整块 0.59w×0.22h 放大后要慢 3~4 倍。
+        """
+        frame = self.frame
+        if frame is None or not missing:
+            return {}
+        h, w = frame.shape[:2]
+        caps = getattr(self, "_attr_caps", {}) or {}
+        out = {}
+        for name in missing:
+            head = self.exact_text(panel, (name,))
+            if head is None:
+                continue                       # 连名字都没认出来，没法定这一格的位置
+            cy = head.y + head.height / 2
+            x1 = head.x + head.width * 0.6
+            x2 = min(w, head.x + head.width + w * 0.34)
+            got = zoom_reread.reread_px(
+                frame, self, (x1, cy - h * 0.045, x2, cy + h * 0.045))
+            cap = caps.get(name)
+            for text, _score in got:
+                m = ATTR_PAIR_RE.search(text.replace(" ", ""))
+                if m and ATTR_CAP_MIN <= int(m.group(2)) <= ATTR_CAP_MAX:
+                    cap = caps[name] = int(m.group(2))
+                value = attr_value_from(text, cap)
+                if value is not None:
+                    out[name] = value
+                    self.log_info(f"六维「{name}」放大重读：{value}（原读不准，读到「{text}」）")
+                    break
+        return out
 
     def refresh_attr_info(self, texts):
         """读底部六维面板并**合并**进 `info["attrs"]`（监控页「六维 / 分数预测」用）。

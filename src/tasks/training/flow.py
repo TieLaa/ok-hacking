@@ -16,8 +16,10 @@ import cv2
 import numpy as np
 
 from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,
-                                          TUESDAY_REST_THRESHOLD_BY_STYLE,
+                                          THURSDAY_REST_THRESHOLD_BY_STYLE,
                                           WEEKEND_PLAN)  # noqa: F401
+from src.tasks.training.queue import CaptainQueue
+from src.tasks.ui import labels
 from src.util.emergency_stop import STOP
 
 # 点击流水：一行一个 JSON 事件（时间戳 / 步数 / 当时界面 / 坐标）。
@@ -84,9 +86,46 @@ def summary_texts(texts, limit=UI_TEXT_LIMIT, max_len=UI_TEXT_MAXLEN):
     return text
 
 
+def _stall_limits():
+    """`handlers/__init__.py: STALL_LIMITS` 的懒加载（flow 不能顶层 import handlers，会成环）。"""
+    from src.tasks.training.handlers import STALL_LIMITS
+    return STALL_LIMITS
+
+
 class TrainingFlowMixin:
 
     def run(self):
+        """一次 run = 把**多角色队列**里的角色依次练到目标分（用户 2026-11-04 口径）。
+
+        队列为空 / `多角色队列` 关掉 → 老行为：跑完一局就结束（`run_one_round` 返回
+        True 即任务完成）。队列非空时每一局跑完都回来记一次分、必要时换队长，
+        直到**全部达标提前终止**，或撞上 `最大局数` 兜底。
+        """
+        self.init_captain_queue()
+        max_runs = max(1, int(self.config.get("最大局数")))
+        # 队列在**上次运行**里就已经全部达标（进度存在 logs/training_queue.json）→
+        # 直接收工，不要再白跑一局（2026-11-04：达标却还开新局跑）
+        if self._queue is not None and self._queue.finished:
+            self.log_info(f"队列已全部达标 → 提前终止（{self._queue.summary()}）", notify=True)
+            return True
+        runs = 0
+        while True:
+            runs += 1
+            if not self.run_one_round():
+                return False
+            if not self.advance_queue_after_round():
+                return True
+            if runs >= max_runs:
+                self.log_error(f"连跑 {runs} 局仍未达成全部目标（最大局数 {max_runs}）→ 停止",
+                               notify=True)
+                return False
+
+    def run_one_round(self):
+        """跑**一局**：从当前界面一直到「注册球员完成、回大厅」。
+
+        返回 True = 这一局正常跑完（可以接着开下一局），False = 出事了/被停止。
+        多角色时上层（`run`）负责换队长再进来一次。
+        """
         self._steps = 0
         # MCP / GUI 双入口：定产物目录。MCP 的 runner 已经 reset+verify 过，
         # GUI/CLI 走这里自己恢复基线（失败只告警，不打断用户手动起的任务）。
@@ -125,23 +164,41 @@ class TrainingFlowMixin:
         if not self.resolve_style_by_config():
             self._style_pending = True
             self.log_info("未指定队长 → 回训练室/校门口点日历，识别队长")
+        else:
+            # 配置里的队长已经把流派定下来了 → 明确关掉「待认队长」，
+            # 否则上一局留下的 True 会让这一局开局先去点日历（多角色换人时踩过）
+            self._style_pending = False
         # 运行期状态每次开局都要清（2026-10-29 实机：连开第二把时任务秒退，
         # 因为 _register_stage 还停在上次的 "back"，run() 的终点判据立刻命中）
         self.reset_run_state()
         self.log_info(f"流派：{self.style}"
                       + ("" if self.style_known else "（待日历识别队长）"))
-        max_steps = int(self.config.get("单局最大操作数"))
+        # 用户 2026-11-04 口径：「2000 步的限制不要了」—— 正常运行**不封顶**。
+        # 只有 MCP 的 tick harness（`tools/mcp/training_tick.py`）会用
+        # `单局最大操作数` 注入一个临时上限（跑 N 拍就停），所以这里只在
+        # 配置里**真的有**这个键时才生效（它已经不在 default_config 里了）。
+        max_steps = self.config.get("单局最大操作数")
+        max_steps = int(max_steps) if max_steps else None
         interval = float(self.config.get("操作间隔(秒)"))
-        stuck_seconds = float(self.config.get("卡死判定(秒)"))
-        stuck_limit = max(3, int(stuck_seconds / max(interval, 0.05)))
-        last_sig, stuck = None, 0
+        # 卡住判据（用户 2026-11-04 的**两条**口径，都做成「立刻接管」）：
+        #   ① 点击后 `点击无响应判定(秒)`（默认 3 秒）界面没变化；
+        #   ② 同一天点击超过 `单日最大点击数`（默认 100）下。
+        # 见 flow.stuck_takeover。
+        self.reset_day_home()
+        self._sig_changed_at = time.time()
+        last_sig = None                # 只用于 unknown 存证限流 + 上面那 3 秒判据
         self._last_dump = 0.0
 
-        while self._steps < max_steps:
+        while max_steps is None or self._steps < max_steps:
             # 业务侧主动喊停（例如指定队长不在池子里）：下一拍就退出，不再往下点。
             if getattr(self, "_abort_reason", None):
                 self.log_error(f"主动停止：{self._abort_reason}", notify=True)
                 return False
+            # 本局已经收账（「训练评分」页读到达标分 / 注册球员流程走完）→ 回大厅开下一局
+            if getattr(self, "_round_done", False):
+                self._round_done = False
+                self.log_info("本局结束（评分已收账）→ 交给队列判定/提前终止", notify=True)
+                return True
             if STOP.consume():
                 self.log_warning(f"按下紧急停止键（{STOP.last_press or STOP.label}）→ 立即中断，鼠标已释放",
                                  notify=True)
@@ -180,41 +237,32 @@ class TrainingFlowMixin:
                     self.log_warning("游戏厅小游戏 5 分钟还没结束 → 继续按普通流程处理")
                     self._arcade_wait_since = 0.0
                 else:
-                    stuck, last_sig = 0, None      # 动画期间不算卡死
+                    last_sig = None                # 动画期间不算「界面没变」
                     self.sleep(0.5)
                     continue
             elif getattr(self, "_arcade_wait_since", 0.0):
-                # 动画刚结束：5 秒看门狗从这一刻重新计时，别拿买小游戏之前的时间戳判卡死
                 self._arcade_wait_since = 0.0
-                self._last_click_at = time.time()
-                stuck, last_sig = 0, None
+                last_sig = None
 
-            # 界面指纹：同一页面每拍都一样，用来判「卡住了没」
+            # 界面指纹：同一页面每拍都一样；用于 ①「3 秒无响应」判据 ② unknown 存证限流
             sig = self._signature(texts)
-            if sig == last_sig:
-                stuck += 1
-            else:
-                stuck, last_sig = 0, sig
+            changed = sig != last_sig
+            if changed:
+                last_sig = sig
+                self._sig_changed_at = time.time()
 
-            # ---- 5 秒没有任何点击、界面文字也没变 → 卡住，存证后点中央继续 ----
-            # 只看「签名没变」会误判：剧情 ▼ 连点 5 秒时文字确实不变，但点击在推进。
-            # 所以两个条件都要满足：既没有点击事件，界面也没变。
-            if self._stalled(sig, last_sig, stuck_seconds):
-                self._stuck_rounds += 1
-                self.dump_debug(texts, f"stall{int(stuck_seconds)}s", frame)
-                self.log_warning(
-                    f"{stuck_seconds:.0f} 秒没有点击、界面也没变化"
-                    f"（上次动作：{self._last_state}）→ 已存证 logs/debug/，点击屏幕中央继续",
-                    notify=True)
-                if self._stuck_rounds >= 3:
-                    self.log_error("连续 3 轮「点了也不动」→ 停止任务，避免一直卡在同一界面")
-                    return False
-                self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=interval)
-                stuck, last_sig = 0, None
+            # 同一天计数器：读到新日期就归零（用户口径：「日期更新以后计数器重置」）
+            self.day_counter_step(texts)
+
+            # ---- 卡住就**立刻接管**（用户 2026-11-04 两条口径）----
+            # ① 点击后 3 秒界面没变化；② 同一天点击超过 100 下。
+            # **必须优先于所有 handler** —— 否则「handler 一直命中、点了没反应」会空转到死
+            # （剧情页「跳过」是灰的，连点 70+ 次，实训 2026-10-26）。
+            if self.stuck_takeover(texts, frame):
                 continue
 
             # ---- 点 3 次没变化 → 立刻进入 debug（用户 2026-10-26 口径）----
-            # 不等到 10 秒卡死判定，也不让 handler 一直"命中但无效"地空转。
+            # 这一条和第②条互补：②看「同一天点了多少下」，这条看「连点 3 下同一页没翻」。
             if self._sig_after_click is not None:
                 if sig == self._sig_after_click:
                     self._no_change += 1
@@ -237,17 +285,6 @@ class TrainingFlowMixin:
                 self._sig_after_click = sig
                 continue
 
-            # ---- 卡死检测必须**优先于所有 handler** ----
-            # 否则会出现「handler 一直命中、但点了完全没反应」的死循环：
-            # 例如剧情页的「跳过」是灰的，handle_dialog_continue 每拍都返回 True，
-            # 于是连点 70+ 次、把 400 步全耗光（实训 2026-10-26）。
-            if stuck >= stuck_limit:
-                self.dump_unknown(texts, "stuck")
-                self.log_warning(f"连续 {stuck + 1} 拍没变化 → 强制点一下继续")
-                self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=interval)
-                stuck, last_sig = 0, None
-                continue
-
             # ---- 队长/流派还没定 → 先专心认队长，不做别的 ----
             # 2026-11-01 用户口径：接手别人的局时，点多次返回回到训练室/校门口，
             # 点日历抓队长名字。识别期间**不跑别的动作** ——
@@ -264,12 +301,13 @@ class TrainingFlowMixin:
                         or self.match_text(texts, "首发") is not None
                         or self.match_text(texts, "保存编队") is not None)
             if getattr(self, "_register_stage", None) == "back" and not at_board:
-                self.log_info("注册球员流程完成（已回大厅）→ 任务完成", notify=True)
+                self.log_info("注册球员流程完成（已回大厅）→ 本局结束", notify=True)
                 return True
 
-            # ---- 第 7 周以后：每天先逛商店（用户 2026-11-03，优先级最高）----
+            # ---- 第 7 周以后：商店「新品上市」才进店（用户 2026-11-05）----
             # 放在所有 handler 之前 —— 一处盖住训练日 / 比赛日 / 周末首页三种入口，
-            # 否则训练、前往比赛、出行会先把这一天用掉（判据见 daycycle.late_shop_step）。
+            # 否则训练、前往比赛、出行会先把这一天用掉
+            # （判据见 daycycle.late_shop_step + places/shop.py: shop_fresh_badge）。
             if self.late_shop_step(texts):
                 self.sleep(interval)
                 continue
@@ -280,7 +318,7 @@ class TrainingFlowMixin:
 
             # ---- 兜底：不认识的界面也**让流程继续走**，不要卡死 ----
             # 存证限流：同一段时间最多 3 秒存一张，避免动画期间刷出几十张图
-            if stuck == 0 and time.monotonic() - self._last_dump > 3:
+            if changed and time.monotonic() - self._last_dump > 3:
                 self.dump_unknown(texts, "unknown")
                 self._last_dump = time.monotonic()
                 self.log_warning("没见过这个界面 → 已存证，点一下继续")
@@ -310,12 +348,22 @@ class TrainingFlowMixin:
         self._shop_try_key = None
         self._shop_try_count = 0
         self._prematch_noshop_key = None
-        self._shop_spend_all = False
         self._shop_seen = False
         self._arcade_wait_since = 0.0
         self._no_change = 0
         self._sig_after_click = None
         self._stuck_rounds = 0
+        # 卡住判据的计数器（同一天在休息室/校门口点了几下）：换局必须清，
+        # 否则上一局攒到 90 多次的计数会带进新的一局，开局就误判「卡住」
+        self.reset_day_home()
+        # 本局收账标记（「训练评分」弹层读到分 → `_round_done`）必须每局清干净，
+        # 否则第二局开局就自己判「本局结束」（2026-11-04 加）
+        self._round_done = False
+        self._round_score_seen = False
+        self._score_click_at = 0.0
+        # 「同一个 handler 连续命中」计数（STALL_LIMITS 用），换局必须清
+        self._loop_handler = None
+        self._loop_count = 0
         self._picked_subject = False
         self._picked_index = 0
         self._subject_confirmed_at = 0.0
@@ -334,6 +382,91 @@ class TrainingFlowMixin:
         info = getattr(self, "info", None)
         if isinstance(info, dict):
             info.pop("attrs", None)
+            # 「卡住干预」那一行的上一次结论也别留着（新一局从头数点击）
+            info.pop("stuck", None)
+
+    # ---------- 多角色队列（2026-11-04 用户口径） ----------
+
+    def init_captain_queue(self):
+        """读 `队长队列` 配置，定下这一次 run 要练的角色顺序。
+
+        `多角色队列` 关掉 / 队列解析为空 → `self._queue = None`，全程走老的
+        单队长逻辑（跑完一局任务就结束），不会静默换成别的行为。
+        """
+        self._queue = None
+        self._run_score = None
+        if not self.config.get("多角色队列"):
+            return None
+        queue = CaptainQueue(self.config.get("队长队列") or "")
+        if queue.empty:
+            self.log_warning("「多角色队列」打开但「队长队列」解析为空 → 按单队长跑")
+            return None
+        self._queue = queue
+        self.log_info(f"多角色队列：{queue.summary()}")
+        self.log_info(f"当前队长：{queue.captain}｜位置 {queue.position}"
+                      f"｜目标 {queue.target}｜已跑 {len(queue.runs_for())} 局")
+        if queue.captain:
+            self.config["指定队长"] = queue.captain
+        return queue
+
+    def note_run_score(self, texts):
+        """在「恭喜获得 / 训练奖励」页读**这一局要判定的球员评分**（每局只记第一次）。
+
+        队长 → 位置（`constants.POSITION_BY_NAME`）→ 那一列的四位数评分。
+        读不到就返回 None 且**不改** `_run_score`：`target_met(None)` 恒为 False，
+        这一局按「未达标」处理，同一个队长再练一局（宁可多练，不许假达标）。
+        """
+        queue = getattr(self, "_queue", None)
+        if queue is None:
+            return None
+        if getattr(self, "_run_score", None) is not None:
+            return self._run_score
+        ratings = self.read_squad_ratings(texts)
+        pos = queue.position
+        score = ratings.get(pos) if pos else None
+        if score is None:
+            self.log_warning(f"读不到队长「{queue.captain}」（位置 {pos}）的评分"
+                             f"——这一页读到 {ratings or '空'}，本局按未达标算")
+            return None
+        self._run_score = score
+        self.log_info(f"本局评分：{queue.captain}（{pos}）{score}"
+                      f" / 目标 {queue.target}")
+        return score
+
+    def advance_queue_after_round(self):
+        """一局结束：记分 → 达标就换下一个队长。返回 True = 还要接着跑下一局。
+
+        用户 2026-11-04 口径：「跑完当前局再换」——所以判定点在一局终点
+        （`注册球员 → 回大厅`），不在训练中途；中途达标的也不打断这一局。
+        """
+        queue = getattr(self, "_queue", None)
+        if queue is None:
+            return False                       # 单队长模式：跑完就结束
+        captain = queue.captain
+        score = getattr(self, "_run_score", None)
+        met = queue.record(score)
+        self.log_info(f"第 {len(queue.runs)} 局收账：{captain} 评分 {score}"
+                      f" / 目标 {queue.target} → {'达标' if met else '未达标，再练一局'}"
+                      f"（{queue.summary()}）")
+        if queue.finished:
+            self.log_info(f"多角色队列全部达标 → 提前终止（{queue.summary()}）", notify=True)
+            return False
+        self.switch_captain(queue.captain)
+        return True
+
+    def switch_captain(self, name):
+        """换队长：写配置 + 清流派 + 清上一局的运行期状态，下一拍从大厅开新局。"""
+        self.config["指定队长"] = name
+        self.reset_style()
+        # **不是** True：`_style_pending` 的含义是「流派没定，要去点日历认队长」，
+        # 而换队长的流派由 `run_one_round` 开头的 `resolve_style_by_config()` 直接查表定，
+        # 置 True 会让新一局开局先去点日历（2026-11-04 写多角色队列时差点踩这个坑）。
+        self._style_pending = False
+        self._run_score = None
+        self.reset_run_state()                 # 含 _register_stage / 卡死计数 / 六维快照
+        self.log_info(f"换队长 → {name}（位置 {self._queue.position if self._queue else '?'}"
+                      f"｜目标 {self._queue.target if self._queue else '?'}）→ 回大厅开新局",
+                      notify=True)
 
     def snap_event(self, handler_name, texts, frame=None):
         """事件命中时存一帧 + 一份 OCR 摘要，供报告页「事件 ↔ 截图」配对。
@@ -377,7 +510,11 @@ class TrainingFlowMixin:
         """界面指纹：只看**文字内容**，不看位置。
 
         坑（2026-10-26）：之前把坐标也算进指纹，动画/滚动时文字位置抖动 20px 就变，
-        结果每一拍都被当成"新界面"，疯狂存证、stuck 永远为 0。
+        结果每一拍都被当成"新界面"。
+
+        现在它**只用于 unknown 存证限流**（同一页面 3 秒最多存一张）。
+        卡住判据已经改成「同一天攒了多少」（`day_stuck_step`）：顶栏数字/星标每拍都在闪，
+        指纹一直在变，靠它判卡死只会永远判不出来。
         """
         return hash("|".join(sorted(t.name for t in texts)))
 
@@ -388,7 +525,8 @@ class TrainingFlowMixin:
 
         为什么要再包一层：ok 自带 click 只在传了 name 时才打坐标日志，而业务代码
         大多不传 name，事后无法复盘「第几秒点了哪里、当时是什么界面」。
-        另外 run() 的「5 秒没点击」看门狗也依赖这里的时间戳。
+        另外卡住判据要**数点击**（`note_day_home_click`）：所有点击都走这一个漏斗，
+        handler 里点几次就数几次，不怕漏。
         """
         at = time.time()
         self._last_click_at = at
@@ -412,9 +550,11 @@ class TrainingFlowMixin:
             raise
         finally:
             # 点击**完成**时刻才算「最近一次点击」：用户抢鼠标时 interaction 会在
-            # click 里面暂停几秒，用开始时刻计时会让看门狗把这段让路误判成卡死。
+            # click 里面暂停几秒，用开始时刻计时会让统计把这段让路算成空档。
             self._last_click_at = time.time()
             self._journal_click(record)
+            # 卡住判据②：同一天点击数 +1（`stuck_takeover` 用它判「一天点了多少下」）
+            self.note_click()
             # 记进本拍点击列表，snap_event 会把它写进事件 json（报告「内容」列）
             tick_clicks = getattr(self, "_tick_clicks", None)
             if tick_clicks is not None:
@@ -429,15 +569,158 @@ class TrainingFlowMixin:
             return int(x.x + x.width / 2), int(x.y + x.height / 2)
         return x, y
 
-    def _stalled(self, sig, last_sig, stuck_seconds, now=None):
-        """卡住判据：界面指纹没变 **且** 超过 N 秒没有任何点击。
+    # ---------- 卡住就立刻接管（2026-11-04 用户口径：两条判据都要） ----------
+    #
+    # 用户原话：「两个方法都要，点击 3 秒无响应要立刻接管，同一天点击超过 100 下要
+    #            立刻接管，2000 步的限制不要了。」
+    #
+    #   判据①「点击无响应判定(秒)」=3：界面指纹超过 3 秒没变、而且这段时间里**点过**
+    #        → 点了没反应（不是干等动画）→ 立刻接管；
+    #   判据②「单日最大点击数」=100：同一天累计点击超过 100 下还没换天 → 立刻接管。
+    #        **日期一更新就归零**（`day_counter_step`），正常的一天碰不到。
+    #
+    # 「接管」= 存证 logs/debug/ + 清掉当天拦路标记 + 点屏幕中央继续推进，**不**停任务；
+    # 同一天接管 3 次还推不动才停（防无限空点）。
+    # 声明表 `handlers/__init__.py: DAY_BUDGET_EXEMPT`（比赛快进 / 注册球员 / 赛前准备）
+    # 两条都不算 —— 那些页合法连跑几百拍、也不换天。
 
-        为什么不是只看指纹：剧情 ▼ 连点 5 秒时文字完全不变，但每拍都有点击，
-        流程是在推进的；那种页面绝不能判成卡死。
+    def day_counter_step(self, texts=None):
+        """每拍更新「同一天」计数器（用户口径：**日期更新以后计数器重置**）。
+
+        计数器都挂在当前日期键 `_day_key` 上：
+          - `_day_clicks`：这一天点了多少下（判据②的输入，在 `note_click` 里累加）；
+          - `_day_fixes`：这一天接管过几次（到 3 就停）。
+
+        只认**读到新日期**才归零；看不到日期的帧不动日期键（分不清有没有换天就不猜），
+        但点击照常累计 —— 否则停在无日期页面上空转就没人管了（2026-11-04 用户口径）。
         """
-        if not self._last_click_at or last_sig is None or sig != last_sig:
+        week, day = self.current_day(texts)
+        key = (week, day) if (week is not None and day is not None) else None
+        if key is not None and key != getattr(self, "_day_key", None):
+            prev = getattr(self, "_day_key", None)
+            if prev is not None:
+                self.log_info(
+                    f"日期更新 {prev} → {key}：卡住计数器归零"
+                    f"（上一天点击 {getattr(self, '_day_clicks', 0)} 下 / "
+                    f"接管 {getattr(self, '_day_fixes', 0)} 次）")
+            self._day_key = key
+            self._day_clicks = 0
+            self._day_fixes = 0
+        return key
+
+    def _stuck_exempt(self):
+        """这一拍所在页的 handler 是否声明了「合法长跑、不算卡住」。
+
+        声明表在 `handlers/__init__.py: DAY_BUDGET_EXEMPT`（谁长跑谁声明），
+        flow 这边不认识任何具体 handler 名字 —— 和 `STALL_LIMITS` 同一套做法。
+
+        `ImportError` 兜底：`reload_tasks` **不重载 `handlers/` 子包**（见
+        `docs/PROMPT_PLAYBOOK.md`），热更时旧模块里可能没有这张表 —— 那就按
+        「没有豁免」处理并告警一次，别把任务直接炸掉。
+        """
+        try:
+            from src.tasks.training.handlers import DAY_BUDGET_EXEMPT  # 局部导入，避开环
+        except ImportError:
+            if not getattr(self, "_day_exempt_warned", False):
+                self._day_exempt_warned = True
+                self.log_warning("handlers.DAY_BUDGET_EXEMPT 不存在（热更未重载 handlers/）"
+                                 "→ 长跑页也会被判卡住，建议重启进程")
             return False
-        return (now or time.time()) - self._last_click_at >= stuck_seconds
+        return getattr(self, "_last_state", None) in DAY_BUDGET_EXEMPT
+
+    def reset_day_home(self, key=None):
+        """同一天计数器归零（新的一局 / 换了一天 / 接管之后）。"""
+        self._day_key = key
+        self._day_clicks = 0
+        self._day_fixes = 0
+
+    def note_click(self):
+        """`click()` 每点一下都会调这里：同一天点击数 +1（判据②的输入）。"""
+        self._day_clicks = getattr(self, "_day_clicks", 0) + 1
+
+    def stuck_takeover(self, texts, frame=None):
+        """卡住 → 立刻接管。返回 True = 这一拍已处理（主循环 continue）。
+
+        两条判据任一命中就动手（用户 2026-11-04 口径）：
+          ① 界面指纹超过 `点击无响应判定(秒)` 没变化，且这段时间里点过（点了没反应）；
+          ② 同一天累计点击超过 `单日最大点击数`，日期还没更新。
+
+        接管三件事：存证 → 清掉当天拦路标记 → 点屏幕中央继续；同一天 3 次才停。
+        """
+        if self._stuck_exempt():
+            return False
+        key = getattr(self, "_day_key", None)
+        tag, why = None, ""
+        noresp = float(self.config.get("点击无响应判定(秒)") or 3)
+        click_limit = max(1, int(self.config.get("单日最大点击数") or 100))
+        changed_at = getattr(self, "_sig_changed_at", 0.0)
+        clicked_at = getattr(self, "_last_click_at", 0.0)
+        idle = time.time() - changed_at
+        clicks = getattr(self, "_day_clicks", 0)
+
+        if changed_at and clicked_at >= changed_at and idle >= noresp:
+            tag = f"noresp{int(noresp)}s"
+            why = f"点了之后界面 {idle:.1f} 秒没变化（上次动作：{self._last_state}）"
+        elif clicks > click_limit:
+            tag = f"clicks{click_limit}"
+            where = f"第{key[0]}周 星期{key[1]}" if key else "当前页看不到日期"
+            why = f"{where}：这一天已经点了 {clicks} 下，日期还没更新"
+
+        if tag is None:
+            return False
+        self._day_clicks = 0                       # 先归零，接管这一下不算进新一轮
+        self._day_fixes = getattr(self, "_day_fixes", 0) + 1
+        self._sig_changed_at = time.time()
+        self.dump_debug(texts, tag, frame)
+        self.log_warning(
+            f"{why} → 立刻接管：已存证 logs/debug/，清掉当天拦路标记后点屏幕中央继续"
+            f"（第 {self._day_fixes}/3 次接管）", notify=True)
+        info = getattr(self, "info", None)
+        if isinstance(info, dict):
+            who = f"第{key[0]}周 星期{key[1]}" if key else "无日期页"
+            info["stuck"] = f"{who} · 已接管 {self._day_fixes} 次（{tag}）"
+        if self._day_fixes >= 3:
+            self._abort_reason = f"{why}；同一天接管 3 次仍然推不动（已存证 logs/debug/）"
+            self.log_error(self._abort_reason, notify=True)
+            return True                            # 下一拍 run() 看到 _abort_reason 就退出
+        self._clear_day_home_brakes()
+        self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=0.3)
+        return True
+
+
+    def _clear_day_home_brakes(self):
+        """干预时的「纠错」：清掉会**把这一天堵死**的当天标记。
+
+        这些标记都是「做过了就不再试」的语义，一旦它们在没成功的路径上被置位，
+        这一天就彻底推不动了（商店点了两次没开、出行标记写脏、科目选过…）。
+        清掉以后同一天的决策会从头再走一遍，**进程就继续往前了**。
+
+        不动的东西：`_register_stage`（一局终点的账，清了下一次会重复注册）、
+        `_shop_day`（今天真的进过店，清了会重复买东西）、`_style*`（流派是队长的属性）。
+        """
+        self._no_change = 0
+        self._sig_after_click = None
+        self._stuck_rounds = 0
+        self._loop_handler = None
+        self._loop_count = 0
+        # 商店入口的「今天试过几次」（late_shop_step）
+        self._shop_try_key = None
+        self._shop_try_count = 0
+        self._shop_at = 0.0
+        # 训练日主界面的「等出行按钮」计数 / 头一拍不决策（handlers/__init__.py: LEAVE_RESETS）
+        self._hub_ticks = 0
+        self._outing_wait = 0
+        self._outing_clicks = 0
+        # 笔记 / 科目 / 转盘这些「已经做过」的瞬时标记
+        self._note_auto_done = False
+        self._note_next_tries = 0
+        self._picked_subject = False
+        self._picked_index = 0
+        self._wheel_clicked_at = 0.0
+        # 今天去过的地点：卡住的很可能就是「记成去过了、其实没进去」
+        state = self.day_state()
+        state["visited"] = set()
+        self.log_info("干预纠错：已清掉当天拦路标记（商店试次/出行/笔记/科目/已去地点）")
 
     @staticmethod
     def _journal_click(record):
@@ -471,7 +754,10 @@ class TrainingFlowMixin:
                     f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
             with open(os.path.join(folder, "actions.txt"), "w", encoding="utf-8") as f:
                 f.write(f"step={self._steps} last={self._last_state} "
-                        f"no_change={self._no_change} rounds={self._stuck_rounds}\n")
+                        f"no_change={self._no_change} rounds={self._stuck_rounds} "
+                        f"day={getattr(self, '_day_key', None)}"
+                        f" clicks={getattr(self, '_day_clicks', 0)}"
+                        f" fixes={getattr(self, '_day_fixes', 0)}\n")
                 f.write("\n".join(self._recent_actions))
             with open(os.path.join(folder, "threads.txt"), "w", encoding="utf-8") as f:
                 for th in threading.enumerate():
@@ -514,6 +800,22 @@ class TrainingFlowMixin:
                     # 命中别的界面时自动清零。这里**不再用 handler 名字字符串判断** ——
                     # 那种写法每加一个 handler 都要回来改本函数（2026-11-01 重构）。
                     self._reset_handler_leave_states(handler.__name__)
+                    # ---- 同一个 handler 连续命中太多次 = 这一页怎么点都推不动 ----
+                    # 声明表在 handlers/__init__.py: STALL_LIMITS（谁需要谁声明）。
+                    # 「点 3 次没变化」那套看门狗靠**界面指纹不变**，而顶栏数字/星标
+                    # 每拍都在闪时指纹每拍都变 → 永远不触发（2026-11-04 实跑：
+                    # 「选择憋气难度」页把「确定」点了 1019 次、烧掉 1200 步）。
+                    if handler.__name__ == getattr(self, "_loop_handler", None):
+                        self._loop_count = getattr(self, "_loop_count", 0) + 1
+                    else:
+                        self._loop_handler, self._loop_count = handler.__name__, 1
+                    limit = _stall_limits().get(handler.__name__)
+                    if limit and self._loop_count >= limit:
+                        self.dump_debug(texts, f"loop{self._loop_count}", frame)
+                        self._abort_reason = (
+                            f"{handler.__name__} 连续 {self._loop_count} 拍命中同一页"
+                            "却推不动（已存证 logs/debug/）")
+                        self.log_error(self._abort_reason, notify=True)
                     return True
             except Exception as e:
                 self.log_error(f"{handler.__name__} 异常: {type(e).__name__}: {e}")
@@ -651,15 +953,15 @@ class TrainingFlowMixin:
     def rest_threshold(self, day=None):
         """今天「精力低于多少就休息」。
 
-        用户 2026-11-03：**扭蛋流 / 小游戏流**在周二有硬阈值 **65**
-        （`TUESDAY_REST_THRESHOLD_BY_STYLE`）；**其它流派（训练流 / 商店流）周二
-        没有特殊限制**，只遵守配置里的「休息精力阈值」。
-        周四同样没有特殊阈值（旧的 75 已取消）。
+        用户 2026-11-04：**扭蛋流 / 小游戏流**在周四有硬阈值 **60**
+        （`THURSDAY_REST_THRESHOLD_BY_STYLE`，取代旧的「周二 65」）；**其它流派
+        （训练流 / 商店流）周四没有特殊限制**，只遵守配置里的「休息精力阈值」。
+        周二现在没有任何特殊阈值（旧的周二 65 / 周二 60 已删除）。
         有硬阈值时取 max(配置值, 硬阈值)，配置调高时以配置为准。
         """
         base = int(self.config.get("休息精力阈值"))
-        if day == "二":
-            hard = TUESDAY_REST_THRESHOLD_BY_STYLE.get(self.style)
+        if day == "四":
+            hard = THURSDAY_REST_THRESHOLD_BY_STYLE.get(self.style)
             if hard is not None:
                 return max(base, hard)
         return base

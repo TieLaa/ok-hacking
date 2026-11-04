@@ -182,18 +182,20 @@ class DayCycleMixin:
             return "推进对话", "对话框提到「出行」但还没按钮 → 先推进对话"
         return None, "「出行」按钮认不出来"
 
-    # ---------- 一天的入口 ③：第 7 周以后，每天先逛商店（2026-11-03） ----------
+    # ---------- 一天的入口 ③：第 7 周以后，商店「新品上市」才进店（2026-11-05） ----------
 
     def late_shop_step(self, texts):
-        """第 7 周以后：每天先逛一次商店。返回 True = 这一拍已经点过入口。
+        """第 7 周以后：看到「新品上市」提示才进店。返回 True = 这一拍已经点过入口。
 
-        用户 2026-11-03 口径（**优先级最高**）：「时间来到第 7 周以后，如果赢了会
-        一直有比赛，按照一天休息一天比赛的顺序，新逻辑就是第 7 周以后每天都进商店
-        买合适的商品」。所以它和上面「训练/休息」「出行」是**同级的一天入口**，
-        判断就写在这里（本模块管「一天」，不要在每个 handler 里各判一次）。
+        用户 2026-11-05 口径（**取代** 2026-11-03 的「每天都进店」）：
+        **不是每天都进店** —— 只有「商店上新」那块提示（实机是橙色的「新品上市」，
+        挂在右上角「商店」按钮**正上方**；2026-11-05 截图：第 3 周 星期一 比赛日
+        主界面）出现时才进店；进去以后按「购买策略」正常顺序买，**不清空**。
 
-        调用点在 `flow.run` 主循环里、`_handle_any` 之前 —— 一处盖住训练日主界面、
-        比赛日主界面、周末首页三种页面，谁也不会先把手里的这一天用掉。
+        它和上面「训练/休息」「出行」是**同级的一天入口**，判断就写在这里
+        （本模块管「一天」，不要在每个 handler 里各判一次）。调用点在 `flow.run`
+        主循环里、`_handle_any` 之前 —— 一处盖住训练日主界面、比赛日主界面、
+        周末首页三种页面，谁也不会先把手里的这一天用掉。
         """
         week, day = self.current_day(texts)
         if week is None or week < LATE_SHOP_FROM_WEEK:
@@ -213,7 +215,17 @@ class DayCycleMixin:
         cy = (box.y + box.height / 2) / self.height
         if not (x1 - 0.06 <= cx <= x2 and y1 <= cy <= y2):
             return False
+        # 判据：商店按钮**正上方**有「新品上市」提示（`places/shop.py: shop_fresh_badge`）。
+        # 没提示 = 没上新 = 今天不进店（旧版是「每天都进」，2026-11-05 改）。
         key = (week, day)
+        badge, why = self.shop_fresh_badge(texts, box)
+        if badge is None:
+            # 一天只打一行 INFO（DEBUG 没人翻；每拍打一条又会把日志刷满）
+            if key != getattr(self, "_shop_nobadge_key", None):
+                self._shop_nobadge_key = key
+                self.log_info(f"第{week}周 星期{day or '?'}：商店上方没有「新品上市」提示"
+                              f"（{why}）→ 今天不进店")
+            return False
         if key == getattr(self, "_shop_day", None):
             return False                       # 今天已经真进过店（handle_shop 记的账）
         if day is None:
@@ -229,13 +241,10 @@ class DayCycleMixin:
                      if key == getattr(self, "_shop_try_key", None) else 1)
         self._shop_try_key, self._shop_try_count = key, tries
         self._shop_at = time.monotonic()
-        # 买什么不变：按「购买策略」买合适的；只有比赛日 + 赛前清空才清空
-        match_day = self.match_text(texts, ("VS", "跳过比赛", "前往比赛")) is not None
-        self._shop_spend_all = bool(match_day and self.config.get("赛前清空余额"))
         self.click_box(box, after_sleep=0.9)
-        self.log_info(f"第{week}周（≥{LATE_SHOP_FROM_WEEK} 周）：每天先逛商店"
-                      f"（星期{day or '?'}｜第 {tries}/{SHOP_ENTRY_TRIES} 次点）"
-                      + ("（赛前清空）" if self._shop_spend_all else ""))
+        self.log_info(f"第{week}周：看到「{badge.name.strip()}」→ 进店"
+                      f"（按「{self.config.get('购买策略')}」买｜星期{day or '?'}"
+                      f"｜第 {tries}/{SHOP_ENTRY_TRIES} 次点）")
         return True
 
     # ---------- 队长 / 流派：两条解析路径 ----------

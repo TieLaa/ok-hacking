@@ -547,11 +547,8 @@ class TrainingHandlers:
         else:
             self._shop_try_key = key
             self._shop_try_count = 1
-        # 赛前清空：比赛当天把零用钱花光（配置开关）
-        self._shop_spend_all = bool(self.config.get("赛前清空余额"))
         self.click_box(shop, after_sleep=0.9)
-        self.log_info(f"比赛日（周{day or '?'}）：{self.style}先进店买一次"
-                      + ("（赛前清空）" if self._shop_spend_all else ""))
+        self.log_info(f"比赛日（周{day or '?'}）：{self.style}先进店买一次")
         return True
 
     def find_shop_button(self, texts):
@@ -583,11 +580,21 @@ class TrainingHandlers:
             if btn is not None:
                 self.log_debug(f"商店按钮：整词命中「{name}」")
                 return btn
-        # 包含匹配兜底（OCR 拼接/多字）：长度限制住，别把正文当按钮
+        # 包含匹配兜底（OCR 拼接/多字）：长度限制住，别把正文当按钮。
+        # 「新品上市」那块**提示标签**排在后面：真入口是它下面那个「商店」，
+        # 标签点下去可能没反应（用户 2026-11-05 截图：标签在商店正上方）。
+        # 标签和按钮被读成一个框（「新品上市 商店」）时允许长一点（≤10 字）。
+        plain, fresh = [], []
         for t in area:
             name = t.name.strip()
-            if ("商店" in name or "商品" in name) and len(name) <= 6:
-                return t
+            if "商店" not in name and "商品" not in name:
+                continue
+            is_fresh = any(m in name for m in labels.SHOP_FRESH_MARKS)
+            if len(name) > (10 if is_fresh else 6):
+                continue
+            (fresh if is_fresh else plain).append(t)
+        for t in plain + fresh:
+            return t
         # 只剩一个单字（另一个字没识别出来）：点这个字，总比整局不进店强
         single = left or right
         if single is not None:
@@ -718,5 +725,69 @@ class TrainingHandlers:
         detail = "  ".join(f"{pp}%/+{vv}={e:.0f}" for e, vv, pp, _cx in picks)
         self.log_info(f"加强训练：{detail} → 选 {p}%/+{v}")
         return True
+
+    # 「选择憋气难度」页（2026-11-04 实跑落到这里，落到 unknown 兜底连点中央 → 任务停）
+    BREATH_MARKS = ("憋气难度", "选择憋气")
+    BREATH_CARD_RE = re.compile(r"(\d+)\s*分钟")
+    BREATH_CONFIRM_POINT = (0.472, 0.878)     # 1549x871 实测「确定」@ (731,765)
+
+    def handle_breath_difficulty(self, texts):
+        """憋气难度页：先选**时长最长**的那档卡，再点「确定」。
+
+        2026-11-04 两次实跑都栽在这一页（`logs/debug/1104-102510_nochange3/ocr.txt`、
+        `logs/mcp/f7b666eb…/run.log` 第 77~1200 步）：
+
+            「选择憋气难度」+ 两张卡
+               进阶 / 2分钟 / 随机获得属性或零用钱
+               进阶 / 3分钟 / 有机会获得大量零用钱
+            + 底部「确定」
+
+        **第一版只点「确定」→ 点了 1019 次页面一动不动**（卡片没选中时「确定」是废的），
+        白烧 1200 步 27 分钟。所以必须先点卡再确定。
+
+        选哪档：跟「钓鱼场选最贵」同一条思路 —— **时长更长的档收益更高**
+        （3分钟那张写的是「有机会获得大量零用钱」）。要改口径改这里一行。
+        """
+        if self.match_text(texts, self.BREATH_MARKS) is None:
+            return False
+        if not getattr(self, "_breath_picked", False):
+            cards = [(int(m.group(1)), t) for t in texts
+                     for m in [self.BREATH_CARD_RE.search(t.name.strip())] if m]
+            if cards:
+                minutes, card = max(cards, key=lambda c: c[0])
+                x, y = self._breath_card_point(card, texts)
+                self.click(x, y, after_sleep=0.5)
+                self._breath_picked = True
+                self.log_info(f"憋气难度页：选 {minutes} 分钟那档（时长最长）@({x},{y})")
+                return True
+            self.log_warning(f"憋气难度页：认不出「N分钟」卡片 → 直接点确定"
+                             f"（读到 {[t.name.strip() for t in texts][:6]}…）")
+        if self.click_button("confirm", texts=texts, after_sleep=0.9, must=False):
+            self.log_info("憋气难度页：确定")
+            return True
+        x, y = self.BREATH_CONFIRM_POINT
+        self.click(int(self.width * x), int(self.height * y), after_sleep=0.9)
+        self.log_warning("憋气难度页：没认出「确定」文字 → 按实测坐标点（0.472, 0.878）")
+        return True
+
+    def _breath_card_point(self, card, texts):
+        """卡片的点击点：**卡身中部**，不是那个「N分钟」标签。
+
+        2026-11-04 实机（同一页两次踩）：
+          - 点「4分钟」文字框中心 (307, 408) → **选不中**，「确定」一直是灰的，
+            点了 1000+ 次也不动；
+          - 点卡身 (400, 450) → 立刻选中（「确定」由灰转黄）。
+        所以取「同一列、位于标签下方」的那行说明文字（奖励说明）中心当点击点，
+        它一定在卡身里；认不出来才退回「标签正下方 9% 屏高」。
+        """
+        cx = (card.x + card.width / 2) / self.width
+        cy = (card.y + card.height / 2) / self.height
+        below = [t for t in texts
+                 if cy + 0.02 < (t.y + t.height / 2) / self.height < cy + 0.22]
+        if below:
+            t = min(below, key=lambda b: abs((b.x + b.width / 2) / self.width - cx))
+            if abs((t.x + t.width / 2) / self.width - cx) <= 0.09:
+                return int(t.x + t.width / 2), int(t.y + t.height / 2)
+        return int(self.width * cx), int(self.height * (cy + 0.09))
 
 

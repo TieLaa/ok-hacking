@@ -34,6 +34,10 @@ START_RETRY_MAX = 100  # 最多等 10 秒，主窗口还没显示就不抢了
 # 技能品质权重（docs/score-model/README.md：彩 75 / 金 50 / 白 25）
 SKILL_WEIGHTS = {"color": 75, "gold": 50, "white": 25}
 SKILL_KEYS = {"color": "技能-彩色", "gold": "技能-金色", "white": "技能-白色"}
+# 六维必须**齐 6 项**才算「分数预测」（和 training/parsers.ATTR_KEYS 一致）。
+# 面板被说明气泡挡住 / 这一帧漏读一项时，拿 4~5 项求和会给出偏低的分，
+# 用户看到的就是「分数自己乱跳」——宁可不显示，也不显示错的。
+ATTR_KEYS = 6
 
 DEFAULT_LAYOUT = {
     "version": 1,
@@ -66,13 +70,12 @@ DEFAULT_LAYOUT = {
             ]},
             {"id": "shop", "title": "商店", "rows": [
                 ["购买策略", "{buy_strategy}"],
-                ["赛前清空", "{clear_balance}"],
                 ["今日已逛", "{shop_today}"],
             ]},
             {"id": "risk", "title": "风险", "rows": [
                 ["当前失败率", "{fail_rate}"],
                 ["失败率上限", "{fail_limit}"],
-                ["卡死判定", "{stuck}"],
+                ["卡住干预", "{stuck}"],
             ]},
         ]},
         {"type": "timeline", "title": "最近动作", "max_rows": 8,
@@ -349,9 +352,11 @@ class MonitorTab(CustomTab):
         skills = {k: int(config.get(key, 0) or 0) + int(gained.get(k, 0) or 0)
                   for k, key in SKILL_KEYS.items()}
         # 评分 = 六维总和 + 75×彩 + 50×金 + 25×白（每角色开局恒 1 彩 + 1 白，见 docs/score-model）
+        # **六维不齐就不算**（2026-11-04）：面板被挡/OCR 漏一项时，拿 4 项求和会给出
+        # 一个偏低的分（用户看到「突然 9k / 1w4」的另一半原因），不如显示「—」。
         total_attr = sum(v for v in attrs.values() if isinstance(v, (int, float)))
         score = None
-        if total_attr:
+        if len(attrs) >= ATTR_KEYS and total_attr:
             score = int(round(total_attr)) + sum(
                 SKILL_WEIGHTS[k] * v for k, v in skills.items())
 
@@ -378,7 +383,6 @@ class MonitorTab(CustomTab):
             "weekend_plan": info.get("weekend_plan") or MISSING,
             "picnic_threshold": config.get("周末野餐阈值", MISSING),
             "buy_strategy": config.get("购买策略", MISSING),
-            "clear_balance": "打开" if config.get("赛前清空余额") else "关闭",
             "shop_today": info.get("shop_today") or "否",
             "fail_rate": info.get("fail_rate") or info.get("当前失败率") or MISSING,
             "captain": (config.get("指定队长") or "").strip(),
@@ -405,7 +409,8 @@ class MonitorTab(CustomTab):
             "skill_last": info.get("skill_last") or "",
             "quick_enabled": self._enabled_of(self._task_by_name("QuickMatchTask")),
             "fail_limit": config.get("失败率上限(%)", MISSING),
-            "stuck": info.get("stuck") or f"{config.get('卡死判定(秒)', MISSING)}s · 未触发",
+            "stuck": info.get("stuck") or (
+                f"3 秒无响应 / 日 {config.get('单日最大点击数', MISSING)} 次 · 未触发"),
             "timeline": info.get("timeline") or [],
             "device_title": "篮球少女：飞跃巅峰",
             "device_meta": self._device_meta(),
