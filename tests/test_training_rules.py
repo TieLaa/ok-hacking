@@ -560,6 +560,25 @@ class GachaRules(unittest.TestCase):
         self.assertTrue(task.handle_street(task._texts))
         self.assertEqual(task.actions, [("click", 1837, 50)])
 
+    def test_blue_clear_card_never_bought_at_low_stamina(self):
+        """2026-11-04 23:56 实跑：精力 23（低于清空阈值 30）时买了**蓝卡**，精力清到 0。
+
+        日志原文：`体能增加(蓝/50币/0)、精力转换-体能(蓝+队友·清空/50币/0)、
+        全属性增加(蓝/50币/0) → 选「精力转换-体能」（蓝，50币，零用钱 231，精力 23）`
+        用户当场问「怎么买了一个蓝色的，不是不买吗」。
+
+        根因：品质白名单写成了 `elif`，只挂在**非清空卡**上 → 清空卡绕过白名单。
+        现在「蓝/其他一律不买」对清空卡同样成立：一张都不点，直接退出。
+        """
+        task = FakeTask(gacha_texts([
+            ("体能增加", "主力体能+20"),
+            ("精力转换-体能", "消耗所有精力，主力体能+48"),
+            ("全属性增加", "主力三项推荐属性+20"),
+        ], stamina="23/130", money="231", price="50"),
+            qualities=["蓝", "蓝", "蓝"], mates=[False, True, False])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions, [("click", 1837, 50)])   # 只有右上角 ↩ 退出
+
     def test_unknown_money_exits_without_buying(self):
         """读不到零用钱时不能盲买：买不起会卡在扭蛋页（2026-10-26 实测）。"""
         task = FakeTask(gacha_texts([
@@ -571,12 +590,17 @@ class GachaRules(unittest.TestCase):
         self.assertEqual(task.actions, [("click", 1837, 50)])
 
     def test_clear_card_allowed_when_stamina_low(self):
-        """精力 10 < 阈值 30：允许买清空卡（拿精力换属性）。"""
+        """精力 10 < 阈值 30：允许买清空卡（拿精力换属性）。
+
+        2026-11-04 补：清空卡**也要过品质白名单**（当天买了蓝卡清空精力，
+        用户：「怎么买了一个蓝色的，不是不买吗」），所以这里用紫卡当夹具，
+        蓝清空卡的拒绝交给 `test_blue_clear_card_never_bought_at_low_stamina`。
+        """
         task = FakeTask(gacha_texts([
             ("精力转换", "消耗所有精力，意识训练"),
             ("防守增加", "主力防守+30"),
             ("投射增加", "主力投射+30"),
-        ], stamina="10/121", money="200"), qualities=["蓝", "蓝", "蓝"])
+        ], stamina="10/121", money="200"), qualities=["紫", "蓝", "蓝"])
         self.assertTrue(task.handle_street(task._texts))
         self.assertEqual(task.actions[0][0], "click")      # 点卡片
         self.assertNotEqual(task.actions[0][1], 1837)      # 不是退出
