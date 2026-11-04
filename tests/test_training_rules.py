@@ -4002,10 +4002,16 @@ class PurchaseRules(unittest.TestCase):
 
     COLS = (0.223, 0.357, 0.490)
 
-    def _shop(self, items, money=80, quality="金"):
-        """items = [(名字, 价格)]，价格写 "免费" 表示 0 元卡。"""
+    def _shop(self, items, money=80, quality="金", week=None):
+        """items = [(名字, 价格)]，价格写 "免费" 表示 0 元卡。
+
+        `week` 给了就把「第N周 星期一」写进顶栏（测第 7 周以后不买精力饮料）。
+        """
         texts = [box(760, 60, "商店", 160, 40),
                  box(1200, 60, "上新时间", 200, 30)]
+        if week is not None:
+            texts.append(box(30, 20, f"第{week}周", 120, 40))
+            texts.append(box(200, 20, "星期一", 130, 40))
         if money is not None:
             texts.append(box(1100, 20, str(money), 80, 40))
         for i, (name, price) in enumerate(items):
@@ -4035,6 +4041,32 @@ class PurchaseRules(unittest.TestCase):
     def test_shop_buys_free_item_when_poor(self):
         """白神时久：0 元商品不花零用钱，余额 80 也要买。"""
         task, texts = self._shop([("器材手册+", 150), ("精力饮料", 0)])
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「精力饮料」", "".join(task.logs))
+
+    def test_shop_buys_stamina_drink_before_week7(self):
+        """第 7 周之前：精力饮料照常买（这条口径只管第 7 周以后）。"""
+        task, texts = self._shop([("精力饮料", 30)], money=120, week=6)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「精力饮料」", "".join(task.logs))
+
+    def test_shop_skips_stamina_drink_from_week7(self):
+        """2026-11-05 用户口径：第 7 周以后不买「精力饮料」，关店。"""
+        task, texts = self._shop([("精力饮料", 30)], money=120, week=7)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("没有买得起的商品了", "".join(task.logs))
+        self.assertNotIn("买「精力饮料」", "".join(task.logs))
+
+    def test_shop_still_buys_free_drink_from_week7(self):
+        """第 7 周以后：免费的精力饮料照样拿（0 元不花零用钱）。"""
+        task, texts = self._shop([("器材手册+", 150), ("精力饮料", "免费")],
+                                 money=80, week=7)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「精力饮料」", "".join(task.logs))
+
+    def test_shop_drink_filter_survives_missing_week(self):
+        """顶栏 OCR 抖一下、周数读不到：不过滤，按老规则正常买（不整拍罢工）。"""
+        task, texts = self._shop([("精力饮料", 30)], money=120)
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「精力饮料」", "".join(task.logs))
 

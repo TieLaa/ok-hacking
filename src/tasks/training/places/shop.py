@@ -20,10 +20,12 @@
 （实跑：120 零用钱、店里有 100 的紫卡，被门槛拦掉），已删除。
 
 2026-11-05 用户口径：第 7 周以后**看到入口上方的「新品上市」提示才进店**
-（判据 `shop_fresh_badge`），进去按「购买策略」正常顺序买，**不清空**。
+（判据 `shop_fresh_badge`），进去按「购买策略」正常顺序买，**不清空**；
+第 7 周以后**不买「精力饮料」**（免费的照样拿），在 `pick_shop_item` 里过滤。
 """
 
 from src.tasks.ui import labels
+from src.tasks.training.constants import LATE_SHOP_FROM_WEEK
 
 # 地点名（地图上的按钮文字 / 状态里的键）
 PLACE = "商店"
@@ -114,7 +116,16 @@ class ShopPlace:
         `policy` = 配置项「购买策略」：只买金和紫 / 只买器材手册+ / 买最贵 / 不买。
         2026-11-05 用户口径：**任何日子都不清空**（比赛日前一天也不清空），
         所以这里只有「策略」一条口径，没有「把钱花光」这个分支。
+
+        2026-11-05 用户口径：第 7 周以后**不买「精力饮料」**——前期随便买，
+        后期精力不缺，买了占商店格子还花钱。免费（0 元）的精力饮料照样拿。
+        周数读不到时**不拦**（顶栏 OCR 抖一下不能让商店整拍罢工）。
         """
+        week = self.current_day()[0]
+        no_drink = week is not None and week >= LATE_SHOP_FROM_WEEK
+        if no_drink:
+            items = [i for i in items
+                     if i["price"] == 0 or "精力饮料" not in i["name"]]
         # 免费商品（白神时久：每天多一件 0 元商品）：不花零用钱，
         # 余额不够、甚至钱读不到时都应该拿。
         free = [i for i in items if i["price"] == 0]

@@ -86,6 +86,9 @@
   点空不算，下一拍重试，最多 `SHOP_ENTRY_TRIES = 2` 次。
 - 进去以后按「购买策略」**正常顺序**买（默认金/紫），**不清空** —— `赛前清空余额`
   已在 2026-11-05 删除，比赛日也不把钱花光。
+- **第 7 周以后不买「精力饮料」**（2026-11-05 用户口径）：免费的照样拿；
+  过滤在 `places/shop.py: pick_shop_item`，阈值复用 `LATE_SHOP_FROM_WEEK`，
+  周数读不到时不过滤（不因顶栏 OCR 抖动整拍罢工）。
 - 位置：**只有两处** —— 判据在 `daycycle.late_shop_step`（和「训练/休息」「出行」
   两个日入口同一个模块），调用点是 `flow.run` 主循环里、`_handle_any` 之前
   （`if self.late_shop_step(texts): continue`）。**不是**一个独立 handler，
