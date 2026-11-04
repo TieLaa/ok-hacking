@@ -47,6 +47,26 @@ PLAN_TITLE_RE = re.compile(r"^(.{1,8}?)的训练计划$")
 # 所以比较名字一律先过 `norm_name`，不要直接 `want in name`。
 NAME_RARITY_RE = re.compile(r"^(?:SSR|SR|R|N)\s*[-－—–·・._:：]?\s*", re.IGNORECASE)
 NAME_SEPARATORS_RE = re.compile(r"[·・•∙⋅\-－—–_\.\s\u3000「」【】\[\]()（）]")
+# OCR 把带圈数字读出来（实测 2026-11-05 商店第二行价格「10」被读成「①0」，
+# 框内是「剩余：1」下方的价格药丸）。isdigit() 对 '①' 也返回 True
+# （Python 的 str.isdigit 收 Unicode 数字），但 int() 不认 → 直接 ValueError。
+# 这里的归一化只用于「把 OCR 数字洗成 int」：先去掉带圈数字再转。
+CIRCLED_DIGITS = {chr(0x2460 + i): str(i + 1) for i in range(9)}   # ①-⑨ → 1-9
+CIRCLED_DIGITS.update({chr(0x24F5 + i): str(i + 1) for i in range(10)})  # ⓮ 等负圈
+CIRCLED_DIGITS.update({chr(0x2775 + i): str(i + 1) for i in range(10)})  # ❶ 之类
+
+
+def norm_digits(s):
+    """OCR 数字清洗：带圈数字 → 普通数字；洗完不是纯数字返回 None。
+
+    为什么不用 str.isdigit() 直接转：'①0'.isdigit() 是 True 但 int('①0') 抛
+    ValueError（2026-11-05 实跑，商店第二行价格『10』被读成『①0』，
+    handle_shop 每拍异常 → 商店永远买不了也关不掉，任务原地停住）。
+    """
+    s = (s or "").strip()
+    for circ, digit in CIRCLED_DIGITS.items():
+        s = s.replace(circ, digit)
+    return s if s.isdigit() else None
 
 
 def norm_name(name):

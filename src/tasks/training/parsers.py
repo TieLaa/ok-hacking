@@ -572,18 +572,27 @@ class TrainingParsersMixin:
         区域是**按实测网格**留的，不是按商品件数写死的：
         第二行价格实测 y≈0.746，旧上限 0.75 只剩 4px 余量，
         布局抖一下（换分辨率、强化加格子）第二行就整行消失 → 静默不买。
+
+        2026-11-05：价格数字过 `labels.norm_digits` —— 商店第二行的价格「10」
+        被 OCR 读成「①0」，`'①0'.isdigit()` 是 True 但 `int()` 抛 ValueError，
+        handle_shop 每拍异常（被 flow 吞掉）→ 商店页永远推不动，任务原地停住
+        （用户：「怎么停住了」）。
         """
         prices = []
         for t in texts:
             s = t.name.strip()
             # 免费商品（白神时久：每天多一件 0 元商品）：卡上是「0」或「免费」。
             # 旧判据要求 1~9999，正好把 0 元商品整件丢掉（2026-10-29 用户指出）。
+            # 2026-11-05：价格要过 norm_digits —— '①0'.isdigit() 是 True 但
+            # int() 抛 ValueError（商店第二行价格 10 被 OCR 读成 ①0），
+            # 旧代码直接在这里炸，商店一拍都推进不了。
             if s in ("免费", "免费！", "免费!"):
                 price = 0
-            elif s.isdigit() and 0 <= int(s) <= 9999:
-                price = int(s)
             else:
-                continue
+                cleaned = labels.norm_digits(s)
+                if cleaned is None or not (0 <= int(cleaned) <= 9999):
+                    continue
+                price = int(cleaned)
             cx = (t.x + t.width / 2) / self.width
             cy = (t.y + t.height / 2) / self.height
             # 上限 0.82：覆盖第二行价格（0.746）并留 0.07 余量；

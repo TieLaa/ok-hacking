@@ -560,6 +560,22 @@ class GachaRules(unittest.TestCase):
         self.assertTrue(task.handle_street(task._texts))
         self.assertEqual(task.actions, [("click", 1837, 50)])
 
+    def test_shop_price_with_circled_digit_does_not_crash(self):
+        """2026-11-05 实跑（用户：「怎么停住了」）：商店第二行价格「10」被 OCR
+        读成「①0」，`'①0'.isdigit()` 是 True 但 `int('①0')` 抛 ValueError，
+        `read_shop_items` 每拍异常（被 flow 吞掉）→ 商店页永远推不动，任务原地停。
+
+        修法：价格数字过 `labels.norm_digits`（带圈数字洗成普通数字）。
+        测试走 `shop_items`（纯解析），判「①0 → 10」这一条就够；
+        handler 级的推进由 expected.json 的真实帧回归兜着。
+        """
+        texts = [box(310, 220, "防守秘籍", 130, 35),
+                 box(310, 600, "剩余：1", 80, 30),
+                 box(305, 629, "①0", 70, 40)]          # ← 就是这个 ①0
+        task = FakeTask(texts)
+        items = task.shop_items(texts)
+        self.assertEqual([(i["name"], i["price"]) for i in items],
+                         [("防守秘籍", 10)])            # ①0 → 10，不再炸
     def test_blue_clear_card_never_bought_at_low_stamina(self):
         """2026-11-04 23:56 实跑：精力 23（低于清空阈值 30）时买了**蓝卡**，精力清到 0。
 

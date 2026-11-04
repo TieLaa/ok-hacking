@@ -637,6 +637,25 @@ runtime，reload_tasks 只刷新已注册任务模块。
   另外务必给像素判据配一条版式校验（宽度/左沿必须是固定比例），
   否则别的界面会被当成同一条条。」**
 
+### OCR 数字：`str.isdigit()` 为 True 不代表 `int()` 转得动
+
+- 现象：2026-11-05 00:09 实跑，任务在商店页原地停住（用户：「怎么停住了」）。
+  日志每拍刷 `handle_shop 异常: ValueError: invalid literal for int() with base 10: '①0'`。
+- 根因：商店第二行的价格「10」被 OCR 读成「①0」（带圈数字）。
+  Python 的 `'①0'.isdigit()` 返回 **True**（isdigit 收 Unicode 数字），
+  但 `int('①0')` 抛 **ValueError** —— 两个内置函数对「数字」的定义不一致。
+  `read_shop_items` 里 `s.isdigit() and ... int(s)` 的写法于是每拍炸一次，
+  异常被 flow 吞掉（防刷屏），表现就是「handler 命中但页面永远推不动」。
+- 修法：`labels.norm_digits()`（带圈数字 ①-⑳ 洗成 0-9，洗完不是纯数字返回 None），
+  价格解析用它；回归 `test_shop_price_with_circled_digit_does_not_crash`。
+- 排查提示：这种「每拍同一条 ERROR 但任务不停」的模式，异常被吞掉时
+  **handler 等于没跑** —— 看到连续同名异常就先复现那一拍的 OCR
+  （存证帧 / ocr_dump），别只盯着 handler 逻辑本身。
+- 提示词里应该加的那句：**「凡是 `s.isdigit()` 之后紧跟 `int(s)` 的代码，
+  都藏着同一类雷：isdigit 接受带圈数字/上标数字，int 不认。数字解析统一走
+  `labels.norm_digits()`；看到『每拍同名异常但任务不停』先怀疑异常被吞、
+  handler 实际没推进页面。」**
+
 ### 「白名单」写成 `elif` 就等于给某类对象开了后门
 
 - 现象：2026-11-04 23:56 实跑，精力 23（低于清空阈值 30）时买了**蓝卡**
