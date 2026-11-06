@@ -317,15 +317,16 @@ class MatchHandlers:
             return True                          # 刚点过，等翻页
         if not getattr(self, "_round_score_seen", False):
             self._round_score_seen = True
-            self._run_score = score
             queue = getattr(self, "_queue", None)
             target = queue.target if queue is not None else None
-            self.log_info(f"本局训练评分：{score}（评级 {rating or '?'}）/ 目标 {target}",
+            self.log_info(f"本局训练评分：{score}（评级 {rating or '?'}）/ 目标 {target}"
+                          "（仅参考，不入账；判分以注册球员页为准）",
                           notify=True)
-            if queue is not None and queue.target_met(score):
-                self.log_info(f"训练评分 {score} ≥ 目标 {target} → 达标，本局收尾后提前终止",
-                              notify=True)
-                self._round_done = True
+            # 2026-11-06 口径修正：**这一页的分数不再写进 `_run_score`**。
+            # 用户口径的判分点是「恭喜获得/训练奖励」页上注册球员的球员评分
+            # （含累积加成，本局实测同局两个数：弹层 8026 vs 注册球员 8380）。
+            # 旧代码先到先得，弹层把注册球员页的分数短路掉，导致第 5 局
+            # 8380 已达标却按 7420 继续白跑了 9 局。这里只留日志和参考。
         self._score_click_at = time.time()
         # 推进这一页：优先点「点击屏幕继续」的文字框，认不出点屏幕中央（这页点哪都走）
         target_box = self.match_text(texts, ("点击屏幕继续", "继续"))

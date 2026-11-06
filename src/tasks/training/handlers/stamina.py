@@ -62,9 +62,28 @@ class StaminaHandlers:
         必须排在 `handle_popup` 之前：那个 handler 在没有「确定」时会点「取消」，
         于是「差 25 → 取消 → 再点训练 → 又差 25」无限循环（和 2026-10-26 休息确认
         那次是同一类事故）。
+
+        **「自动恢复精力」关掉时反着来**（用户 2026-11-05 监控页新增
+        「允许吃专注药」开关，关 = 一口都不喝）：**先点「取消」关掉这个弹窗**，
+        然后停止任务（`_abort_reason`，与 `stop_for_no_captain` 同一条链路），
+        弹窗提示用户。用户 2026-11-05 口径：专注不足跟「休息」没关系，
+        不要置 `_force_rest` 改走休息 —— 停下来告诉用户就行。
+
+        认不出「取消」也照样停（告警里说明）：总比留着弹窗在原地重试好。
         """
         if self.match_text(texts, self.SHORT_TEXTS) is None:
             return False
+        if not self.config.get("自动恢复精力"):
+            cancel = self.exact_text(texts, labels.BUTTONS["exit_hatch"])
+            if cancel is not None:
+                self.click_box(cancel, after_sleep=0.8)
+                self.log_info("专注不足：禁止喝药（允许吃专注药=关）→ 点「取消」关闭弹窗")
+            else:
+                self.log_warning("专注不足弹窗：禁止喝药但认不出「取消」→ 不点了，直接停任务")
+            self._abort_reason = ("专注不足且禁止喝药（允许吃专注药=关）→ 已停止自动训练；"
+                                  "勾上开关或手动喝药后再继续")
+            self.log_warning(self._abort_reason, notify=True)
+            return True
         self._stamina_need = self.stamina_short_need(texts)
         for name in ("回复", "确定", "是"):
             target = self.exact_text(texts, (name,))
@@ -96,6 +115,14 @@ class StaminaHandlers:
         """
         if not (self.in_stamina_item_detail(texts) or self.in_stamina_recover_page(texts)):
             return False
+        # 用户 2026-11-05 监控页「允许吃专注药」开关：关掉时这一页一律不喝，
+        # 直接关掉走人（钻石行本来就是结构性禁止，这里连饮料也不碰）。
+        if not self.config.get("自动恢复精力"):
+            self._stamina_need = None
+            self.log_info("专注恢复页：允许吃专注药=关 → 不喝，直接关闭这一页", notify=True)
+            self._stamina_giveup_at = time.monotonic()
+            self.close_stamina_recover(texts)
+            return True
         self._stamina_ticks = getattr(self, "_stamina_ticks", 0) + 1
         if self._stamina_ticks > self.STAMINA_PAGE_MAX_TICKS:
             # 兜底：连点这么多拍还没离开恢复页（列表页 / 详情层都算）→ 认了「补不了」，
@@ -124,7 +151,8 @@ class StaminaHandlers:
         # ③ 喝完等过一轮了：如果专注**一点没涨**，说明这瓶没生效（页面读数滞后/被挡），
         #    不许接着喝第二罐 —— 记 giveup 关页退出，下一轮再补。
         before = getattr(self, "_stamina_before", None)
-        if before is not None and deficit is not None:
+        if (before is not None and before[0] is not None
+                and deficit is not None):
             cur = self.stamina_read(texts)[0]
             if cur is not None and cur <= before[0]:
                 self.log_warning(

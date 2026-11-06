@@ -338,6 +338,26 @@ class StaminaRecoverHandler(unittest.TestCase):
         self.assertEqual(clicks[0][1], "回复")
         self.assertEqual(task._stamina_need, 25)
 
+    def test_medicine_forbidden_short_popup_cancels_and_forces_rest(self):
+        """「允许吃专注药」= 关：先点「取消」关弹窗 → 停任务 → 弹提示（2026-11-05）。"""
+        texts = [box(380, 322, "训练所需专注还差25，是否进行回复呢？", 534, 31),
+                 box(700, 470, "回复", 160, 50),
+                 box(500, 470, "取消", 160, 50)]
+        task = task_with(texts, {"自动恢复精力": False})
+        self.assertTrue(task.handle_stamina_short(texts))
+        clicks = [a for a in task.actions if a[0] == "click_box"]
+        self.assertEqual([c[1] for c in clicks], ["取消"])  # 只点取消，绝不点「回复」
+        self.assertFalse(hasattr(task, "_stamina_need"))   # 没记「还差N」→ 没打算喝
+        self.assertTrue(task._abort_reason)                # run() 下一拍就退出
+
+    def test_medicine_forbidden_recover_page_closes_without_drinking(self):
+        """「允许吃专注药」= 关：恢复页（哪怕进了）也不喝，直接关页。"""
+        page = recover_page()
+        task = task_with(page, {"自动恢复精力": False, "恢复精力下限": 130})
+        self.assertTrue(task.handle_stamina_recover(page))
+        self.assertFalse(any(a[0] == "click_box" for a in task.actions))  # 没点「使用」
+        self.assertTrue(any(a[0] == "click" for a in task.actions))       # 点了 X 关页
+
 
 class TrainingScorePage(unittest.TestCase):
     """一局结束的「训练评分」弹层：必须读出个人评分（2026-11-04 实跑漏读）。

@@ -1,4 +1,9 @@
-"""转盘类事件：底部黄色「转一转」（钓鱼啦！/ 开始做饭！……**共用一个 handler**）。
+"""转盘类事件：底部黄色「转一转」（钓鱼啦！/ 开始做饭！/ 经理的小帮助……共用）。
+
+**为什么独立成通用模块**（2026-11-05）：转盘最初出现在钓鱼/做饭两个天赋事件
+的第二页，曾并入 `handlers/talent.py`；但「球队经理的小帮助」（非天赋的通用
+事件）也触发同样的转盘，「转盘属于天赋」的归口不成立。它本来就是零领域知识
+的通用 UI 机制 —— 按钮位置/文案在所有转盘页通用，谁触发都一样处理。
 
 用户 2026-11-03 口径：
 
@@ -33,12 +38,12 @@ import time
 
 from src.tasks.ui import labels
 
-# 点完后的静默期（秒）：动画期间界面文字不变，不能靠「没反应」判失败。
-LOCK_SECONDS = 8.0
-
 
 class WheelHandlers:
     """转盘页（mixin，方法通过 self 访问任务状态）。"""
+
+    # 点完后的静默期（秒）：动画期间界面文字不变，不能靠「没反应」判失败。
+    WHEEL_LOCK_SECONDS = 8.0
 
     def wheel_button(self, texts):
         """底部居中那一条里的「转一转 / 转一圈」文本框；大厅入口不算。
@@ -61,7 +66,7 @@ class WheelHandlers:
         btn = self.wheel_button(texts)
         if btn is None and self.match_text(texts, labels.WHEEL_TITLES) is None:
             return False
-        if time.monotonic() - getattr(self, "_wheel_clicked_at", 0.0) < LOCK_SECONDS:
+        if time.monotonic() - getattr(self, "_wheel_clicked_at", 0.0) < self.WHEEL_LOCK_SECONDS:
             self.log_debug("转盘：动画播放中，等它转完（不重复点）")
             self.sleep(0.5)
             return True

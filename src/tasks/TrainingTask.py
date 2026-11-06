@@ -30,9 +30,7 @@ from src.tasks.training.handlers.training import TrainingHandlers
 from src.tasks.training.handlers.weekend import WeekendHandlers
 from src.tasks.training.handlers.match import MatchHandlers
 from src.tasks.training.handlers.entry import EntryHandlers
-from src.tasks.training.handlers.fishing import FishingHandlers
-from src.tasks.training.handlers.theme import ThemeHandlers
-from src.tasks.training.handlers.cooking import CookingHandlers
+from src.tasks.training.handlers.talent import TalentHandlers
 from src.tasks.training.handlers.wheel import WheelHandlers
 from src.tasks.training.handlers.unmarked import UnmarkedHandlers
 
@@ -42,8 +40,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
                    MapPlace, StreetPlace, RestaurantPlace, ParkPlace,
                    ArcadePlace, ShopPlace,
                    PopupHandlers, TrainingHandlers, WeekendHandlers,
-                   MatchHandlers, EntryHandlers, FishingHandlers,
-                   ThemeHandlers, CookingHandlers, WheelHandlers,
+                   MatchHandlers, EntryHandlers, TalentHandlers, WheelHandlers,
                    StaminaHandlers, UnmarkedHandlers, BaseGirlsTask):
 
     def load_config(self):

@@ -1575,11 +1575,12 @@ class ArcadeRules(unittest.TestCase):
         # 买完要先等小游戏自己打完（进场动画没有按钮，别让看门狗判卡死）
         self.assertGreater(task._arcade_wait_since, 0)
 
-    def test_blue_card_is_bought_as_last_resort(self):
-        """蓝色品质是最后一档（用户 2026-11-03），买得起又没有更好的卡时就买。
+    def test_blue_card_is_never_bought(self):
+        """蓝色品质不买（用户 2026-11-06 口径：彩 > 金 > 紫，**没有蓝**）。
 
-        2026-10-27 的旧口径是「蓝卡不买」；现在统一成
-        **彩 > 金 > 紫 > 蓝**，蓝卡只在没有更优选择时才买。
+        2026-11-03 的旧口径是「蓝卡最后兜底」；11-05 实跑 60 块买了蓝卡
+        （金 100/紫 80 都买不起 → 轮到蓝 60 成交）。用户明确：所有判断环节
+        都没有蓝这一档 —— 只剩蓝卡 → 退出游戏厅，不花钱。
         """
         texts = [
             box(600, 115, "请选择一个小游戏", 220, 36),
@@ -1591,7 +1592,10 @@ class ArcadeRules(unittest.TestCase):
         ]
         task = self._task(texts, quality="蓝")
         self.assertTrue(task.handle_arcade(texts))
-        self.assertEqual(task.actions[-2][1], "弹跳20~70")   # 买了，不是直接退出
+        # 停手原因里写明「没有彩/金/紫」；一张卡都没点，也没点「确定」
+        self.assertIn("彩/金/紫", " ".join(task.logs))
+        bought = [a for a in task.actions if a[0] == "click_box"]
+        self.assertEqual(bought, [])
 
     def test_discount_price_takes_the_lower_number(self):
         """打折时卡片上有两个价格、位置还会偏（用户 2026-10-27），取折后那个。
@@ -2261,11 +2265,13 @@ class PlaceModulesRules(unittest.TestCase):
         self.assertEqual(pick["attr"], "弹跳")
         self.assertIn("免费", reason)
 
-    def test_arcade_blue_is_last_resort(self):
-        """游戏厅：品质优先 彩>金>紫>蓝（用户 2026-11-03）。
+    def test_arcade_blue_is_never_bought(self):
+        """游戏厅：品质优先 彩>金>紫（用户 2026-11-03）。
 
-        蓝卡从「不买」改成**最后才买**：有金卡买得起就不看蓝卡；
-        只剩蓝卡时仍然买（钱换属性，没有别的选择）。
+        2026-11-06 用户口径修订：**没有蓝** —— 蓝/白不是「最后兜底」，
+        是根本不买。11-05 实跑 60 块买了蓝卡（金 100/紫 80 都买不起 →
+        轮到蓝 60 成交），就是旧口径「蓝是最后兜底」的直接后果。
+        现在只剩蓝卡 → 退出游戏厅，钱留着。
         """
         blue = {"attr": "投射", "hi": 100, "box": None, "auto": True, "price": 80,
                 "quality": "蓝", "hue": 0, "sat": 0, "mate": False}
@@ -2274,8 +2280,9 @@ class PlaceModulesRules(unittest.TestCase):
         task = FakeTask([])
         pick, _ = task.pick_arcade_card([blue, gold], money=500)
         self.assertEqual(pick["attr"], "弹跳")             # 金卡奖励更低也先买金
-        pick2, _ = task.pick_arcade_card([blue], money=500)
-        self.assertEqual(pick2["attr"], "投射")            # 只剩蓝卡 → 买
+        pick2, reason2 = task.pick_arcade_card([blue], money=500)
+        self.assertIsNone(pick2)                           # 只剩蓝卡 → 不买
+        self.assertIn("彩/金/紫", reason2)
 
     def test_arcade_quality_beats_two_teammates(self):
         """游戏厅：品质永远第一档（用户 2026-11-03）。
@@ -2325,7 +2332,7 @@ class PlaceModulesRules(unittest.TestCase):
             {"name": "旧货", "price": 45, "quality": "蓝", "x": 100, "y": 300},
         ]
         task = FakeTask([])
-        pick, _ = task.pick_shop_item(items, 500, "只买金和紫")
+        pick, _ = task.pick_shop_item(items, 500, "只买彩金紫")
         self.assertEqual(pick["quality"], "金")
         pick2, _ = task.pick_shop_item(items, 500, "只买器材手册+")
         self.assertEqual(pick2["name"], "器材手册")
@@ -2340,27 +2347,39 @@ class PlaceModulesRules(unittest.TestCase):
             {"name": "赠品", "price": 0, "quality": "蓝", "x": 100, "y": 200},
         ]
         task = FakeTask([])
-        pick, _ = task.pick_shop_item(items, None, "只买金和紫")
+        pick, _ = task.pick_shop_item(items, None, "只买彩金紫")
         self.assertEqual(pick["name"], "赠品")
 
     def test_shop_never_spends_all(self):
         """2026-11-05：**任何日子都不清空**（比赛日也不清空）。
 
-        只有蓝卡时「只买金和紫」必须停手 —— 旧版这条会被「赛前清空余额」
+        只有蓝卡时「只买彩金紫」必须停手 —— 旧版这条会被「赛前清空余额」
         变成「金紫买完继续买别的」，钱被花光。现在没有那个分支了。
+        2026-11-06：策略改名「只买金和紫」→「只买彩金紫」，白名单补上彩
+        （商店目前没有彩卡，留缺口，解锁后自动生效）。
         """
         only_blue = [
             {"name": "旧货", "price": 45, "quality": "蓝", "x": 100, "y": 100},
             {"name": "废纸", "price": 30, "quality": "白", "x": 100, "y": 200},
         ]
         task = FakeTask([])
-        pick, reason = task.pick_shop_item(only_blue, 500, "只买金和紫")
+        pick, reason = task.pick_shop_item(only_blue, 500, "只买彩金紫")
         self.assertIsNone(pick)
-        self.assertIn("金/紫", reason)
+        self.assertIn("彩/金/紫", reason)
         # 签名里不许再出现「把钱花光」的那个开关
         import inspect
         params = inspect.signature(task.pick_shop_item).parameters
         self.assertEqual(list(params), ["items", "money", "policy"])
+
+    def test_shop_buys_crit_card_when_policy_enabled(self):
+        """2026-11-06：策略白名单 = 彩/金/紫。彩卡买（商店暂无彩卡，留缺口）。"""
+        items = [
+            {"name": "传说手册", "price": 120, "quality": "彩", "x": 100, "y": 50},
+            {"name": "训练手册", "price": 100, "quality": "金", "x": 100, "y": 200},
+        ]
+        task = FakeTask([])
+        pick, _ = task.pick_shop_item(items, 500, "只买彩金紫")
+        self.assertEqual(pick["quality"], "彩")            # 彩 > 金
 
     def test_map_knows_all_places(self):
         """地图模块是**决策层** —— 它知道所有地点（地点模块不许知道别的）。"""
@@ -4019,7 +4038,7 @@ class PurchaseRules(unittest.TestCase):
             texts.append(box(int(1920 * cx) - 75, int(1080 * 0.30) - 21, name, 150, 42))
             texts.append(box(int(1920 * cx) - 35, int(1080 * 0.45) - 18,
                              str(price), 70, 36))
-        task = FakeTask(texts, config={"购买策略": "只买金和紫"})
+        task = FakeTask(texts, config={"购买策略": "只买彩金紫"})
         task.read_money = lambda texts=None: money
         task.card_quality = lambda name, pt: (quality, 30, 150)
         return task, texts

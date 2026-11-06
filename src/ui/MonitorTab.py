@@ -127,6 +127,15 @@ class _Actions(MonitorActions):
     def set_quick_match(self, enabled):
         self.tab.set_quick_match(enabled)
 
+    def set_score_stop(self, enabled):
+        self.tab.set_score_stop(enabled)
+
+    def set_score_target(self, target):
+        self.tab.set_score_target(target)
+
+    def set_stamina_allowed(self, allowed):
+        self.tab.set_stamina_allowed(allowed)
+
     def toggle_auto_training(self):
         self.tab.toggle_auto_training()
 
@@ -408,6 +417,11 @@ class MonitorTab(CustomTab):
                              + gained.get("white", 0)),
             "skill_last": info.get("skill_last") or "",
             "quick_enabled": self._enabled_of(self._task_by_name("QuickMatchTask")),
+            # 第二栏新增控件的状态（用户 2026-11-05）：全部来自任务配置，
+            # 没有任务/没跑时也能显示上一次保存的值
+            "score_stop": bool(config.get("多角色队列")),
+            "score_target": self._queue_target_text(config),
+            "stamina_allowed": bool(config.get("自动恢复精力")),
             "fail_limit": config.get("失败率上限(%)", MISSING),
             "stuck": info.get("stuck") or (
                 f"3 秒无响应 / 日 {config.get('单日最大点击数', MISSING)} 次 · 未触发"),
@@ -416,6 +430,23 @@ class MonitorTab(CustomTab):
             "device_meta": self._device_meta(),
         }
         return data
+
+    @staticmethod
+    def _queue_target_text(config: dict) -> str:
+        """从「队长队列」配置里取**当前队长**的目标分，给监控页输入框回填。
+
+        「刷到目标分」复用多角色队列（勾上 = 队列只有「队长:目标分」一项）；
+        队列里有多项/写法不规则时取第一项的目标分，取不到就空着。
+        """
+        try:
+            from src.tasks.training.queue import parse_queue
+            items = parse_queue(config.get("队长队列") or "")
+        except Exception:  # noqa: BLE001
+            return ""
+        for item in items:
+            if item.get("target"):
+                return str(item["target"])
+        return ""
 
     @staticmethod
     def _style_from_config(config: dict) -> str:
@@ -686,6 +717,109 @@ class MonitorTab(CustomTab):
         if task is None or name is None:
             return
         task.config[name] = max(0, int(value))
+        self._update_data()
+
+    # ---------- 目标分停 / 专注药（用户 2026-11-05） ----------
+    #
+    # 这三个开关**不改任务代码、不新增配置键**，全部映射到 2026-11-04 已有的
+    # 多角色队列 / 专注恢复机制（复用，见 config_spec.QUEUE）：
+    #
+    # - 「刷到目标分」= `多角色队列` 开关 + 「队长队列」写成「指定队长:目标分」
+    #   一项。达标的判定和提前终止由 `handlers/match.handle_training_score`
+    #   （训练评分页）和 `flow.advance_queue_after_round`（注册球员页）做，
+    #   任务自己会停，界面这里只负责写配置。
+    # - 「允许吃专注药」= `自动恢复精力`。钻石购买在 `handlers/stamina.py`
+    #   是结构性禁止（钻石行没有「使用」按钮 → `forbidden`），用户要求的
+    #   「不允许消耗钻石」不用在这里重复实现。
+
+    def set_score_stop(self, enabled: bool):
+        """勾选「刷到目标分」：把当前队长 + 目标分写成单人多角色队列。
+
+        - 勾上：队长取「指定队长」（没有就告警拒绝 —— 队列空了会静默降级
+          成单队长模式，用户会以为功能开了却没生效）；目标分取输入框当前值，
+          没填也拒绝（没有目标的队列永远不达标，只会白跑）。
+        - 取消勾选：`多角色队列` = False，恢复「跑完一局就结束」的老行为。
+          队列文本保留（用户改改目标分再勾上就能继续），进度文件也保留。
+        """
+        task = self._task()
+        if task is None:
+            logger.warning("监控页：没有找到训练任务，「刷到目标分」未保存")
+            return
+        if not enabled:
+            if task.config.get("多角色队列"):
+                task.config["多角色队列"] = False
+                logger.info("监控页：刷到目标分 → 关（跑完一局就结束）")
+            self._update_data()
+            return
+        captain = (task.config.get("指定队长") or "").strip()
+        target = self._read_target(task)
+        if not captain:
+            logger.warning("监控页：勾「刷到目标分」失败 —— 请先在左侧指定队长",
+                           notify=True)
+            self.notify_stop_check()
+            return
+        if not target:
+            logger.warning("监控页：勾「刷到目标分」失败 —— 请先填写目标分", notify=True)
+            self.notify_stop_check()
+            return
+        task.config["多角色队列"] = True
+        task.config["队长队列"] = f"{captain}:{target}"
+        logger.info(f"监控页：刷到目标分 → 开（{captain} 刷到 {target} 分后停止）",
+                    notify=True)
+        self._update_data()
+
+    def set_score_target(self, target: int):
+        """目标分输入框：只在「刷到目标分」勾着的时候写回队列。"""
+        task = self._task()
+        if task is None:
+            return
+        target = max(0, int(target or 0))
+        if not target:
+            return                          # 清空/乱输入不动配置，等勾选时再校验
+        if not task.config.get("多角色队列"):
+            return                          # 没勾「刷到目标分」，只是提前记着，不生效
+        captain = (task.config.get("指定队长") or "").strip()
+        if not captain:
+            return
+        task.config["队长队列"] = f"{captain}:{target}"
+        logger.info(f"监控页：目标分 → {target}（{captain} 刷到 {target} 分后停止）")
+        self._update_data()
+
+    def _read_target(self, task) -> int:
+        """读输入框里用户刚填的目标分（勾选时还没触发 editingFinished）。"""
+        view = getattr(self, "_view", None)
+        edit = getattr(view, "_edit_target", None)
+        if edit is None:
+            return 0
+        text = (edit.text() or "").strip()
+        return int(text) if text.isdigit() else 0
+
+    def notify_stop_check(self):
+        """校验失败把勾选框弹回去（view 层按 config 回填，这里强制刷一次）。"""
+        view = getattr(self, "_view", None)
+        if view is not None:
+            view._syncing_extras = False
+            view._sync_extras({"score_stop": bool(self._task().config.get("多角色队列"))
+                               if self._task() else False})
+
+    def set_stamina_allowed(self, allowed: bool):
+        """「允许吃专注药」：映射到 `自动恢复精力`。
+
+        关掉后 `ensure_stamina` 不再进恢复页；「训练所需专注还差 N」弹窗
+        仍会点「回复」进页 —— 但没有可用饮料时（用户不勾 = 通常没饮料）
+        `handle_stamina_recover` 会「没有可喝的 → 关页」，不会喝、更不会
+        碰钻石行（钻石行永远 `forbidden`，写死在 stamina.py）。
+        """
+        task = self._task()
+        if task is None:
+            logger.warning("监控页：没有找到训练任务，「允许吃专注药」未保存")
+            return
+        value = bool(allowed)
+        if bool(task.config.get("自动恢复精力")) != value:
+            task.config["自动恢复精力"] = value
+            logger.info("监控页：允许吃专注药 → " + ("开（专注不足自动喝饮料，不花钻石）"
+                                              if value else "关（专注不足也不喝，宁停不耗）"),
+                        notify=True)
         self._update_data()
 
     def set_quick_match(self, enabled):

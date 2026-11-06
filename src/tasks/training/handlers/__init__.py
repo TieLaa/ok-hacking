@@ -14,9 +14,7 @@ from .training import TrainingHandlers
 from .weekend import WeekendHandlers
 from .match import MatchHandlers
 from .entry import EntryHandlers
-from .fishing import FishingHandlers
-from .theme import ThemeHandlers
-from .cooking import CookingHandlers
+from .talent import TalentHandlers
 from .wheel import WheelHandlers
 from .unmarked import UnmarkedHandlers
 
@@ -53,10 +51,11 @@ HANDLERS = (
     TrainingHandlers.handle_note_study,
     MatchHandlers.handle_match_result,
     MatchHandlers.handle_skill_select,
+    # 角色天赋事件（handlers/talent.py，按天赋归口）：
     # 佐久间雨乃的天赋「钓鱼」：钓鱼场是三选一、带「确定」，
     # 必须排在通用「确定/下一步」类 handler 之前（旧版落到 unknown 兜底，连点 3 次卡死）。
-    FishingHandlers.handle_fishing_ground,
-    # 转盘类事件（钓鱼啦！/ 开始做饭！……）：**一个 handler 共用**。
+    TalentHandlers.handle_fishing_ground,
+    # 转盘（钓鱼啦！/ 开始做饭！/ 经理的小帮助……通用 UI 机制，handlers/wheel.py）：
     # 用户 2026-11-03 口径：转盘内容随机、不影响决策；「转一转」按钮的位置和文案
     # 在所有转盘页都是通用的（两页实测按钮框都是 715,781,111,47）。
     # 判据卡「底部居中」那一条，所以大厅「玩法目录」里那个「转一转」入口不会误伤。
@@ -65,14 +64,14 @@ HANDLERS = (
     # SSR 角色天赋触发的「请选择一个题材」三选一（2026-11-02）：
     # 页面右上角有「跳过」，必须排在 handle_dialog_continue / handle_story_arrow 之前，
     # 否则又变成「点快进图标，什么都不推进」（同炒股页那次事故）。
-    ThemeHandlers.handle_theme_select,
+    TalentHandlers.handle_theme_select,
     # 同一事件的收尾页「WARD文档」里的「交稿」：也带「跳过」快进图标，
     # 同样必须排在 handle_dialog_continue / handle_story_arrow 之前。
-    ThemeHandlers.handle_manuscript_submit,
+    TalentHandlers.handle_manuscript_submit,
     # 角色天赋特殊事件「做饭」的食材三选一（2026-11-03 实机）：标题条按品质上色，
     # 按 彩>金>紫>蓝 → 队友多 选一张再点「确定」。必须排在 handle_event_choice
     # / 通用「确定」类 handler 之前（旧版没人认领，一直落 unknown 点屏幕中央）。
-    CookingHandlers.handle_ingredient_select,
+    TalentHandlers.handle_ingredient_select,
     # 「选择憋气难度」页（2026-11-04 实跑）：标题 + 底部「确定」，没有别的判据。
     # 必须排在通用「确定/下一步」类 handler 之前，否则会被 popup 的「关闭/取消」抢走。
     TrainingHandlers.handle_breath_difficulty,
@@ -82,12 +81,12 @@ HANDLERS = (
     # 「跳过比赛/前往比赛」，否则没机会点商店（2026-10-29 第 5/6 周漏进）
     TrainingHandlers.handle_pre_match_shop,
     MatchHandlers.handle_prepare,
-    # 炒股页（天赋「股神!」）：必须在 handle_dialog_continue 之前。
+    # 炒股页（天赋「股神!」，handlers/talent.py）：必须在 handle_dialog_continue 之前。
     # 2026-10-30 事故：股票走势面板右上角有「跳过」（快进图标），
     # handle_dialog_continue 先命中就反复点它，什么都推进不了，
     # 3 轮「点不动」后任务直接停。炒股页自己的「卖出/下一步」永远轮不到。
-    WeekendHandlers.handle_stock_pick,
-    WeekendHandlers.handle_stock_result,
+    TalentHandlers.handle_stock_pick,
+    TalentHandlers.handle_stock_result,
     EntryHandlers.handle_dialog_continue,
     EntryHandlers.handle_lobby,
     EntryHandlers.handle_training_entry,

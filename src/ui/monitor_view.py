@@ -15,7 +15,7 @@ import re
 from functools import partial
 
 from PySide6.QtCore import QEvent, Qt, Signal, Slot
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QIntValidator, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -27,8 +27,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import (CheckBox, ComboBox, FluentIcon, PrimaryPushButton,
-                            PushButton, SwitchButton)
+from qfluentwidgets import (CheckBox, ComboBox, FluentIcon, LineEdit,
+                            PrimaryPushButton, PushButton, SwitchButton)
 
 from ok.ui.qt.common.OKIcon import OKIcon
 from ok.util.file import get_relative_path
@@ -83,6 +83,18 @@ class MonitorActions:
 
     def set_quick_match(self, enabled):
         """队长栏右侧「快速比赛」开关：只管快速比赛模块自己（跟自动训练无关）。"""
+        pass
+
+    def set_score_stop(self, enabled):
+        """「刷到目标分」勾选框：开着就反复练到目标分（复用多角色队列的提前终止）。"""
+        pass
+
+    def set_score_target(self, target):
+        """「目标分」输入框：达标判据 = 一局结束的训练评分 ≥ 目标。"""
+        pass
+
+    def set_stamina_allowed(self, allowed):
+        """「允许吃专注药」勾选框：关掉后专注不够就休息，绝不喝饮料/钻石。"""
         pass
 
     def toggle_auto_training(self):
@@ -192,6 +204,13 @@ class MonitorView(QWidget):
         self._conn_running: bool | None = None
         self._switch_quick: SwitchButton | None = None
         self._btn_train: QPushButton | None = None
+        # 「刷到目标分」勾选框 + 目标分输入框（用户 2026-11-05）
+        self._check_score_stop: CheckBox | None = None
+        self._edit_target: LineEdit | None = None
+        # 「允许吃专注药」勾选框（关 = 不喝饮料，宁停不耗）
+        self._check_stamina: CheckBox | None = None
+        # 防止 update_data 回填时把用户正在输的值/刚点的勾抢回去
+        self._syncing_extras = False
         self._train_text: tuple[str, str] = ("开始", "暂停")
         # 正在接入游戏时的文案（接入要等窗口稳定，几秒到几十秒）
         self._train_connecting_text: str = "启动中…"
@@ -354,6 +373,29 @@ class MonitorView(QWidget):
     def _slot_train(self):
         self.actions.toggle_auto_training()
 
+    # ---------- 目标分 / 专注药 槽（用户 2026-11-05） ----------
+
+    @Slot(bool)
+    def _on_score_stop(self, checked: bool):
+        if self._syncing_extras:
+            return
+        if self._edit_target is not None:
+            self._edit_target.setEnabled(checked)
+        self.actions.set_score_stop(checked)
+
+    @Slot()
+    def _on_target_edited(self):
+        if self._syncing_extras or self._edit_target is None:
+            return
+        text = self._edit_target.text().strip()
+        self.actions.set_score_target(int(text) if text.isdigit() else 0)
+
+    @Slot(bool)
+    def _on_stamina_toggle(self, checked: bool):
+        if self._syncing_extras:
+            return
+        self.actions.set_stamina_allowed(checked)
+
     def _slot_move(self, path, delta):
         self.actions.move_block(path, delta)
 
@@ -440,6 +482,12 @@ class MonitorView(QWidget):
 
         for text, slot in (("重新检测", self._slot_refresh),):
             lay.addWidget(self._button(text, slot))
+
+        # 布局编辑入口放第一栏最右（用户 2026-11-05）：第二栏留给任务开关。
+        edit_entry = self._button("✎", self._slot_edit, object_name="monitorEditEntry",
+                                  tooltip="编辑布局：上下移动、隐藏卡片、双击改文字")
+        edit_entry.setFixedSize(28, 28)
+        lay.addWidget(edit_entry)
 
         self.vBox.addWidget(self._block_wrapper(card, path, can_hide=False))
 
@@ -597,6 +645,35 @@ class MonitorView(QWidget):
 
             lay.addWidget(self._btn_train)
 
+        # ---------- 目标分停 / 专注药（用户 2026-11-05 口径） ----------
+        # 「持续刷到评分多少以后停止」复用**多角色队列**的提前终止机制：
+        # 勾上 = 把队列配置成「指定队长:目标分」一项；取消 = 关掉多角色队列。
+        # 顺序（用户 2026-11-05）：三个新控件**紧跟开始按钮**，快速比赛放最后。
+        if spec.get("show_score_stop", True):
+            self._check_score_stop = CheckBox("刷到目标分")
+            self._check_score_stop.setToolTip(
+                "勾上后反复练同一队长，直到一局结束的「训练评分」≥ 目标分才停"
+                "（复用多角色队列的提前终止；取消勾选 = 跑完一局就结束）")
+            self._check_score_stop.toggled.connect(self._on_score_stop)
+            lay.addWidget(self._check_score_stop)
+
+            self._edit_target = LineEdit()
+            self._edit_target.setPlaceholderText("目标分")
+            self._edit_target.setFixedWidth(int(spec.get("target_width", 96)))
+            self._edit_target.setClearButtonEnabled(True)
+            self._edit_target.setValidator(QIntValidator(0, 99999))
+            self._edit_target.setToolTip("训练评分达到这个数就停止（勾选「刷到目标分」后生效）")
+            self._edit_target.editingFinished.connect(self._on_target_edited)
+            lay.addWidget(self._edit_target)
+
+        if spec.get("show_stamina_toggle", True):
+            self._check_stamina = CheckBox("允许吃专注药")
+            self._check_stamina.setToolTip(
+                "勾上：专注低于「恢复精力下限」时自动喝饮料（+30/+60，绝不花钻石）；\n"
+                "取消勾选：专注不足时点「取消」并停止自动训练，绝不喝药/钻石")
+            self._check_stamina.toggled.connect(self._on_stamina_toggle)
+            lay.addWidget(self._check_stamina)
+
         lay.addStretch(1)
 
         if spec.get("show_quick_match", True):
@@ -615,11 +692,6 @@ class MonitorView(QWidget):
                 "关闭只停快速比赛，不动自动训练，也不关执行器。")
             self._switch_quick.checkedChanged.connect(self._slot_quick)
             lay.addWidget(self._switch_quick)
-
-        edit_btn = self._button("✎", self._slot_edit, object_name="monitorEditEntry",
-                                tooltip="编辑布局：上下移动、隐藏卡片、双击改文字")
-        edit_btn.setFixedSize(28, 28)
-        lay.addWidget(edit_btn)
 
         combo.currentIndexChanged.connect(self._on_captain_index)
         self._captain_check.toggled.connect(self._on_captain_check)
@@ -931,6 +1003,36 @@ class MonitorView(QWidget):
                 switch.blockSignals(True)
                 switch.setChecked(value)
                 switch.blockSignals(False)
+        self._sync_extras(data)
+
+    def _sync_extras(self, data: dict):
+        """「刷到目标分 / 目标分 / 允许吃专注药」按配置回填。
+
+        与快速比赛开关同一套防抖：程序回填时 blockSignals，
+        只在**值真的变了**才动控件，免得把用户正在输入的数字抢回去。
+        输入框有焦点时（用户正在打字）完全跳过这一拍。
+        """
+        if self._syncing_extras:
+            return
+        self._syncing_extras = True
+        try:
+            if self._check_score_stop is not None and "score_stop" in data:
+                checked = bool(data.get("score_stop"))
+                if self._check_score_stop.isChecked() != checked:
+                    self._check_score_stop.setChecked(checked)
+                if self._edit_target is not None:
+                    self._edit_target.setEnabled(checked)
+            if (self._edit_target is not None and "score_target" in data
+                    and not self._edit_target.hasFocus()):
+                text = str(data.get("score_target") or "")
+                if self._edit_target.text() != text:
+                    self._edit_target.setText(text)
+            if self._check_stamina is not None and "stamina_allowed" in data:
+                allowed = bool(data.get("stamina_allowed"))
+                if self._check_stamina.isChecked() != allowed:
+                    self._check_stamina.setChecked(allowed)
+        finally:
+            self._syncing_extras = False
 
     def _fill_timeline(self, events: list):
         box = self._timeline_box

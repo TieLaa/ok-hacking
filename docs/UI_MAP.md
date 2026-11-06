@@ -307,7 +307,8 @@
 - 回归样例：`docs/shots/2026-11-02-theme-select.png`。
 
 代码：`ui/labels.py: THEME_TITLE / THEME_TAG_RE / THEME_TAG_RED_MIN / THEME_RED_HUE_*`、
-`training/parsers.py: theme_tag_red_ratio`、`training/handlers/theme.py: handle_theme_select`、
+`training/parsers.py: theme_tag_red_ratio`、`training/handlers/talent.py: handle_theme_select`
+（2026-11-05 起天赋事件归口 talent.py）、
 `handlers/__init__.py`（排在 `handle_boost_training` 之后、`handle_subject_select` 之前）。
 
 ### 「WARD文档」汇报页（同一个写小说事件的收尾，点右下角「交稿」）
@@ -354,7 +355,8 @@
 - 回归样例：`docs/shots/2026-11-03-cook-ingredient.png`。
 
 代码：`ui/labels.py: COOKING_TITLE`、`training/parsers.py: quality_cards / card_quality_color`、
-`training/scoring.py: quality_card_order`、`training/handlers/cooking.py: handle_ingredient_select`、
+`training/scoring.py: quality_card_order`、`training/handlers/talent.py: handle_ingredient_select`
+（2026-11-05 起天赋事件归口 talent.py）、
 `handlers/__init__.py`（排在 `handle_manuscript_submit` 之后、`handle_subject_select` 之前）。
 
 ### 转盘类事件：「转一转」（钓鱼啦！/ 开始做饭！……**共用一个 handler**）
@@ -377,8 +379,9 @@
 - 回归样例：`docs/shots/2026-11-03-cook-wheel.png`。
 
 代码：`ui/labels.py: WHEEL_BUTTONS / WHEEL_TITLES / WHEEL_BUTTON_BAND / WHEEL_BUTTON_POINT`、
-`training/handlers/wheel.py: handle_spin_wheel`、`handlers/__init__.py`
-（在 `handle_fishing_ground` 之后、`handle_boost_training` 之前）。
+`training/handlers/wheel.py: handle_spin_wheel`（2026-11-05 曾短暂并入 talent.py，同日
+因「经理的小帮助」等非天赋事件也触发转盘而搬回独立通用模块）、
+`handlers/__init__.py`（在 `handle_fishing_ground` 之后、`handle_boost_training` 之前）。
 
 ### 兜底：没登记的「品质卡」页面 → 按品质猜一张 + 存 `logs/unmark/`
 
@@ -423,5 +426,6 @@
   → 选右边。
 - 头像一个都没认出来时**退回气泡判据**（`stock_card_marks`），别让这条规则彻底失效。
 
-代码：`training/handlers/weekend.py: handle_stock_pick / stock_money / stock_card_price`、
+代码：`training/handlers/talent.py: handle_stock_pick / stock_money / stock_card_price`
+（2026-11-05 起天赋事件归口 talent.py）、
 `training/parsers.py: stock_teammate_counts`。

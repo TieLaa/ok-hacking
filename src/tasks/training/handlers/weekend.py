@@ -2,23 +2,17 @@
 
 从 TrainingTask 拆出；方法仍通过 self 访问任务状态。
 禁止在这里 import TrainingTask（循环依赖），需要类时用 handler.__name__ 判断。
+
+炒股（天赋「股神!」）、钓鱼、写小说题材、做饭这些**角色天赋事件**
+2026-11-05 起归 `handlers/talent.py`，不在这里。
 """
 
-import random
 import re
 import time
 
-import os
-import threading
-from collections import deque
-
-import cv2
-import numpy as np
-
 from src.tasks.ui import labels
 from src.tasks.training.places import activities
-from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,
-                                          WORK_STAMINA_COST)  # noqa: F401
+from src.tasks.training.constants import WORK_STAMINA_COST  # noqa: F401
 
 
 class WeekendHandlers:
@@ -172,175 +166,6 @@ class WeekendHandlers:
             self.exit_page()
             return True
         return self.choose_option(texts, order)
-
-
-    STOCK_TITLE = "请选择你要投资的股票"
-    STOCK_TYPES = ("稳健型", "平衡型", "风险型")
-
-    def handle_stock_pick(self, texts):
-        """天赋「股神!」的模拟炒股：在**买得起**的卡里选**队友最多**的那张，再点确定。
-
-        用户 2026-10-29 真机截图：
-        - 三张卡「稳健型/平衡型/风险型」，价格 24/120/200，买不起的价格显示红色；
-        - 黄色角标 + 头顶台词挂在游戏推荐的那张（两次分别在第一张、第二张），
-          所以「角标」不是可靠判据，可靠的是**价格 ≤ 当前零用钱**。
-        - 当时口径：选第一个（最左）能买的那张。
-
-        用户 2026-11-02 改口径（实拍 1102-234130_stock03：左 1 个队友、右 2 个）：
-        **默认选队友多的那张**；队友一样多才按老规则（买得起→价格高的）。
-        队友数 = 卡片头顶那排 chibi 头像的个数（`stock_teammate_counts` 数嘴），
-        **不是气泡数** —— 气泡一张卡最多一句，2 个队友也只冒一句，数不出人数。
-        """
-        if self.match_text(texts, self.STOCK_TITLE) is None:
-            return False
-        self.dump_stock_frame(texts)
-        # 这一页的金币在右上角（真机截图 cx≈0.80, cy≈0.11），不在训练日顶栏的
-        # 0.50~0.62 区域，read_money 读不到 → 用页内的读法兜底。
-        money = self.read_money(texts)
-        if money is None:
-            money = self.stock_money(texts)
-        pairs = []
-        seen = []
-        for t in texts:
-            # 三张卡的类型名**可能重复**（实拍 1102-234130：风险型 / 风险型 / 稳健型），
-            # 旧写法「按名字各取一个」会漏掉中间那张 —— 按 x 收集、同列去重。
-            # 名字用**包含**匹配（OCR 偶尔多带一个字符），只认这三种 3 字词。
-            if not any(k in t.name for k in self.STOCK_TYPES):
-                continue
-            cx = t.x + t.width / 2
-            if any(abs(cx - (b.x + b.width / 2)) < self.width * 0.05 for b in seen):
-                continue
-            seen.append(t)
-        for card_box in seen:
-            pairs.append((card_box, self.stock_card_price(texts, card_box)))
-        if not pairs:
-            self.log_warning("炒股：认不出三张卡片，点第一个类型附近兜底")
-            self.click(int(self.width * 0.25), int(self.height * 0.55), after_sleep=0.6)
-            return True
-        pairs.sort(key=lambda pair: pair[0].x)
-        mates = self.stock_teammate_counts([b for b, _p in pairs])
-        if not any(mates):
-            # 一个头像都没认出来（换了 UI / 分辨率怪）→ 退回气泡判据，别把这条规则废掉。
-            mates = [self.stock_card_marks(texts, b) for b, _p in pairs]
-        cards = [(b, p, m) for (b, p), m in zip(pairs, mates)]
-        detail = "、".join(
-            f"{b.name}={p}{'·队友' + str(m) if m else ''}" for b, p, m in cards)
-        affordable = [c for c in cards if money is None or c[1] is None or c[1] <= money]
-        if not affordable:
-            self.log_warning(f"炒股：都没有买得起的（零用钱 {money}｜{detail}）→ 放弃")
-            self.click_button("give_up", after_sleep=0.6, must=False)
-            return True
-        # 用户口径：买得起的里**队友多**优先，同档价格高的优先。
-        pick, price, marks = max(
-            affordable, key=lambda x: (x[2], x[1] if x[1] is not None else -1))
-        badge = f"·队友{marks}" if marks else ""
-        cx = pick.x + pick.width / 2
-        cy = pick.y + self.height * 0.18
-        self.click(int(cx), int(cy), after_sleep=0.6)
-        self.log_info(f"炒股：零用钱 {money}｜{detail} → 选「{pick.name}」({price}){badge}")
-        if self.click_button("confirm", after_sleep=0.8, must=False):
-            self.log_info("炒股：确定")
-        return True
-
-    def dump_stock_frame(self, texts):
-        """炒股页限流存帧（每局最多 6 张）：用来量「头顶队友头像有几个」。
-
-        存的是**本拍识别用的那一帧**（`_tick_frame`），和同目录的 `.txt` 是同一屏 ——
-        读 `self.frame` 会拿到点击之后的新帧，图上的头像和 OCR 框对不上。
-        """
-        if getattr(self, "_stock_dumps", 0) >= 6:
-            return
-        frame = getattr(self, "_tick_frame", None)
-        if frame is None:
-            frame = self.frame
-        if frame is None or not frame.any():
-            return
-        try:
-            folder = os.path.join(PROJECT_ROOT, "logs", "debug")
-            os.makedirs(folder, exist_ok=True)
-            idx = getattr(self, "_stock_dumps", 0)
-            path = os.path.join(
-                folder, f"{time.strftime('%m%d-%H%M%S')}_stock{idx:02d}.jpg")
-            cv2.imwrite(path, frame, JPEG_PARAMS)
-            with open(path[:-4] + ".txt", "w", encoding="utf-8") as f:
-                f.write("\n".join(
-                    f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
-            self._stock_dumps = idx + 1
-        except Exception as e:                   # noqa: BLE001
-            self.log_debug(f"炒股帧存证失败: {type(e).__name__}: {e}")
-
-    def stock_card_marks(self, texts, label_box):
-        """卡片头顶的台词气泡（「相信奇迹!」「一定能赚!」「我梭哈了」）= 有队友推荐。
-
-        气泡是**短文本 + 感叹号**，按 x 关联到最近的卡片（±0.12 屏宽）。
-        OCR 偶尔把「!」吃掉，那就当这张没有标记。
-
-        2026-11-02 起它只是**兜底**：气泡一张卡最多一句，2 个队友也只冒一句，
-        数不出人数。真正的「队友几个」由 `stock_teammate_counts`（数头像的嘴）给，
-        只有在头像一个都没认出来时才退回这里。
-        """
-        if label_box is None:
-            return 0
-        cx_card = (label_box.x + label_box.width / 2) / self.width
-        n = 0
-        for t in texts:
-            s = t.name.strip()
-            if not s.endswith(("！", "!")) or len(s) > 12:
-                continue
-            cx = (t.x + t.width / 2) / self.width
-            if abs(cx - cx_card) <= 0.12:
-                n += 1
-        return n
-
-    def stock_money(self, texts):
-        """炒股页右上角的金币数字（裸数字，没有斜杠）。"""
-        for t in texts:
-            v = t.name.strip()
-            if not v.isdigit() or len(v) > 5:
-                continue
-            cx = (t.x + t.width / 2) / self.width
-            cy = (t.y + t.height / 2) / self.height
-            if 0.70 <= cx <= 0.90 and 0.05 <= cy <= 0.18:
-                return int(v)
-        return None
-
-    def stock_card_price(self, texts, label_box):
-        """卡片价格：类型名下方、同一列的那个数字（买不起时是红色的，OCR 一样能读）。"""
-        best = None
-        for t in texts:
-            v = t.name.strip()
-            if not v.isdigit() or len(v) > 4:
-                continue
-            cx = t.x + t.width / 2
-            if abs(cx - (label_box.x + label_box.width / 2)) > self.width * 0.16:
-                continue
-            if not (label_box.y < t.y < label_box.y + self.height * 0.35):
-                continue
-            if best is None or t.y > best[0]:
-                best = (t.y, int(v))
-        return best[1] if best else None
-
-    def handle_stock_result(self, texts):
-        """炒股的两个结算页（2026-10-29 用户截图）。
-
-        1. **股票走势**（有涨跌幅）：这一页只能点「卖出」，卖出后回到选股页再买；
-        2. **炒股队收益排名**（全部炒股日结束后的总结）：点「下一步」继续。
-        """
-        if self.match_text(texts, ("股票走势", "涨跌幅")) is not None:
-            if self.click_text(("卖出",), after_sleep=0.7, must=False):
-                self.log_info("炒股：走势页卖出 → 回去买下一只")
-                return True
-            # 2026-10-30 实机：面板上的「卖出」是白字黄底，OCR 经常读不到 →
-            # 落到 handle_dialog_continue 去点右上角「跳过」（快进图标，不推进），
-            # 连续 3 轮点不动后任务直接停。这里按位置兜底点底部黄色大按钮。
-            self.click(int(self.width * 0.5), int(self.height * 0.925), after_sleep=0.7)
-            self.log_info("炒股：没认出「卖出」→ 点底部黄色按钮兜底")
-            return True
-        if self.match_text(texts, "收益排名") is not None:
-            if self.click_button("next", after_sleep=0.7, must=False):
-                self.log_info("炒股：收益排名 → 下一步")
-                return True
-        return False
 
     def handle_park(self, texts):
         """公园内页：散步（零用钱+）/ 划船（属性+）/ 野餐（精力++）。
@@ -611,9 +436,10 @@ class WeekendHandlers:
         带它才能自动挑战/跳过；没有它的要真人打（打篮球、拼图），
         OCR 跟不上，进去就是白费一个周末日。所以只买带「自动」的卡片。
 
-        选卡规则（2026-11-03 用户口径，取代 2026-10-29 的「队友优先」）：
-        买的起的情况下 **品质优先（彩 > 金 > 紫 > 蓝）**；同品质「有队友」优先，
+        选卡规则（2026-11-03 用户口径；2026-11-06 修订：**没有蓝**）：
+        买的起的情况下 **品质优先（彩 > 金 > 紫）**；同品质「有队友」优先，
         都有队友「队友多的」优先；还打平再按奖励上限高的优先。
+        蓝/白卡不买（不是兜底）：只剩蓝卡 → 退出游戏厅，钱留着。
         价格从页面读（「打折」下面那个数字）；读不到价格不猜，买得起才点「确定」。
         付完钱小游戏会**自己打完**（探针实测：零用钱 219→155，之后走普通剧情/结算），
         后续交给通用 handler 推进。

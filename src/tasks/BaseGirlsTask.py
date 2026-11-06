@@ -102,6 +102,21 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
             return True
         return all(k in names for k in self.MATCH_WEAK_MARKS)
 
+    # 「战术板」标题的编队/奖励菜单页特征（每局结束注册球员后停在这）。
+    # 这页不是对局：没有比分/暂停/VS，点左上角《就能安全退出
+    # （2026-11-06 实测：ESC 无效，find_exit_control 找到《一击退回大厅）。
+    MATCH_MENU_MARKS = ("自动编队", "保存调整", "阵容评分", "奖励总览", "下级奖励")
+
+    def in_match_menu(self, texts=None):
+        """「战术板」字样的**编队/奖励菜单页**（区别于对局内的战术板按钮）。
+
+        判据：出现任一菜单专属词（自动编队/保存调整/阵容评分/奖励总览/下级奖励）。
+        这些词不会出现在对局 HUD 上，误放行的代价只是多按一次返回键。
+        """
+        texts = texts or []
+        names = "".join(t.name for t in texts)
+        return any(k in names for k in self.MATCH_MENU_MARKS)
+
     def exit_page(self, after_sleep=0.45):
         """点右上角的返回箭头退出当前页面。
 
@@ -181,6 +196,9 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         - 加载中 → 等，不算失败；
         - 弹窗 → 先关弹窗；
         - 比赛/小游戏内部 → **不盲点返回**，直接返回 False（点进暂停菜单更糟）；
+          例外：「战术板」标题的**编队/奖励菜单页**（见 `in_match_menu`）不是对局，
+          照常走退出控件阶梯（2026-11-06 实测：每局结束都停在这页，不放行队列
+          第二局永远起不来）。
         - 其它页面 → 点右上角返回箭头；连点两次画面不变就改试 ESC（Unity 常见返回键）；
         - 仍然不动就放弃并存证，别无限点（2026-10-30 从「选队长」页实测：
           返回箭头对该页无效，需要 ESC 兜底）。
@@ -200,7 +218,7 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
             if self.is_loading(texts):
                 self.sleep(0.6)
                 continue
-            if self.looks_like_match(texts):
+            if self.looks_like_match(texts) and not self.in_match_menu(texts):
                 self.log_warning(
                     "回大厅中止：当前在比赛/小游戏界面，盲点返回有风险，请人工退到大厅")
                 self.attempt_dump("recover_blocked", texts)
@@ -247,6 +265,7 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
     # `reset_to_start()` 直接返回 False（实跑：22:50 `reset_refused`，整轮起不来）。
     START_MARKS = ("星期", "出行", "失败率", "训练剧本", "赛前准备",
                    "跳过比赛", "训练核心", "选择队友", "选择笔记", "选择器材",
+                   "确认编队",
                    "涨跌幅", "股票走势", "收益排名",
                    "请选择一个题材", "WARD文档", "收集到的idea", "交稿")
 
@@ -261,7 +280,7 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
             texts = self._ocr_region()
         if self.is_lobby(texts):
             return True
-        if self.looks_like_match(texts):
+        if self.looks_like_match(texts) and not self.in_match_menu(texts):
             return False
         names = "".join(t.name for t in texts or [])
         return any(k in names for k in self.START_MARKS)

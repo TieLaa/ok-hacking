@@ -24,12 +24,20 @@ class EntryHandlers:
     def handle_dialog_continue(self, texts):
         """剧情/提示：右上角有「跳过」就点，否则交给 handle_story_arrow 连点推进。
 
-        例外：屏幕中部是竖排选项（三选一）时，「跳过」通常是灰的，点了不推进。
+        例外一：屏幕中部是竖排选项（三选一）时，「跳过」通常是灰的，点了不推进。
         这时必须让位给 handle_event_choice（用户 2026-10-26 反馈：
         机器人一直点跳过，不点第一个选项）。
+
+        例外二（2026-11-05 实机，logs/debug/1105-172329_noresp3s）：**右下角有
+        白色 ▼ 的过场页**（状态事件「恢复精力」的奖励展示，先斗月绮立绘），
+        「跳过」是个不响应的摆设，连点 12 秒指纹不变 → 看门狗接管 3 次 → 停任务。
+        真正的推进控件是右下角 ▼。所以：has_story_arrow() 为真时让位给
+        handle_story_arrow（它连点 ▼ 推进），本 handler 只处理「没有 ▼ 的真对话框」。
         """
         if (len(self.choice_candidates(texts)) >= 2
                 or len(self.options_not_paragraph(texts)) >= 2):
+            return False
+        if self.has_story_arrow():
             return False
         skip = self.match_text(self.texts_in_region(texts, "top_right"), ("跳过", "点击屏幕继续"))
         if skip is not None:

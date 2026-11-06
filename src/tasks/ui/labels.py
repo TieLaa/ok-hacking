@@ -198,7 +198,7 @@ THEME_RED_HUE_MIN_HIGH = 155
 # 判据只用**标题**：三张卡的名字 OCR 会被截断最后一个字（实机读到「隔夜…」
 # 「菜市场的普通食…」），而标题在实机帧里稳定 1.00 分（logs/live/cook_now.jpg）。
 # 选哪张看**标题条底色**（蓝/紫/金），不看名字、不看价格 —— 见
-# `parsers.quality_cards` / `handlers.cooking`。
+# `parsers.quality_cards` / `handlers/talent.py`（做饭天赋事件，2026-11-05 归口）。
 COOKING_TITLE = ("请选择要使用的食材",)
 
 # ---------- 转盘类事件（钓鱼 / 做饭 共用）----------

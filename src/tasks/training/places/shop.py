@@ -113,7 +113,7 @@ class ShopPlace:
     def pick_shop_item(self, items, money, policy):
         """选哪件商品？返回 (商品, 原因) 或 (None, 原因)。
 
-        `policy` = 配置项「购买策略」：只买金和紫 / 只买器材手册+ / 买最贵 / 不买。
+        `policy` = 配置项「购买策略」：只买彩金紫 / 只买器材手册+ / 买最贵 / 不买。
         2026-11-05 用户口径：**任何日子都不清空**（比赛日前一天也不清空），
         所以这里只有「策略」一条口径，没有「把钱花光」这个分支。
 
@@ -144,13 +144,16 @@ class ShopPlace:
             order = {"金": 2, "紫": 1}
             pick = max(free, key=lambda i: (order.get(i["quality"], 0), -i["y"]))
             return pick, "免费商品优先"
-        if policy == "只买金和紫":
-            pool = [i for i in affordable if i["quality"] in ("金", "紫")]
+        if policy == "只买彩金紫":
+            # 2026-11-06 用户口径：策略名从「只买金和紫」改过来，白名单补上「彩」
+            # ——全局品质口径是 彩 > 金 > 紫，没有蓝（商店目前没有彩卡，留着缺口，
+            # 解锁后自动生效）。只有蓝/白时必须停手，不是「退而买蓝」。
+            pool = [i for i in affordable if i["quality"] in ("彩", "金", "紫")]
             if not pool:
-                return None, "没有买得起的金/紫商品"
-            pick = max(pool, key=lambda i: (1 if i["quality"] == "金" else 0,
+                return None, "没有买得起的彩/金/紫商品"
+            pick = max(pool, key=lambda i: ({"彩": 2, "金": 1}.get(i["quality"], 0),
                                            i["price"]))
-            return pick, "金紫优先"
+            return pick, "彩金紫优先"
         if policy == "只买器材手册+":
             pool = [i for i in affordable if "器材手册" in i["name"]]
             if not pool:

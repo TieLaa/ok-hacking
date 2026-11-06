@@ -58,9 +58,10 @@ class ArcadePlace:
 
     # ---------- 选哪张卡（纯判断） ----------
 
-    # 品质优先级（用户 2026-11-03）：彩 > 金 > 紫 > 蓝。
+    # 品质优先级（用户 2026-11-03：彩 > 金 > 紫；2026-11-06 用户口径：**没有蓝** ——
+    # 蓝/白不是「最后兜底」，是根本不买。只剩蓝卡 → 退出游戏厅，钱留着。
     # 排序用 `scoring.QUALITY_RANK` 同一张表，别再各写一份；「其他」= 认不出的白卡，不买。
-    ARCADE_QUALITIES = ("彩", "金", "紫", "蓝")
+    ARCADE_QUALITIES = ("彩", "金", "紫")
 
     @staticmethod
     def _arcade_mates(card):
@@ -135,15 +136,15 @@ class ArcadePlace:
     def pick_arcade_card(self, cards, money):
         """选哪张小游戏？返回 (卡片, 原因) 或 (None, 原因)。
 
-        规则（用户 2026-11-03）：
-        - 只买「自动」+ 彩/金/紫/蓝 的卡；
+        规则（用户 2026-11-03；2026-11-06 修订：**没有蓝**）：
+        - 只买「自动」+ 彩/金/紫 的卡；蓝/白不是兜底，是不买；
         - **买的起的情况下**按 品质 → 有队友 → 队友多 → 奖励上限 排序；
         - 免费（0 元）优先拿；价格读不到不猜；钱读不到不买（盲买是死循环）。
         """
         ok_cards = [c for c in cards
                     if c["auto"] and c["quality"] in self.ARCADE_QUALITIES]
         if not ok_cards:
-            return None, ("没有「自动」+ 彩/金/紫/蓝 的小游戏（"
+            return None, ("没有「自动」+ 彩/金/紫 的小游戏（"
                           + "、".join(f"{c['attr']}/{c['quality']}"
                                       f"{'/自动' if c['auto'] else ''}"
                                       for c in cards) + "）")
