@@ -82,10 +82,22 @@ class EntryHandlers:
         # 训练事件 / 只有 ▼ 的剧情页（实机 2026-10-26）：右下角白色 ▼ 是最可靠的信号。
         # 这类页面没有长台词，旧判据认不出来，会一直卡在「没见过」。
         # 竖向三选一（如「更衣室加设空衣柜 / JellyRabbit毛绒玩具 / 了解千圣的想法」）
-        # 右上角是「跳过」按钮，也没有 ▼ —— 有白底圆角横条组就点第一个。
+        # 右上角是「跳过」按钮，也没有 ▼ —— 有白底圆角横条组就**直接点第一个选项**。
+        # 2026-11-06 修正：旧版在这里点右下角 ▼，但「周末三选一」（挑选时尚服饰 /
+        # 去猫咖玩 / KTV练歌）这类页**右下角没有 ▼**（白色像素 0），点▼没反应 →
+        # 3 秒后接管点屏幕中央 (0.5,0.5) → 正好压中第 2 个选项「去猫咖玩」
+        # （用户看到「3选1选了第2个、恢复30精力」就是这个盲点，三局全中）。
+        # 现在找到了选项组就直接点第一个，不再隔空点▼。
+        vchoices = self._vertical_choice(texts)
         if (self.match_text(texts, "训练事件") is not None
                 or self.has_story_arrow()
-                or self._vertical_choice(texts) is not None):
+                or vchoices is not None):
+            if vchoices is not None and not self.has_story_arrow():
+                pick = min(vchoices, key=lambda t: t.y)
+                self.log_info("竖向三选一（无▼）：直接点第一个「"
+                              + pick.name.strip() + "」")
+                self.click_box(pick, after_sleep=0.5)
+                return True
             self.click(int(self.width * 0.96), int(self.height * 0.93), after_sleep=0.5)
             self.log_info("训练事件/剧情：点右下角 ▼")
             return True
