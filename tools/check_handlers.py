@@ -604,7 +604,12 @@ def check_config():
                 read_keys.add(s.key)
 
     warnings = []
+    # 废弃键（2026-11-07 用户口径：多角色队列降级为外部注入参数，任务不再读配置）。
+    # 留在 default_config 里只为老存档 verify_config 不炸键，不算无效项。
+    deprecated = {"多角色队列", "队长队列"}
     for key in sorted(declared - read_keys):
+        if key in deprecated:
+            continue
         warnings.append(
             f"src/tasks/training/config_spec.py: 声明了 {key!r} 但 src/ 里没人读 —— "
             f"GUI 上是个无效选项（要么接上，要么删掉）")

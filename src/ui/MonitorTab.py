@@ -139,6 +139,9 @@ class _Actions(MonitorActions):
     def toggle_auto_training(self):
         self.tab.toggle_auto_training()
 
+    def hard_stop_training(self):
+        self.tab.hard_stop_training()
+
 
 class MonitorTab(CustomTab):
     """左侧导航的「监控」页。"""
@@ -417,10 +420,10 @@ class MonitorTab(CustomTab):
                              + gained.get("white", 0)),
             "skill_last": info.get("skill_last") or "",
             "quick_enabled": self._enabled_of(self._task_by_name("QuickMatchTask")),
-            # 第二栏新增控件的状态（用户 2026-11-05）：全部来自任务配置，
-            # 没有任务/没跑时也能显示上一次保存的值
-            "score_stop": bool(config.get("多角色队列")),
-            "score_target": self._queue_target_text(config),
+            # 第二栏新增控件的状态（用户 2026-11-05）：「刷到目标分」= 队列参数
+            # 在内存里挂着（2026-11-07 起队列不再走配置键）
+            "score_stop": bool(getattr(task, "_queue_spec", None)) if task else False,
+            "score_target": self._queue_target_text(task, config),
             "stamina_allowed": bool(config.get("自动恢复精力")),
             "fail_limit": config.get("失败率上限(%)", MISSING),
             "stuck": info.get("stuck") or (
@@ -432,15 +435,18 @@ class MonitorTab(CustomTab):
         return data
 
     @staticmethod
-    def _queue_target_text(config: dict) -> str:
-        """从「队长队列」配置里取**当前队长**的目标分，给监控页输入框回填。
+    def _queue_target_text(task, config: dict) -> str:
+        """取「当前队长」的目标分，给监控页输入框回填。
 
-        「刷到目标分」复用多角色队列（勾上 = 队列只有「队长:目标分」一项）；
-        队列里有多项/写法不规则时取第一项的目标分，取不到就空着。
+        2026-11-07 起队列是任务内存里的参数（`task._queue_spec`），
+        配置键已废弃只在任务没起来时兜底读一次旧配置。
         """
+        spec = (getattr(task, "_queue_spec", None) or "") if task else ""
+        if not spec:
+            spec = config.get("队长队列") or ""
         try:
             from src.tasks.training.queue import parse_queue
-            items = parse_queue(config.get("队长队列") or "")
+            items = parse_queue(spec)
         except Exception:  # noqa: BLE001
             return ""
         for item in items:
@@ -548,16 +554,17 @@ class MonitorTab(CustomTab):
     def set_captain(self, name):
         """勾选框/下拉改队长：写回 task.config（Config 会自动存盘）。
 
+        **界面是唯一真相**（用户 2026-11-07 口径）：
+        不管这里写的是谁，任务里注入的多角色队列参数（`_queue_spec`）都要
+        **同时清空** —— 「我在 hacking 上每次指定新队长，旧的安排就清掉，
+        不管它是单个指定还是传参进来的队列」。运行期变量 `_style` 也清，
+        流派回到「按队长重新认」。
+
         **取消勾选 = 清空变量**（用户 2026-11-01 口径）：
         旧版只在「勾选框被取消」时才清空，但页面初始化时勾选框是**默认勾上**的，
         于是第一次进页面就等于「指定了一个队长」，流派被写成这个队长的
         （扭蛋流扭到训练流），用户后面再取消勾选也晚了 ——
         因为取消勾选时变量里已经是名字，界面上的勾选框状态和配置对不上。
-
-        现在这里做两件事：
-        1. 取消勾选 → 名字置空（`指定队长` = ""），并且**清掉已定的流派**，
-           让下一次跑重新按日历/游戏内队长认流派；
-        2. 勾上 → 用当前下拉里的角色名。
 
         流派本身存在 `task._style`（运行期变量），config 里只存队长名字。
         """
@@ -572,6 +579,10 @@ class MonitorTab(CustomTab):
                 logger.info(f"监控页：指定队长 → {value}")
             else:
                 logger.info("监控页：取消指定队长 → 清空变量，流派改回按游戏内队长识别")
+        # 界面改队长 → 队列参数一并清（单个/队列都清，用户 2026-11-07 口径）
+        if getattr(task, "_queue_spec", None):
+            task._queue_spec = None
+            logger.info("监控页：界面指定队长 → 注入的多角色队列参数已清空")
         # 运行期变量（`_style`）也要跟着清：不然旧流派会一直留在 _style 里，
         # 界面上的「流派」和实际跑的还是它 —— 取消勾选后必须回到「按日历认队长」。
         # 注意**不能**因为 config 没变就跳过：用户可能就是想让已定的流派重置。
@@ -650,10 +661,14 @@ class MonitorTab(CustomTab):
         self._update_data()
 
     def _connection_stop(self):
-        """断开游戏 = 关掉执行器这个「运行基础」：两栏的开关一起复位。
+        """断开游戏 = 一切归零（用户 2026-11-07 口径）：
 
-        顺序有讲究：先把任务 disable（任务线程下一拍就退出），
-        再暂停执行器（不再取帧），最后才关截图会话。
+        ① 训练脚本停；② **队列参数与进度一并清空**（不再保留）；
+        ③ 执行器暂停（不再取帧）；④ 截图会话关闭（断开游戏）；
+        ⑤ 快速比赛开关复位成「关」。
+
+        顺序有讲究：先清队列、disable 任务（任务线程下一拍就退出），
+        再暂停执行器，最后才关截图会话。
 
         关截图会话可能等正在取的那一帧（最多 4 秒），所以放到后台线程做，
         不然界面会卡住不动。
@@ -666,6 +681,7 @@ class MonitorTab(CustomTab):
         反过来不成立：第二栏【暂停】和快速比赛拨「关」**只 disable 自己的任务**，
         绝不去 pause 执行器 —— 关执行器不是它们该管的事。
         """
+        self._clear_queue_state()              # ② 队列参数/进度清空（先于 disable）
         self._stop_auto_training(reset_button=True)
         self._stop_quick_match()
         try:
@@ -674,8 +690,23 @@ class MonitorTab(CustomTab):
         except Exception as e:  # noqa: BLE001
             logger.error(f"暂停执行器失败: {e}")
         self._close_capture_async()
-        logger.info("监控页：已停止（断开游戏：第二栏复位成「开始」、快速比赛复位成「关」）")
+        logger.info("监控页：已停止（断开游戏：队列清空、第二栏复位成「开始」、快速比赛复位成「关」）")
         self._update_data()
+
+    def _clear_queue_state(self):
+        """清掉训练任务上的队列参数 / 内存队列 / 进度文件（第一栏【停止】与
+        第二栏【■】共用的那半段逻辑）。任务不存在时静默跳过。"""
+        task = self._task()
+        if task is None:
+            return
+        task._queue_spec = None
+        task._queue = None
+        try:
+            from src.tasks.training.queue import QUEUE_PROGRESS
+            if os.path.exists(QUEUE_PROGRESS):
+                os.remove(QUEUE_PROGRESS)
+        except OSError as e:
+            logger.warning(f"删除队列进度文件失败: {e}")
 
     @staticmethod
     def _close_capture_async():
@@ -719,36 +750,32 @@ class MonitorTab(CustomTab):
         task.config[name] = max(0, int(value))
         self._update_data()
 
-    # ---------- 目标分停 / 专注药（用户 2026-11-05） ----------
+    # ---------- 目标分停 / 专注药（用户 2026-11-05；2026-11-07 改队列参数化） ----------
     #
-    # 这三个开关**不改任务代码、不新增配置键**，全部映射到 2026-11-04 已有的
-    # 多角色队列 / 专注恢复机制（复用，见 config_spec.QUEUE）：
-    #
-    # - 「刷到目标分」= `多角色队列` 开关 + 「队长队列」写成「指定队长:目标分」
-    #   一项。达标的判定和提前终止由 `handlers/match.handle_training_score`
-    #   （训练评分页）和 `flow.advance_queue_after_round`（注册球员页）做，
-    #   任务自己会停，界面这里只负责写配置。
+    # 「刷到目标分」映射到**内存里的多角色队列参数**（`task._queue_spec`，
+    # 不写任何配置键）：任务下一次 `run()` 的 `init_captain_queue()` 会拿它
+    # 建队列。达标的判定和提前终止由 `handlers/match.handle_training_score`
+    # （训练评分页）和 `flow.advance_queue_after_round`（注册球员页）做，
+    # 任务自己会停，界面这里只负责挂参数。
     # - 「允许吃专注药」= `自动恢复精力`。钻石购买在 `handlers/stamina.py`
-    #   是结构性禁止（钻石行没有「使用」按钮 → `forbidden`），用户要求的
-    #   「不允许消耗钻石」不用在这里重复实现。
+    #   是结构性禁止（钻石行没有「使用」按钮 → `forbidden`）。
 
     def set_score_stop(self, enabled: bool):
-        """勾选「刷到目标分」：把当前队长 + 目标分写成单人多角色队列。
+        """勾选「刷到目标分」：把当前队长 + 目标分挂成单人多角色队列参数。
 
         - 勾上：队长取「指定队长」（没有就告警拒绝 —— 队列空了会静默降级
           成单队长模式，用户会以为功能开了却没生效）；目标分取输入框当前值，
           没填也拒绝（没有目标的队列永远不达标，只会白跑）。
-        - 取消勾选：`多角色队列` = False，恢复「跑完一局就结束」的老行为。
-          队列文本保留（用户改改目标分再勾上就能继续），进度文件也保留。
+        - 取消勾选：清掉队列参数，恢复「跑完一局就结束」的老行为。
         """
         task = self._task()
         if task is None:
             logger.warning("监控页：没有找到训练任务，「刷到目标分」未保存")
             return
         if not enabled:
-            if task.config.get("多角色队列"):
-                task.config["多角色队列"] = False
-                logger.info("监控页：刷到目标分 → 关（跑完一局就结束）")
+            if getattr(task, "_queue_spec", None):
+                task._queue_spec = None
+                logger.info("监控页：刷到目标分 → 关（清队列参数，跑完一局就结束）")
             self._update_data()
             return
         captain = (task.config.get("指定队长") or "").strip()
@@ -762,26 +789,26 @@ class MonitorTab(CustomTab):
             logger.warning("监控页：勾「刷到目标分」失败 —— 请先填写目标分", notify=True)
             self.notify_stop_check()
             return
-        task.config["多角色队列"] = True
-        task.config["队长队列"] = f"{captain}:{target}"
+        task._queue_spec = f"{captain}:{target}"
         logger.info(f"监控页：刷到目标分 → 开（{captain} 刷到 {target} 分后停止）",
                     notify=True)
         self._update_data()
 
     def set_score_target(self, target: int):
-        """目标分输入框：只在「刷到目标分」勾着的时候写回队列。"""
+        """目标分输入框：只在「刷到目标分」勾着的时候更新队列参数。"""
         task = self._task()
         if task is None:
             return
         target = max(0, int(target or 0))
         if not target:
-            return                          # 清空/乱输入不动配置，等勾选时再校验
-        if not task.config.get("多角色队列"):
+            return                          # 清空/乱输入不动参数，等勾选时再校验
+        spec = getattr(task, "_queue_spec", None) or ""
+        if not spec:
             return                          # 没勾「刷到目标分」，只是提前记着，不生效
         captain = (task.config.get("指定队长") or "").strip()
         if not captain:
             return
-        task.config["队长队列"] = f"{captain}:{target}"
+        task._queue_spec = f"{captain}:{target}"
         logger.info(f"监控页：目标分 → {target}（{captain} 刷到 {target} 分后停止）")
         self._update_data()
 
@@ -798,9 +825,10 @@ class MonitorTab(CustomTab):
         """校验失败把勾选框弹回去（view 层按 config 回填，这里强制刷一次）。"""
         view = getattr(self, "_view", None)
         if view is not None:
+            task = self._task()
             view._syncing_extras = False
-            view._sync_extras({"score_stop": bool(self._task().config.get("多角色队列"))
-                               if self._task() else False})
+            view._sync_extras({"score_stop": bool(getattr(task, "_queue_spec", None))
+                               if task else False})
 
     def set_stamina_allowed(self, allowed: bool):
         """「允许吃专注药」：映射到 `自动恢复精力`。
@@ -999,6 +1027,56 @@ class MonitorTab(CustomTab):
                 logger.error(f"停止自动训练失败: {e}")
         if reset_button:
             logger.info("监控页：自动训练 → 已停止（按钮复位为「开始」）")
+
+    def hard_stop_training(self):
+        """第二栏的【■ 完全停止】（用户 2026-11-07 口径）。
+
+        与【暂停】的差别：暂停只是 `task.disable()`，注入的多角色队列参数
+        还挂在任务上，下一次【开始】会接着队列跑；完全停止要**把队列参数
+        和队列进度一起清掉**（`_clear_queue_state`），回到「按界面配置跑
+        一局就结束」的干净状态。
+
+        **不断开游戏连接**：执行器、截图会话、快速比赛都不碰 —— 那是第一栏
+        【停止】的职责（它 additionally 关执行器 + 断连接 + 关快速比赛）。
+        """
+        task = self._task()
+        if task is None:
+            logger.warning("监控页：没有找到训练任务，完全停止未执行")
+            return
+        try:
+            task.disable()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"停止自动训练失败: {e}")
+        had_queue = bool(getattr(task, "_queue_spec", None) or
+                         getattr(task, "_queue", None))
+        self._clear_queue_state()
+        if had_queue:
+            logger.info("监控页：完全停止 → 队列参数与进度已清空", notify=True)
+        else:
+            logger.info("监控页：完全停止 → 脚本已停（没有队列参数）")
+        # 接入中点停止的边界：start_controller 的接入流程走完后会把任务
+        # 重新 enable（_mark_task_enabled），必须再补一刀 disable —— 用
+        # 短延时轮询到「接入结束」为止（框架没有取消接入的接口）。
+        if self._starting():
+            logger.info("监控页：接入仍在进行 → 接入完成后自动补一刀停止")
+
+            def _late_disable(tries=0):
+                controller = getattr(getattr(og, "app", None), "start_controller", None)
+                still = bool(getattr(controller, "starting", False)) if controller else False
+                if still and tries < 120:            # 最多等 60 秒（500ms × 120）
+                    QTimer.singleShot(500, lambda: _late_disable(tries + 1))
+                    return
+                t = self._task()
+                if t is not None and getattr(t, "enabled", False):
+                    try:
+                        t.disable()
+                        self._clear_queue_state()
+                        logger.info("监控页：接入完成后已补停（队列参数同步清空）", notify=True)
+                    except Exception as e:  # noqa: BLE001
+                        logger.error(f"接入完成后补停失败: {e}")
+
+            QTimer.singleShot(500, _late_disable)
+        self._update_data()
 
     def _task_by_name(self, name):
         try:

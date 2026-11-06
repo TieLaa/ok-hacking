@@ -32,8 +32,8 @@ import time
 from src.tasks.training.constants import POSITION_BY_NAME, PROJECT_ROOT
 from src.tasks.ui import labels
 
-# 进度文件：**跨进程/重启续跑**用（用户可能中途关掉再开）。
-# 放 logs/ 下（已被 .gitignore 忽略），不污染 configs/。
+# 进度文件：**跨进程/重启续跑**才用（2026-11-07 起：队列默认一次性内存对象，
+# 只有明确传了 `path` 才落盘）。放 logs/ 下（已被 .gitignore 忽略），不污染 configs/。
 QUEUE_PROGRESS = os.path.join(PROJECT_ROOT, "logs", "training_queue.json")
 
 # 「名字 + 目标分」的分隔符。角色名里只会出现「·」，不会撞上它们。
@@ -78,11 +78,18 @@ def position_of(name):
 
 
 class CaptainQueue:
-    """一个多角色队列 + 它的进度（可持久化、可续跑）。"""
+    """一个多角色队列 + 它的进度（默认一次性，可选持久化）。
 
-    def __init__(self, spec, path=None, resume=True):
+    2026-11-07 用户口径：队列是**外部注入的参数**（agent 指定），
+    不是配置项 —— 默认 `resume=False`、`path=None`（纯内存，跑完即弃）；
+    只有明确要跨重启续跑的场景才传 `path`。
+    """
+
+    def __init__(self, spec, path=None, resume=False):
         self.items = parse_queue(spec)
-        self.path = path if path is not None else QUEUE_PROGRESS
+        # path=None → 纯内存队列（2026-11-07 用户口径：队列是一次性参数，
+        # 不落盘）；明确传 path 才持久化（跨重启续跑的场景）。
+        self.path = path
         self.cursor = 0
         self.runs = []               # 每局的 (队长, 目标, 评分, 是否达标, 时间)
         if resume:
@@ -162,6 +169,8 @@ class CaptainQueue:
         return "|".join(f"{i['name']}:{i['target']}" for i in self.items)
 
     def save(self):
+        if self.path is None:
+            return                      # 纯内存队列（2026-11-07 起默认）：没有文件可写
         data = {"signature": self.signature(), "cursor": self.cursor,
                 "runs": self.runs[-200:]}          # 只留最近 200 局，别无限长
         try:

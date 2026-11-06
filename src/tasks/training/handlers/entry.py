@@ -198,7 +198,7 @@ class EntryHandlers:
         if self.no_captain_mode:
             return self.stop_for_no_captain("训练核心（选队长）")
 
-        want = (self.config.get("指定队长") or "").strip()
+        want = self.configured_captain()
         if want and self.pick_captain_by_name(want):
             self._captain_matched_config = True
             return True

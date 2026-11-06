@@ -79,16 +79,32 @@ def run_registered(harness, cls, config_overrides=None):
     """借已注册任务跑一次，返回 (task, run_result)。
 
     - 临时覆盖 config（跑完还原），用于「限制步数/关闭危险开关」这类本次运行参数；
+    - 键名以 `_` 开头 → 设置**任务实例属性**（如 `_queue_spec` 队列参数），
+      不进 config、不落盘，跑完还原原值；
     - 业务逻辑全在任务类里，这里不复制任何判据。
     """
     with borrow(harness, cls, harness.artifact_directory) as task:
         saved = {}
         for key, value in (config_overrides or {}).items():
-            saved[key] = task.config.get(key)
-            task.config[key] = value
+            if key.startswith("_"):
+                saved[key] = getattr(task, key, None)
+                setattr(task, key, value)
+            else:
+                saved[key] = task.config.get(key)
+                task.config[key] = value
         try:
             result = task.run()
         finally:
             for key, value in saved.items():
-                task.config[key] = value
+                if key.startswith("_"):
+                    if value is None:
+                        # 原来没有这个属性就删掉，别留 None 干扰 getattr 判断
+                        try:
+                            delattr(task, key)
+                        except AttributeError:
+                            pass
+                    else:
+                        setattr(task, key, value)
+                else:
+                    task.config[key] = value
         return task, result

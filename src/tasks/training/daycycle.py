@@ -267,7 +267,7 @@ class DayCycleMixin:
         → `style` 兜底「训练流」，周末计划全走错（实跑 2026-11-01 19:19：
         扭蛋流跑成了训练流）。
         """
-        name = (self.config.get("指定队长") or "").strip()
+        name = self.configured_captain()
         if not name:
             return False                    # 没配置 → 走路径 B
         style = self.style_for_name(name)

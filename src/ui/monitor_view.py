@@ -101,6 +101,10 @@ class MonitorActions:
         """第二栏的【开始/暂停】：只管自动训练脚本本身的开关，不碰快速比赛。"""
         pass
 
+    def hard_stop_training(self):
+        """第二栏的【■】：完全停止（停脚本 + 清队列参数，不断开游戏）。"""
+        pass
+
 
 class _SplitHandle(QFrame):
     """hero 中间那条线：编辑态可以左右拖，改右栏宽度。"""
@@ -195,6 +199,7 @@ class MonitorView(QWidget):
         self.editing = editing
         self.captains = captains or {}
         self._captain_check: CheckBox | None = None
+        self._btn_hard_stop = None
         self._captain_combo: ComboBox | None = None
         self._btn_capture: QPushButton | None = None
         self._btn_conn: QPushButton | None = None
@@ -372,6 +377,10 @@ class MonitorView(QWidget):
     @Slot()
     def _slot_train(self):
         self.actions.toggle_auto_training()
+
+    @Slot()
+    def _slot_hard_stop(self):
+        self.actions.hard_stop_training()
 
     # ---------- 目标分 / 专注药 槽（用户 2026-11-05） ----------
 
@@ -644,6 +653,29 @@ class MonitorView(QWidget):
                 "自动训练脚本开关：开始 / 暂停（没接上游戏时按【开始】会自动接入）")
 
             lay.addWidget(self._btn_train)
+
+            # 【■】完全停止小方钮（用户 2026-11-07 口径）：**只有方块没有文字**，
+            # 与【开始/暂停】互斥联动 —— 没跑时置灰，点了【开始】才可点；
+            # 点它 = 停脚本 + 清队列参数/进度，【开始】回到初始状态。
+            # **不断开游戏连接**（执行器/截图会话归第一栏【停止】管）。
+            #
+            # 为什么用字形「■」而不是 OKIcon.STOP：那个 svg 写死 fill="#ffffff"（白），
+            # 第一栏是蓝底 Primary 看得见，这里灰底普通按钮上白方块直接隐形；
+            # 文字字形跟 QSS 文字色走，明暗主题/悬停/置灰全自动正确。
+            self._btn_hard_stop = PushButton("■")
+            self._btn_hard_stop.setFixedHeight(30)
+            self._btn_hard_stop.setFixedWidth(30)
+            _f = self._btn_hard_stop.font()
+            _f.setPixelSize(16)
+            _f.setBold(True)
+            self._btn_hard_stop.setFont(_f)
+            self._btn_hard_stop.setEnabled(False)
+            self._btn_hard_stop.setToolTip(
+                "完全停止：停掉脚本并清空多角色队列参数与进度（不断开游戏连接）。"
+                "下次【开始】按界面配置跑，不会接着旧队列跑。")
+            self._btn_hard_stop._click_handler = self._keep(self._slot_hard_stop)
+            self._btn_hard_stop.installEventFilter(self)
+            lay.addWidget(self._btn_hard_stop)
 
         # ---------- 目标分停 / 专注药（用户 2026-11-05 口径） ----------
         # 「持续刷到评分多少以后停止」复用**多角色队列**的提前终止机制：
@@ -995,6 +1027,12 @@ class MonitorView(QWidget):
             if self._train_state != state:
                 self._btn_train.setIcon(icon)
                 self._train_state = state
+            # 【■】与【开始/暂停】互斥（用户 2026-11-07 口径）：只有开始以后
+            # （在跑或接入中）它才可点；停完【开始】回初始态，它跟着置灰。
+            if self._btn_hard_stop is not None:
+                stop_enabled = state in ("running", "connecting")
+                if self._btn_hard_stop.isEnabled() != stop_enabled:
+                    self._btn_hard_stop.setEnabled(stop_enabled)
         for key, switch in (("quick_enabled", self._switch_quick),):
             if switch is None or key not in data:
                 continue

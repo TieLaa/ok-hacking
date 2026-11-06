@@ -97,8 +97,9 @@ class TrainingFlowMixin:
     def run(self):
         """一次 run = 把**多角色队列**里的角色依次练到目标分（用户 2026-11-04 口径）。
 
-        队列为空 / `多角色队列` 关掉 → 老行为：跑完一局就结束（`run_one_round` 返回
-        True 即任务完成）。队列非空时每一局跑完都回来记一次分、必要时换队长，
+        队列是外部注入的内存参数（`_queue_spec`，2026-11-07 起不再是配置项）：
+        没注入 → 老行为，按界面「指定队长」跑完一局就结束（`run_one_round`
+        返回 True 即任务完成）。注入了 → 每一局跑完回来记一次分、必要时换队长，
         直到**全部达标提前终止**，或撞上 `最大局数` 兜底。
         """
         self.init_captain_queue()
@@ -388,25 +389,54 @@ class TrainingFlowMixin:
     # ---------- 多角色队列（2026-11-04 用户口径） ----------
 
     def init_captain_queue(self):
-        """读 `队长队列` 配置，定下这一次 run 要练的角色顺序。
+        """定下这一次 run 要练的角色顺序（用户 2026-11-07 口径）。
 
-        `多角色队列` 关掉 / 队列解析为空 → `self._queue = None`，全程走老的
-        单队长逻辑（跑完一局任务就结束），不会静默换成别的行为。
+        队列只是**内存参数**（`self._queue_spec`，外部注入），不是配置项：
+        - `config["队长队列"]`（配置残留）一律**忽略**——界面为准；
+        - 「指定队长」有值 → 清掉旧队列，按界面选的队长单跑；
+        - 「指定队长」为空且内存里有注入的队列 → 按队列跑。
+
+        `多角色队列` 配置键已废弃（保留在 default_config 里只为不炸老存档），
+        `self._queue = None` → 全程走老的单队长逻辑，不会静默换行为。
+
+        **暂停→继续不丢进度**（2026-11-07）：暂停只是 disable（run 循环退出），
+        `self._queue` 还挂在任务实例上、游标在内存里。这里**先看活着的队列**：
+        还在且指纹没变（队列参数没被界面清掉/换人）→ 直接接着跑，不重建；
+        队列没了/换参数了 → 从 `_queue_spec` 新建（全新 run，从头开始）。
         """
-        self._queue = None
         self._run_score = None
-        if not self.config.get("多角色队列"):
+        want = (self.config.get("指定队长") or "").strip()
+        spec = (getattr(self, "_queue_spec", "") or "").strip()
+        living = getattr(self, "_queue", None)
+        if want:
+            # 界面选了队长 → 旧队列清空（单队长也清，用户口径：
+            # 「不管单个指定还是队列，指定新队长时都清空」）
+            if spec or living is not None:
+                self.log_info("界面已指定队长 → 清掉旧的多角色队列")
+            self._queue = None
+            self._queue_spec = None
             return None
-        queue = CaptainQueue(self.config.get("队长队列") or "")
+        if living is not None and not living.empty:
+            # 暂停后继续（或 run() 正常返回又进来）：队列对象还活着 → 接着跑。
+            # 指纹对不上 = 队列参数被换过（界面清了 / 注入了新串）→ 重建。
+            if spec and living.signature() != CaptainQueue(spec).signature():
+                self.log_info("队列参数已变更 → 重建多角色队列")
+            else:
+                self._queue = living
+                self.log_info(f"多角色队列继续（暂停后续跑）：{living.summary()}")
+                return self._queue
+        self._queue = None
+        if not spec:
+            return None
+        queue = CaptainQueue(spec)
         if queue.empty:
-            self.log_warning("「多角色队列」打开但「队长队列」解析为空 → 按单队长跑")
+            self.log_warning("注入的多角色队列解析为空 → 按单队长跑")
+            self._queue_spec = None
             return None
         self._queue = queue
-        self.log_info(f"多角色队列：{queue.summary()}")
+        self.log_info(f"多角色队列（本次运行参数）：{queue.summary()}")
         self.log_info(f"当前队长：{queue.captain}｜位置 {queue.position}"
                       f"｜目标 {queue.target}｜已跑 {len(queue.runs_for())} 局")
-        if queue.captain:
-            self.config["指定队长"] = queue.captain
         return queue
 
     def note_run_score(self, texts):
@@ -455,8 +485,13 @@ class TrainingFlowMixin:
         return True
 
     def switch_captain(self, name):
-        """换队长：写配置 + 清流派 + 清上一局的运行期状态，下一拍从大厅开新局。"""
-        self.config["指定队长"] = name
+        """换队长（只在内存里换）：清流派 + 清上一局的运行期状态。
+
+        **不写 config**（用户 2026-11-07 口径）：`指定队长` 是界面上的用户设定，
+        任务运行时改它会把用户的选择顶掉、还随框架存盘。队列内部的「现在练谁」
+        由 `self._queue.cursor` 记账；进度文件 `logs/training_queue.json`
+        本来就跟着队列走，不需要污染配置。
+        """
         self.reset_style()
         # **不是** True：`_style_pending` 的含义是「流派没定，要去点日历认队长」，
         # 而换队长的流派由 `run_one_round` 开头的 `resolve_style_by_config()` 直接查表定，
@@ -824,7 +859,7 @@ class TrainingFlowMixin:
 
     @property
     def no_captain_mode(self):
-        """无队长模式：`指定队长` 为空且开关打开。
+        """无队长模式：这次 run 没有「指定队长」（队列参数也算）且开关打开。
 
         用户 2026-10-31 口径：取消勾选队长 = 不接开局，只跑已经手动开好的局。
         开关 `无队长不接开局` 默认 True；回归桩（tools/check_handlers.py）关掉它，
@@ -832,7 +867,7 @@ class TrainingFlowMixin:
         """
         if not self.config.get("无队长不接开局"):
             return False
-        return not (self.config.get("指定队长") or "").strip()
+        return not self.configured_captain()
 
     def stop_for_no_captain(self, stage):
         """无队长模式下遇到开局页面：不动作，直接让 run() 停下。"""
@@ -916,8 +951,20 @@ class TrainingFlowMixin:
         # 它的计数器是 _style_return_tries / _style_calendar_tries，
         # 旧的 _style_probe_tries / _style_probe_at 随 handle_style_probe 一起删了。
 
+    def configured_captain(self):
+        """这次 run 的「指定队长」：队列参数优先，否则界面配置。
+
+        队列是内存参数（`_queue_spec`），它当前队到的队长**就是**这次的
+        「指定队长」——流派、选人页都按它走；界面配置只在没队列时生效。
+        只读，绝不写回 config（用户 2026-11-07 口径）。
+        """
+        queue = getattr(self, "_queue", None)
+        if queue is not None and queue.captain:
+            return queue.captain
+        return (self.config.get("指定队长") or "").strip()
+
     def apply_configured_captain(self):
-        """配置里填了「指定队长」→ 直接定流派，**不点日历**。
+        """「指定队长」（队列参数或界面配置）→ 直接定流派，**不点日历**。
 
         2026-10-30 用户反馈「星期二为什么开日历了，没这个设置吧」：
         旧代码的「指定队长」只用于在选择队长页挑卡（handlers/entry.py），
@@ -928,7 +975,7 @@ class TrainingFlowMixin:
 
         现在：填了队长就查表定流派；查不到（SR/R 或 OCR 名不匹配）才回落到日历。
         """
-        name = (self.config.get("指定队长") or "").strip()
+        name = self.configured_captain()
         if not name:
             return False
         style = self.style_for_name(name)

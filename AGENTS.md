@@ -35,3 +35,14 @@
 - **MCP 开发循环**（ok-script 2.0.16+）：改已注册任务用 `list_tasks` → 原地改源码 → `reload_tasks(task_ids)` → 用 `tools/mcp/probe.py` / `training.py` 验证，不要重启 GUI。任务类必须保持 `reset_to_start` / `verify_start_state` 可用（`src/tasks/attempt.py`），业务逻辑不复制进 harness。流程见 `docs/MCP_DEV.md`。
 - 踩到新坑时，把「下次该怎么说」补进 `docs/PROMPT_PLAYBOOK.md`，不要只改代码。
 
+## 开跑指令（用户 2026-11-07 口径）
+<!-- 变更 2026-11-07 · opencode · 新增「开跑指令」一节 · 用户不再口头复述队长/目标分/吃药条件，改由会话读 configs/TrainingTask.json 自取 -->
+<!-- 变更 2026-11-07 · opencode · 「队长队列」配置键已废弃（队列降级为 MCP 注入参数），改口径描述 · 防止会话按已删键找配置 -->
+
+用户说「开始跑了 / 持续跟踪一下」时，**不再复述业务条件**（队长、目标分、吃不吃药）——这些以 `configs/TrainingTask.json` 为唯一真相（GUI 改的就是它），会话里先读它确认当前配置，再动手：
+
+1. 读 `configs/TrainingTask.json`：确认「指定队长」（界面唯一真相；目标分由 agent 说或走 MCP 注入）、「自动恢复精力 / 恢复精力下限」（吃药）。
+2. 启动或接上任务，用 `tools/watch_run.py` 跟踪推进，结束时用 `tools/mcp/summarize_run.py` 收账。
+3. 卡住/异常时先读 `logs/debug/<时间>_<tag>/ocr.txt`（先文本后图，遵守「读图」硬规则），再修复。
+4. 多角色队列只走 `logs/mcp/next_captain.json` 的 `{"queue": "..."}` 注入（一次性参数）；**用户在 GUI 指定队长会清掉它**。禁止把队列写进配置或写死在代码里。
+

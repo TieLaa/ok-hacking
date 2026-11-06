@@ -53,11 +53,12 @@ class Task(BaseTask):
         if wanted.get("captain"):
             overrides["指定队长"] = wanted["captain"]
             self.log_info(f"本次指定队长：{wanted['captain']}")
-        # 也可以整条队列外部指定：{"queue": "望月透:8000"}（开多角色队列 + 覆盖队列串）
-        if wanted.get("queue"):
-            overrides["多角色队列"] = True
-            overrides["队长队列"] = wanted["queue"]
-            self.log_info(f"本次队长队列：{wanted['queue']}")
+        # 多角色队列外部注入（用户 2026-11-07 口径：队列是**一次性参数**，
+        # 不写配置）：{"queue": "望月透:8000,野上泷:7500"}。
+        # 注意：同时给了 captain 和 queue 时 captain 优先（界面口径 = 指定队长清队列）。
+        if wanted.get("queue") and not wanted.get("captain"):
+            overrides["_queue_spec"] = wanted["queue"]
+            self.log_info(f"本次队长队列（注入参数）：{wanted['queue']}")
         # 「新一局删档」已从 config_spec 删除：训练确认弹窗只会点「继续训练」。
         # 开训练消耗的专注删档不返还，脚本里不再提供任何删档入口。
 

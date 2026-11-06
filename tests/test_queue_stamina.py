@@ -170,6 +170,14 @@ class QueueProgress(unittest.TestCase):
         self.assertEqual(other.cursor, 0)
         self.assertEqual(other.captain, "近江奏")
 
+    def test_in_memory_queue_records_without_path(self):
+        """纯内存队列（2026-11-07 起默认）：path=None 时 record/save 不炸、游标照走。"""
+        q = CaptainQueue("野上泷:7500,亚理纱·贾斯敏:7300")
+        self.assertIsNone(q.path)
+        self.assertFalse(q.record(7400))          # 未达标 → 原地
+        self.assertTrue(q.record(7500))           # 达标 → 游标前进
+        self.assertEqual(q.captain, "亚理纱·贾斯敏")
+
 
 class StaminaBottleChoice(unittest.TestCase):
 
@@ -388,13 +396,18 @@ class TrainingScorePage(unittest.TestCase):
         task = self.make(texts)
         self.assertEqual(task.read_training_score(texts), (7728, "SS"))
 
-    def test_met_score_marks_round_done(self):
+    def test_met_score_page_does_not_record(self):
+        """2026-11-06 口径：训练评分弹层的分数**不入账**（只参考）。
+
+        判分点 = 注册球员页的球员评分（含累积加成，同局实测弹层 8026 vs
+        注册球员 8380）；弹层先到先得会短路注册球员页，导致达标了还白跑。
+        """
         texts = self.page()
         task = self.make(texts)
         self.assertTrue(task.handle_training_score(texts))
-        self.assertEqual(task._run_score, 7728)
-        self.assertTrue(task._round_done)          # 达标 → 本局收尾后提前终止
-        self.assertEqual(task.actions[-1][0], "click_box")
+        self.assertIsNone(task._run_score)         # 不入账
+        self.assertFalse(getattr(task, "_round_done", False))
+        self.assertEqual(task.actions[-1][0], "click_box")  # 但要推进翻页
 
     def test_under_target_keeps_round_going(self):
         texts = [box(600, 300, "训练评分", 200, 60),
@@ -402,8 +415,7 @@ class TrainingScorePage(unittest.TestCase):
                  box(650, 700, "点击屏幕继续", 300, 50)]
         task = self.make(texts, target=7400)
         self.assertTrue(task.handle_training_score(texts))
-        self.assertEqual(task._run_score, 6446)
-        self.assertFalse(task._round_done)         # 未达标 → 这一局照跑完再开下一局
+        self.assertIsNone(task._run_score)         # 弹层分数一律不入账
 
     def test_other_pages_are_not_this_one(self):
         texts = [box(600, 300, "下一步", 200, 60)]
