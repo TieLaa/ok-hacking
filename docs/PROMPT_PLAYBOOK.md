@@ -681,29 +681,7 @@ runtime，reload_tasks 只刷新已注册任务模块。
   会静默地把它从通用规则里摘出去。判据要写成并列的 `if A: continue`
   `if B: continue`，每一行只否掉一件事。」**
 
-### 框架图标显示不出来：`:/qss` 资源要 `ok.ui.qt.resources` 注册，离屏验证必须自己 import
-
-- 现象（2026-11-07）：监控页第二栏的【■】停止方块第一版「只剩灰按钮」，离屏验证时
-  `OKIcon.STOP.icon()` 一会儿 `opaque=116`、一会儿 `opaque=0`，二分了 8 轮才定位。
-- 根因（两个叠在一起）：
-  1. `OKIcon.STOP` 的 svg 写死 `fill="#ffffff"`（纯白）：第一栏【停止】是蓝底
-     `PrimaryPushButton` 看得见，灰底普通 `PushButton` 上白图形直接隐形。
-     重涂要走 qfluentwidgets 的 `icon(color=...)`（`writeSvg` 改 path 填色），
-     自己手写 QSvgRenderer 重涂是重复造轮子；
-  2. `:/qss/<theme>/stop.svg` 这个资源由 `ok.ui.qt.resources` **注册** —— 真 GUI 里
-     `app.py` 一启动就 import 了，所以**任何时候看起来都正常**；但离屏验证脚本
-     （QApplication 裸起）不 import 它，`icon()` 返回空 → 「图标 isNull」。
-     前几轮验证 0/116 交错全是这条：`import ok.ui.qt.resources` 写没写。
-- 修法：`MonitorView._stop_icon()` = `OKIcon.STOP.icon(color=主题色)` +
-  函数内 `import ok.ui.qt.resources`（幂等）；验证脚本也必须带上。
-- 提示词里应该加的那句：**「『用框架现成的东西』之前先去参考项目里搜有没有同款用法
-  （`D:\workspace\_okrefs\` 下 8 个 ok-script 项目、site-packages 的框架源码）——
-  ok-end-field 的 `EndfieldPrimitives.draw_fluent_icon` / TaskCard 的
-  `PrimaryPushButton(OKIcon.STOP)` 都是现成答案，这次手写 30 行重涂就是没先查。
-  另外凡是用 `:/xxx` 资源的离屏验证，先 import 资源注册模块再渲染；
-  「验证结果忽对忽错」先 diff 两份脚本 import 列表，不要怀疑渲染逻辑。」**
-
-
+### 顶栏图标被 OCR 读成汉字：记进文档不算修好，要在 OCR 出口过滤
 
 - 现象：`docs/UI_MAP.md` 早就记了「`早三 / 昆三 / 数目三 / 战昆三色 …` 是历史记录和菜单两个图标」，
   但**只写了文档没写代码**，于是日志里每拍还在刷这些假汉字（用户 2026-11-01：「我不是已经指明了
