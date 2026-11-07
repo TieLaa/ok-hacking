@@ -5221,6 +5221,7 @@ class MonitorButtonActions(unittest.TestCase):
                 self.config = {"指定队长": ""}
                 self.enabled = False
                 self.running = running
+                self.paused = False        # 框架 task.pause() 的挂起态
                 self.calls = []
 
             def enable(self):
@@ -5232,9 +5233,15 @@ class MonitorButtonActions(unittest.TestCase):
                 self.enabled = False
                 self.running = False
 
+            def pause(self):
+                # 框架 TaskCard.pause_clicked：task.pause()（可无损恢复）
+                self.calls.append("pause")
+                self.paused = True
+
             def unpause(self):
-                # 旧版会调它；新逻辑**不应该**再调
+                # 框架 TaskCard.start_clicked 第一分支：恢复挂起的任务
                 self.calls.append("unpause")
+                self.paused = False
 
         class _FakeExecutor:
             def __init__(self):
@@ -5281,29 +5288,30 @@ class MonitorButtonActions(unittest.TestCase):
         self.addCleanup(lambda: setattr(ok.og, "device_manager", old))
         return tab, task, executor, capture
 
-    def test_pause_auto_training_does_not_unpause_task(self):
-        """第二栏【暂停】只调 disable —— **不调 unpause**。
+    def test_pause_running_task_pauses_it(self):
+        """第二栏【暂停】= 框架 pause_clicked：task.pause()（可无损恢复）。
 
-        `unpause()` = `executor.start()`：会把执行器从暂停里放出来，
-        于是「停自动训练」顺手撤销了「断开游戏」。
+        2026-11-07 对齐框架 TaskCard：暂停改用 task.pause()，
+        不再 disable（disable 后恢复只能重跑 run()）。
         """
         tab, task, executor, _ = self._tab()
         task.enabled = True
         task.running = True
         tab.toggle_auto_training()
-        self.assertIn("disable", task.calls)
-        self.assertNotIn("unpause", task.calls)
+        self.assertIn("pause", task.calls)
+        self.assertNotIn("disable", task.calls)
+        self.assertTrue(task.paused)
         # 执行器没被碰
         self.assertEqual(executor.calls, [])
 
     def test_pause_auto_training_does_not_touch_executor(self):
-        """第二栏【暂停】不能唤醒执行器（那是第一栏的语义）。"""
+        """第二栏【暂停】不能暂停/唤醒执行器（那是第一栏的语义）。"""
         tab, task, executor, _ = self._tab()
-        executor.paused = True
+        executor.paused = False
         task.enabled = True
         task.running = True
         tab.toggle_auto_training()
-        self.assertTrue(executor.paused)
+        self.assertFalse(executor.paused)
         self.assertEqual(executor.calls, [])
 
     def test_disconnect_clears_connection_immediately(self):
@@ -5371,20 +5379,26 @@ class MonitorButtonActions(unittest.TestCase):
         tab.toggle_auto_training()
         self.assertEqual(app.calls, [])
 
-    def test_start_auto_training_when_connected_does_not_start_game(self):
-        """已经接上了就别再碰 `start_controller`（那是第一栏的职责）。"""
+    def test_start_when_connected_still_goes_through_start_controller(self):
+        """已连接时点【开始】也走 `start_controller.start(task)`（框架口径）。
+
+        2026-11-07 对齐框架 TaskCard.start_clicked：无论什么状态都交给
+        start_controller（它内部处理 paused/running/未启动所有分支）。
+        旧断言「已连接就不碰 start_controller」随 disable 暂停方案一起废弃。
+        """
         tab, task, executor, _ = self._tab(connected=True)
         app = self._fake_app()
         tab.toggle_auto_training()
-        self.assertEqual(app.calls, [])
-        self.assertIn("enable", task.calls)
+        self.assertEqual(len(app.calls), 1)
+        self.assertIs(app.calls[0][1], task)
 
-    def test_start_auto_training_enables_when_connected(self):
-        """接上游戏时点第二栏【开始】→ enable + 唤醒执行器。"""
+    def test_start_auto_training_goes_through_start_controller(self):
+        """接上游戏时点第二栏【开始】→ start_controller.start(task)（框架口径）。"""
         tab, task, executor, _ = self._tab(connected=True)
+        app = self._fake_app()
         tab.toggle_auto_training()
-        self.assertIn("enable", task.calls)
-        self.assertTrue(task.enabled)
+        self.assertEqual(len(app.calls), 1)
+        self.assertIs(app.calls[0][1], task)
 
     def test_disconnect_resets_second_bar_state(self):
         """第一栏【停止】（断开游戏）→ 训练任务被 disable、按钮复位成【开始】。
@@ -5402,15 +5416,17 @@ class MonitorButtonActions(unittest.TestCase):
     def test_disconnect_second_bar_text_resets_immediately(self):
         """断开后第二栏**立刻**回到【开始】，不等任务线程收尾。
 
-        `disable()` 是同步的（`_enabled` 立刻变 False），但 `running`
-        要等任务线程跑完当前拍才置 False —— 有几秒滞后。
-        判据必须用 `enabled and running`，否则断开后界面还挂着【暂停】。
+        `_active_of` 的判据是 `enabled`（同步生效）—— disable 后立刻为假，
+        `running` 的滞后不影响按钮文案。
+        2026-11-07：暂停态（enabled+paused）也算 active（显示【暂停】），
+        恢复与停止都由按钮语义处理。
         """
         from src.ui.MonitorTab import MonitorTab
 
         class _Task:
             enabled = False
             running = False
+            paused = False
 
         tab = MonitorTab.__new__(MonitorTab)
         # 模拟「刚 disable、任务线程还没收尾」的中间态
@@ -5418,23 +5434,26 @@ class MonitorButtonActions(unittest.TestCase):
         task.enabled = False
         task.running = True
         self.assertFalse(MonitorTab._active_of(task))
-        # 真在跑：两个都为真
+        # 真在跑：enabled 为真即 active（暂停态也算）
         task.enabled = True
         task.running = True
+        self.assertTrue(MonitorTab._active_of(task))
+        # 暂停态（enabled + paused）也算已启动
+        task.paused = True
         self.assertTrue(MonitorTab._active_of(task))
         # 只排队没跑
         task.enabled = True
         task.running = False
-        self.assertFalse(MonitorTab._active_of(task))
+        self.assertTrue(MonitorTab._active_of(task))
 
     def test_connect_does_not_disable_training(self):
-        """第一栏【停止】是唯一会停训练的动作；别的地方不许停它。"""
+        """第一栏【启动】不会停训练任务（它的语义是接入+开跑）。"""
         tab, task, executor, _ = self._tab()
         task.enabled = True
         task.running = True
-        tab.toggle_auto_training()    # 第二栏暂停
-        self.assertIn("disable", task.calls)
-        self.assertEqual(task.calls.count("disable"), 1)
+        tab.toggle_auto_training()    # 第二栏暂停（pause，非 disable）
+        self.assertIn("pause", task.calls)
+        self.assertNotIn("disable", task.calls)
 
 
 class MonitorQuickMatchSwitch(unittest.TestCase):
@@ -5570,22 +5589,6 @@ class MonitorExecutorLifecycle(unittest.TestCase):
     def _tab(self, paused=True):
         from src.ui.MonitorTab import MonitorTab
 
-        class _FakeTask:
-            def __init__(self, name):
-                self.name = name
-                self.enabled = False
-                self.running = False
-                self.calls = []
-
-            def enable(self):
-                self.calls.append("enable")
-                self.enabled = True
-
-            def disable(self):
-                self.calls.append("disable")
-                self.enabled = False
-                self.running = False
-
         class _FakeExecutor:
             def __init__(self):
                 self.paused = paused
@@ -5599,9 +5602,38 @@ class MonitorExecutorLifecycle(unittest.TestCase):
                 self.calls.append("pause")
                 self.paused = True
 
+        class _FakeTask:
+            def __init__(self, name):
+                self.name = name
+                self.enabled = False
+                self.running = False
+                self.paused = False        # 框架 task.pause() 的挂起态
+                self.executor = executor   # 框架 Task.unpause() 会联动 executor.start()
+                self.calls = []
+
+            def enable(self):
+                self.calls.append("enable")
+                self.enabled = True
+
+            def disable(self):
+                self.calls.append("disable")
+                self.enabled = False
+                self.running = False
+
+            def pause(self):
+                # 框架 TaskCard.pause_clicked：task.pause()
+                self.calls.append("pause")
+                self.paused = True
+
+            def unpause(self):
+                # 框架 Task.unpause() 实体：_paused=False + executor.start()
+                self.calls.append("unpause")
+                self.paused = False
+                self.executor.start()
+
+        executor = _FakeExecutor()
         tab = MonitorTab.__new__(MonitorTab)
         quick, train = _FakeTask("快速比赛"), _FakeTask("自动训练")
-        executor = _FakeExecutor()
         tab._task = lambda: train
         tab._task_by_name = lambda name: quick if name == "QuickMatchTask" else None
         tab._connected = lambda: not executor.paused
@@ -5616,17 +5648,20 @@ class MonitorExecutorLifecycle(unittest.TestCase):
         train.enabled, train.running = True, True
         quick.enabled = True
         tab._connection_stop()
+        # _stop_auto_training = disable + unpause（框架 stop_clicked 同款，
+        # unpause 清 task.pause 挂起态并联动 executor.start —— 但第一栏
+        # 随后的 executor.pause 会把执行器按回暂停，最终 calls 里两个都有）
         self.assertIn("disable", train.calls)
         self.assertIn("disable", quick.calls)
         self.assertFalse(quick.enabled)
-        self.assertEqual(executor.calls, ["pause"])
+        self.assertEqual(executor.calls, ["start", "pause"])
 
     def test_pause_auto_training_never_pauses_executor(self):
-        """第二栏【暂停】只停自己的任务 —— 关执行器不是它该管的事。"""
+        """第二栏【暂停】= task.pause()，执行器不被暂停（关执行器归第一栏）。"""
         tab, quick, train, executor = self._tab(paused=False)
         train.enabled, train.running = True, True
         tab.toggle_auto_training()
-        self.assertIn("disable", train.calls)
+        self.assertIn("pause", train.calls)
         self.assertEqual(executor.calls, [])
         self.assertFalse(executor.paused)
 
@@ -5647,16 +5682,18 @@ class MonitorExecutorLifecycle(unittest.TestCase):
         self.assertIn("enable", quick.calls)
 
     def test_auto_training_wakes_paused_executor(self):
-        """第二栏【开始】同理：任务入队后顺手唤醒执行器（兜底，不是必须）。
+        """第二栏【开始】（任务已暂停态）→ task.unpause() 恢复。
 
-        `_connected()` 本身含「执行器没暂停」，所以真实场景里这条分支几乎走不到；
-        这里直接把「连上了但执行器停着」造出来，验证兜底确实会唤醒。
+        框架 TaskCard.start_clicked 第一分支：enabled 且 paused → unpause。
+        unpause 实体含 executor.start()，执行器会被唤醒 —— 这是框架口径。
         """
         tab, quick, train, executor = self._tab(paused=True)
         tab._connected = lambda: True
+        train.enabled = True
+        train.paused = True
         tab.toggle_auto_training()
+        self.assertIn("unpause", train.calls)
         self.assertEqual(executor.calls, ["start"])
-        self.assertIn("enable", train.calls)
 
 
 class MonitorButtons(unittest.TestCase):
