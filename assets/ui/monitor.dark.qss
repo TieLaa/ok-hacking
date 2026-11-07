@@ -161,6 +161,28 @@ QPushButton#monitorPrimary {
 
 QPushButton#monitorPrimary:hover { background: #6ecfff; }
 
+/* 【■】完全停止小方钮（2026-11-07）：未启动=黑底白方块不可点；
+   启动后=蓝底白方块可点（对齐框架 TaskCard 的 Stop 观感）。 */
+QPushButton#monitorStopIdle {
+    background: #1f1f1f;
+    color: #e0e0e0;
+    border: 1px solid #3d3d3d;
+    border-radius: 6px;
+    padding: 0;
+}
+
+QPushButton#monitorStopIdle:hover { background: #262626; }
+
+QPushButton#monitorStopPrimary {
+    background: #4cc2ff;
+    color: #062430;
+    border: 1px solid #4cc2ff;
+    border-radius: 6px;
+    padding: 0;
+}
+
+QPushButton#monitorStopPrimary:hover { background: #6ecfff; }
+
 QPushButton#monitorGhost {
     background: transparent;
     color: #cfcfcf;
