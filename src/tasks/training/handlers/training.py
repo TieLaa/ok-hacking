@@ -51,6 +51,7 @@ class TrainingHandlers:
     BOOST_CARD_SLEEP = 0.40       # 点完卡片的等待（原 0.55）
     BOOST_CONFIRM_GAP = 0.05      # 卡片→确定 的额外间隔（原 0.35）
     BOOST_CONFIRM_LOCK = 1.2      # 点过确定后的静默期（原 2.0）
+    BOOST_GAIN_MISSING_MAX = 3    # 收益列连缺 N 拍后按旧回退兜底（防永远停页）
 
     def handle_training_result(self, texts):
         """训练结果浮层：精力降低了X / 属性提升了 / 触发训练后事件。
@@ -665,6 +666,12 @@ class TrainingHandlers:
             self.click_button("confirm", must=False)
             return True
 
+        # 2026-11-07 实跑踩坑（logs/events/1107-223718）：OCR 漏读一张卡的收益数字
+        # （「+48」没进框），旧版回退「成功率当收益」→ 100%×100=100 分反而全场最高，
+        # 选了期望最低的左卡。改法：**收益列不全就整拍跳过**，等下一拍重读，
+        # 宁可慢一拍也不按缺数决策。连着多拍都缺（BOOST_GAIN_MISSING_MAX，
+        # 说明是页面变体而非 OCR 噪声）才按旧回退兜底，避免永远停在这页。
+        # 存证限流 10 秒一张（dump_unknown 没有自带限流）。
         def cluster(items, tol=0.08):
             """按 x 聚类成一列（同一张卡的所有数字）。返回 [(中心 x, [框...]), ...]。"""
             cols = []
@@ -678,6 +685,26 @@ class TrainingHandlers:
 
         rate_cols = cluster(rates)
         gain_cols = cluster(gains)
+        # 收益列**比百分比列少**（含一张都没读到的空收益列）都算缺数：
+        # 空收益时旧回退同样是「成功率当收益」，100% 卡照样顶上去。
+        if len(gain_cols) < len(rate_cols):
+            self._boost_gain_missing = getattr(self, "_boost_gain_missing", 0) + 1
+            if self._boost_gain_missing <= self.BOOST_GAIN_MISSING_MAX:
+                if (time.monotonic()
+                        - getattr(self, "_boost_gain_missing_at", 0.0) > 10.0):
+                    self.log_warning(
+                        f"加强训练：{len(rate_cols)} 个百分比列只有 "
+                        f"{len(gain_cols)} 个收益列（收益数字漏读），"
+                        "本拍不选，等下一拍重读")
+                    self.dump_unknown(texts, "boost_gain_missing")
+                    self._boost_gain_missing_at = time.monotonic()
+                return True
+            self.log_warning(
+                "加强训练：连续 "
+                f"{self._boost_gain_missing} 拍收益列不全，按旧回退兜底（成功率当收益）")
+        else:
+            self._boost_gain_missing = 0
+
         self.log_debug(
             "加强训练：百分比列 " + "｜".join(
                 f"{c:.2f}:{','.join(b.name.strip() for b in bs)}" for c, bs in rate_cols)

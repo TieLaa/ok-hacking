@@ -171,7 +171,8 @@ LEAVE_RESETS = {
     "handle_unmarked_cards": {"_unmark_dumped_at": 0.0, "_unmark_confirmed_at": 0.0},
     # 加强训练页的「第几拍 / 已点确定的时刻」：离开这页就清零，
     # 否则下一张加强训练卡会被当成「已经看过好几拍」→ 又回到淡入那一拍就点（空点击）
-    "handle_boost_training": {"_boost_ticks": 0, "_boost_confirmed_at": 0.0},
+    "handle_boost_training": {"_boost_ticks": 0, "_boost_confirmed_at": 0.0,
+                              "_boost_gain_missing": 0, "_boost_gain_missing_at": 0.0},
     # 训练结果浮层的点击锁：离开就清，免得下次这页第一拍被误判成「刚点过」
     "handle_training_result": {"_result_click_at": 0.0},
     # 「专注恢复」页喝饮料的点击锁：离开这页就清（下次进来重新计），
