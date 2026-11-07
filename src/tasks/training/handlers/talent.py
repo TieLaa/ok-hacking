@@ -14,12 +14,14 @@
                                                写小说题材三选一 + WARD文档交稿
                                                （望月透；2026-11-02 实机在他身上触发）
     handle_ingredient_select                   做饭食材三选一（千圣贝尔丝）
+    handle_live_stream                         直播主题三选一，天赋「人气主播」
+                                               （和泉香织；2026-11-07 实机触发 5 次）
 
 钓鱼/做饭事件的**第二页转盘**（「转一转」）不在本模块：它是通用 UI 机制，
 非天赋事件（如「球队经理的小帮助」）也触发同样的转盘，2026-11-05 起
 归 `handlers/wheel.py: handle_spin_wheel`。
 
-**还没触发过**的天赋（潜水/跑团/人气主播/异世界碎片/演唱会/汉堡券/占卜/
+**还没触发过**的天赋（潜水/跑团/异世界碎片/演唱会/汉堡券/占卜/
 龙宫寺集团）已在 `TALENT_OWNERS` 里占位：没有实机截图，写不了判据；触发后
 按「实现一个新天赋事件」的步骤补——
 
@@ -52,10 +54,10 @@ TALENT_OWNERS = {
     "钓鱼":      ("真崎辉世", "佐久间雨乃"),        # handle_fishing_ground
     "写小说":    ("望月透",),                       # handle_theme_select / handle_manuscript_submit
     "做饭":      ("千圣贝尔丝",),                   # handle_ingredient_select
-    # ---- 未触发，占位（触发后实现并把 None 换成方法引用说明） ----
+    # ---- 未实现：其中「人气主播」已实现（handle_live_stream），其余占位 ----
     "潜水":      None,
     "跑团":      ("羽濑川凑", "近江奏"),
-    "人气主播":  ("和泉香织",),
+    "人气主播":  ("和泉香织",),        # = 直播三选一「请选择1个直播主题」，handle_live_stream
     "异世界碎片": ("羽田朱志香",),
     "演唱会":    ("远野桐",),
     "汉堡券":    ("澪奈贾妮丝",),
@@ -464,3 +466,129 @@ class TalentHandlers:
 
     # 「开始做饭！」那一页的转盘：通用机制，见 handlers/wheel.py: handle_spin_wheel
     # （2026-11-05 搬出：经理的小帮助等非天赋事件也触发同样的转盘）。
+
+    # ==================== 直播三选一（天赋「人气主播」：和泉香织） ====================
+
+    def handle_live_stream(self, texts):
+        """「请选择1个直播主题」：纯卡面规则选一张，再点「确定」。
+
+        用户 2026-11-07 口径：**不读顶栏粉丝数、不读目标数**（要做数字判断
+        还得点开人数看，麻烦），只看三张卡自己的字面 —— 五次实录全中：
+
+        1. **不扣精力且粉丝为正的紫卡 → 直接选**（粉丝增益大小不比：
+           第1/4次「动画杂谈回」+3万/投射+30 都选它，哪怕别的紫卡 +15万）；
+        2. 否则**粉丝增益最大的紫卡**（精力代价不计：第2次 -30精力/+15万
+           胜过 -10精力/+10万，原话「只是减精力而已，但粉丝加的多」）；
+        3. **金卡「效果未知」> 风险卡**「可能翻倍/可能-5万」（第3/5次：
+           风险卡期望≈0，金卡是碰运气，好过确定≈0）；
+        4. 蓝卡垫底 —— 第5次蓝卡「抽奖回」零用钱-100/粉丝+10万、
+           45+10 本可当场达标，用户仍弃选 → 花钱买粉的蓝卡也垫底，无例外。
+
+        卡面效果行只有四种判读材料（五次实录，见 labels.LIVE_* 注释）：
+        「粉丝±N万」「精力±N」「可能…」「效果未知」。品质色沿用
+        `quality_cards` 的 彩/金/紫/蓝 阈值（标题条上色，同一套）。
+
+        为什么不做「粉丝 vs 目标」动态判断（2026-11-07 讨论）：目标是
+        10万→30万→50万 递进的（第4次 42万 差 8万，+15万够；第5次 45万
+        差 5万，蓝卡 +10万 够），动态规则两次都会改选蓝/紫大卡 —— 与
+        用户口径直接冲突。静态规则会「晚一周达标」，用户明确接受。
+
+        页面没有「跳过」，但会被品质卡兜底 `handle_unmarked_cards` 认领
+        （三张上色卡全中形态判据）→ 本 handler 必须排在它前面，且标题
+        已加进 labels.QUALITY_CARD_EXCLUDE（双保险）。
+        """
+        if self.exact_text(texts, labels.LIVE_TITLE) is None:
+            return False
+        cards = self.quality_cards(texts)
+        if len(cards) < 2:
+            # 标题认出来了但卡片还没淡入：等下一拍，别抢着点
+            return False
+
+        # 已经点过「确定」但页面还没切走（切页有淡出动画）：补点，别重新选
+        if time.monotonic() - getattr(self, "_live_confirmed_at", 0.0) < 2.5:
+            self.click_button("confirm", after_sleep=0.7, must=False)
+            return True
+
+        infos = [self._live_card_info(texts, c) for c in cards]
+        pick, why = self._live_pick(infos)
+        detail = "｜".join(f"{c['name']}({c['quality']}/{c['desc']})"
+                          for c in infos)
+        self.log_info(f"直播：{detail} → 选「{pick['name']}」（{why}）")
+        self.info_set("直播", pick["name"])
+
+        box = pick["box"]
+        # 点卡片**正文区**：标题条贴着卡片上沿，点边缘可能选不中
+        cx = int(box.x + box.width / 2)
+        cy = int(box.y + box.height / 2 + self.height * 0.06)
+        self.click(cx, cy, after_sleep=0.5)
+        self.sleep(0.3)          # 等选中动画走完，再点确定（否则确定会点空）
+        if self.click_button("confirm", after_sleep=0.9, must=False):
+            self._live_confirmed_at = time.monotonic()
+        else:
+            self.log_warning("直播：没认出「确定」按钮，下一拍重新判断这一页")
+        return True
+
+    def _live_card_info(self, texts, card):
+        """读一张直播卡的字面效果，归一成 {fans, stamina, risk, unknown, desc}。
+
+        fans：粉丝净变化（万，负=扣粉丝，None=读不到/「翻倍」这类没法静态算）；
+        stamina：精力变化（None=不涉及）；risk/unknown：「可能…」/「效果未知」。
+        行首的「と」是卡头图标被 OCR 硬读出来的噪声 → 一律 `re.search`。
+        效果行取「标题框下方、同列」的框：列宽按卡心 ±0.09 屏宽（卡间距
+        ≈0.195 屏宽，一半 ≈0.098，不会串到邻卡）；0.35 屏高内覆盖两行效果
+        （实测 515~605 @1080p），又不会够到底部「确定」（y≈765）。
+        """
+        box = card["box"]
+        lines = [t.name for t in texts
+                 if abs((t.x + t.width / 2) - (box.x + box.width / 2)) < self.width * 0.09
+                 and 0 < (t.y - box.y) <= self.height * 0.35]
+        info = {"name": card["name"], "box": box, "quality": card["quality"],
+                "fans": None, "stamina": None, "risk": False, "unknown": False,
+                "desc": card["quality"]}
+        for raw in lines:
+            s = raw.strip()
+            if labels.LIVE_UNKNOWN_MARK in s:
+                info["unknown"] = True
+                info["desc"] += "/效果未知"
+                continue
+            if labels.LIVE_RISK_MARK in s:
+                if not info["risk"]:
+                    info["risk"] = True
+                    info["desc"] += "/风险"
+            m = labels.LIVE_FANS_RE.search(s)
+            if m:
+                info["fans"] = int(m.group(1))
+                info["desc"] += f"/粉丝{m.group(1)}万"
+                continue
+            m = labels.LIVE_STAMINA_RE.search(s)
+            if m:
+                info["stamina"] = int(m.group(1))
+                info["desc"] += f"/精力{m.group(1)}"
+        return info
+
+    def _live_pick(self, infos):
+        """四条静态规则（口径见 handle_live_stream docstring），返回 (卡, 理由)。"""
+        def fans(c):
+            return c["fans"] if c["fans"] is not None else -999
+        # ① 不扣精力且粉丝为正的紫卡（可能多张：全选的时候第一张）
+        safe = [c for c in infos if c["quality"] in ("紫", "彩")
+                and not c["risk"] and not c["unknown"]
+                and c["fans"] is not None and c["fans"] > 0
+                and (c["stamina"] is None or c["stamina"] >= 0)]
+        if safe:
+            return max(safe, key=fans), "①不扣精力粉丝为正"
+        # ② 紫卡里粉丝增益最大的（精力代价不计；粉丝为正才值得选——
+        # 「翻倍」读不到数 → fans=-999，固定掉粉的紫卡也不进）
+        purples = [c for c in infos if c["quality"] in ("紫", "彩")
+                   and not c["risk"] and not c["unknown"]
+                   and (c["fans"] is not None and c["fans"] > 0)]
+        if purples:
+            return max(purples, key=fans), "②紫卡粉丝增益最大"
+        # ③ 金卡「效果未知」> 风险卡
+        golds = [c for c in infos if c["quality"] in ("金", "彩")]
+        if golds:
+            return golds[0], "③金卡效果未知优于风险卡"
+        # ④ 蓝卡垫底：三张全蓝时只好选一张（五次实录没出现过，纯兜底）
+        return infos[0], "④只剩蓝卡，选第一张"
+
+    # ==================== 直播三选一结束 ====================

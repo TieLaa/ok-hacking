@@ -6124,5 +6124,113 @@ class CookQualityCards(unittest.TestCase):
                                          int(task.height * 0.923))])
 
 
+class LiveStreamPick(unittest.TestCase):
+    """直播三选一（天赋「人气主播」：和泉香织，2026-11-07 实机×5）。
+
+    回归数据取五次实录的 logs/debug/1107-*_noresp3s/ocr.txt（真坐标）；
+    帧是纯黑 + 按列铺品质色带（FakeTask 注入品质， CookQualityCards 同款思路）。
+    卡片标题条 y≈336、效果行 y≈515~605 @1080p，卡心 x ≈ 405/777/1150。
+    """
+
+    H, W = 1080, 1920
+    # 五次实录的卡面（品质, 名字, [效果行...]），左→右
+    SCENES = (
+        (("紫", "紫", "蓝"),
+         [("联机游戏回", ["可能粉丝翻倍", "可能粉丝-5万"]),
+          ("动画杂谈回", ["粉丝+3万", "投射+30"]),
+          ("正常回", ["粉丝+5万"])],
+         "动画杂谈回"),                                   # 第1次：选①安全紫
+        (("蓝", "紫", "紫"),
+         [("闲聊回", ["精力+30", "と粉丝-1万"]),
+          ("高难游戏回", ["精力-30", "と粉丝+15万"]),
+          ("马拉松直播回", ["精力-10", "と粉丝+10万"])],
+         "高难游戏回"),                                   # 第2次：②粉丝最大的紫
+        (("金", "紫", "蓝"),
+         [("点歌回", ["效果未知"]),
+          ("联机游戏回", ["可能粉丝翻倍", "可能粉丝-5万"]),
+          ("闲聊回", ["精力+30", "と粉丝-1万"])],
+         "点歌回"),                                       # 第3次：③金卡>风险卡
+        (("紫", "蓝", "紫"),
+         [("动画杂谈回", ["粉丝+3万", "投射+30"]),
+          ("闲聊回", ["精力+30", "粉丝-1万"]),
+          ("高难游戏回", ["精力-30", "と粉丝+15万"])],
+         "动画杂谈回"),                                   # 第4次：①安全紫（弃+15万）
+        (("紫", "蓝", "金"),
+         [("联机游戏回", ["可能粉丝翻倍", "可能粉丝-5万"]),
+          ("抽奖回", ["零用钱-100", "粉丝+10万"]),
+          ("点歌回", ["效果未知"])],
+         "点歌回"),                                       # 第5次：③（蓝卡垫底）
+    )
+
+    def _frame(self, qualities):
+        """三列品质色带铺在**标题条**位置（y 330~380，实测卡名 y≈336 高 40）。
+
+        `card_quality_color` 先看标题框自己那条横带、再看框上方卡头，
+        所以色带必须盖住 336~376 这一段（黑帧里卡头是黑的，靠标题条带兜底）。
+        """
+        frame = np.zeros((self.H, self.W, 3), dtype=np.uint8)
+        colors = {"蓝": (103, 121, 197), "紫": (135, 115, 188), "金": (21, 251, 193)}
+        for cx, quality in zip((405, 777, 1150), qualities):
+            bgr = cv2.cvtColor(
+                np.array(colors[quality], np.uint8).reshape(1, 1, 3),
+                cv2.COLOR_HSV2BGR)[0, 0].tolist()
+            x1, x2 = cx - 90, cx + 90
+            frame[330:380, x1:x2] = bgr
+        return frame
+
+    def _texts(self, cards):
+        """直播页 OCR 框：真坐标（第1次实录 ocr.txt），标题+卡名+效果行+确定。"""
+        texts = [box(636, 139, "请选择1个直播主题", 274, 35)]
+        xs = (405, 777, 1150)
+        for cx, (name, effects) in zip(xs, cards):
+            texts.append(box(cx - 80, 336, name, 165, 40))
+            for i, eff in enumerate(effects):
+                texts.append(box(cx - 78, 515 + i * 45, eff, 160, 45))
+        texts.append(box(731, 765, "确定", 81, 47))
+        return texts
+
+    def _pick(self, scene):
+        qualities, cards, _ = scene
+        texts = self._texts(cards)
+        task = DryRunTask(self._frame(qualities), texts)
+        self.assertTrue(task.handle_live_stream(texts),
+                        f"没认领：{qualities} / {cards}")
+        return task, texts
+
+    def test_five_recorded_scenes(self):
+        """五次实录逐一对账：规则选择必须和用户当时点的那张一致（5/5）。"""
+        for i, scene in enumerate(self.SCENES, 1):
+            task, _ = self._pick(scene)
+            self.assertEqual(len(task.actions), 2, f"第{i}次动作数")
+            self.assertEqual(task.actions[0][0], "click", f"第{i}次先点卡")
+            self.assertEqual(task.actions[1][1], "确定", f"第{i}次后点确定")
+            self.assertTrue(any(f"选「{scene[2]}」" in m for m in task.logs),
+                            f"第{i}次应选 {scene[2]}，日志：{task.logs}")
+
+    def test_click_lands_on_card_body(self):
+        """点的是卡片**正文区**（标题框下方），不是标题条边缘。"""
+        task, _ = self._pick(self.SCENES[0])
+        x, y = task.actions[0][1], task.actions[0][2]
+        self.assertAlmostEqual(y / self.H, 336 / self.H + 0.06, delta=0.02)
+        self.assertAlmostEqual(x / self.W, 777 / self.W, delta=0.02)  # 第1次选中间
+
+    def test_no_title_no_claim(self):
+        """没有直播标题（比如别处的三张上色卡）→ 不认领。"""
+        qualities, cards, _ = self.SCENES[0]
+        texts = self._texts(cards)
+        texts = [t for t in texts if t.name != "请选择1个直播主题"]
+        task = DryRunTask(self._frame(qualities), texts)
+        self.assertFalse(task.handle_live_stream(texts))
+        self.assertEqual(task.actions, [])
+
+    def test_stamina_cost_is_ignored(self):
+        """第2次的口径坐实：紫卡扣30精力也选它（粉丝+15万 > +10万）。"""
+        scene = self.SCENES[1]
+        task, _ = self._pick(scene)
+        self.assertTrue(any("粉丝增益最大" in m for m in task.logs))
+        # 点中间那张（cx≈777）
+        self.assertAlmostEqual(task.actions[0][1] / self.W, 777 / self.W, delta=0.02)
+
+
 if __name__ == "__main__":
     unittest.main()
