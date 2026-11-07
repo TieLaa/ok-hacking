@@ -18,7 +18,7 @@
     通用交互层        动作：选选项、按确定、按坐标退出
 """
 
-from src.tasks.training.constants import WEEKEND_PLAN
+from src.tasks.training.constants import GACHA_WORK_MONEY_GATE, WEEKEND_PLAN
 from src.tasks.ui import labels
 
 
@@ -83,7 +83,8 @@ class MapPlace:
            （步行街 → 游戏厅 → 公园）。
 
         **扭蛋流周五/周六/周日**（步行街 / 餐厅）：见下面的分支注释，
-        2026-11-03 用户口径 —— 钱 ≤300 直接打工，不看队友。
+        2026-11-03 用户口径 —— 钱 ≤ 门槛（GACHA_WORK_MONEY_GATE，2026-11-07 定 270）
+        直接打工，不看队友。
 
         队友气泡判据见 BaseGirlsTask.venue_has_mate（深藏青色块）；
         打折判据见 venue_on_discount（OCR 文本 + 名字左侧）。
@@ -112,13 +113,14 @@ class MapPlace:
         if mode == "扭蛋流":
             # 用户 2026-11-03 口径（扭蛋流的周五/周六/周日）：
             #   0. 零用钱读不到 → 去步行街（不拿打工赌今天的消费）；
-            #   1. 零用钱 <= 300 → **直接去餐厅打工，不看队友**；
-            #   2. 零用钱 > 300：
+            #   1. 零用钱 <= GACHA_WORK_MONEY_GATE（270，2026-11-07 从 300 改）
+            #      → **直接去餐厅打工，不看队友**；
+            #   2. 零用钱 > 门槛：
             #      - 步行街有「扭蛋增强！」**或步行街在打折** → 步行街；
             #      - 两边都有队友 → 步行街；
             #      - 只有一边有队友 → 去有队友的那边；
             #      - 都没队友 → 周五/周六餐厅，周日步行街。
-            # 注意：≤300 时「扭蛋增强 / 打折」也不再豁免 —— 钱不够就打工，明天再抽。
+            # 注意：≤门槛时「扭蛋增强 / 打折」也不再豁免 —— 钱不够就打工，明天再抽。
             # 增强标签的判据在 `places/street.py`（连位置一起判，只认贴在
             # 步行街左上角的那个，别处出现同样字眼不算）；打折判据见
             # `venue_on_discount`（名字左边同一行有「打折」）。
@@ -127,9 +129,9 @@ class MapPlace:
             if money is None:
                 chosen = "步行街"
                 reason = "零用钱读不到，去步行街"
-            elif money <= 300:
+            elif money <= GACHA_WORK_MONEY_GATE:
                 # 直接打工：不再绕步行街，今天不抽扭蛋
-                self.log_info(f"周末地点：零用钱 {money} <= 300 → 只去「餐厅」打工")
+                self.log_info(f"周末地点：零用钱 {money} <= {GACHA_WORK_MONEY_GATE} → 只去「餐厅」打工")
                 return ["餐厅"]
             elif street_tags:
                 chosen = "步行街"
@@ -181,7 +183,7 @@ class MapPlace:
         2026-11-03 用户口径原话：「扭蛋增强或者打折都优先步行街，其他逻辑不变」。
         所以原来只认增强标签的那一档，现在扩成「增强 or 打折」两个标签同一档。
 
-        两条都不要越过「零用钱 ≤300 → 直接去餐厅打工」那道闸门：
+        两条都不要越过「零用钱 ≤ 门槛（270）→ 直接去餐厅打工」那道闸门：
         钱不够时增强/打折都不豁免（用户 2026-11-03 同日口径），这是调用方的顺序。
 
         参数 `info` 是 `prefer_mate_venue` 已经算好的
