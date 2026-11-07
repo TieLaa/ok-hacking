@@ -287,6 +287,32 @@ class WeekendHandlers:
         return tuple(sorted((c["name"], c["price"], c["quality"], bool(c["mate"]))
                             for c in cards))
 
+    def _merge_mate_cache(self, cards):
+        """用当天缓存补 mate：读不到徽章的卡沿用「今天见过它带队友」的事实。
+
+        2026-11-07 19:16 实跑（第3周周日第2次扭蛋买错）：「再买一次！」橙色
+        横幅（x 210~382, y 203~280）**物理盖住**左卡徽章位置（x 215~356,
+        y 212~266），那一拍任何颜色判据都读不到徽章 —— 左「投射增加+」
+        实际带队友（首次出卡时判到过 mate=True），被当成无队友，
+        同品质下输给右边「精力恢复+」的恢复分。所以：
+          - 识别到 mate=True 的卡，按**卡名**记进当天状态（day_state 隔天清空，
+            不会把昨天的事实带过来）；
+          - 读不到（False）的卡先查缓存，查到就用 True。
+        不担心同名不同货：扭蛋页同名卡同品质（「+」只代表档位、档位由品质色
+        区分），带不带队友是**当天刷新时**定的属性，一天内不会变。
+        """
+        cache = None
+        for c in cards:
+            if c.get("mate"):
+                if cache is None:
+                    cache = self.day_state().setdefault("gacha_mate", set())
+                cache.add(c["name"])
+        if cache:
+            for c in cards:
+                if not c.get("mate") and c["name"] in cache:
+                    c["mate"] = True
+        return cards
+
     def settle_gacha_cards(self, texts):
         """读扭蛋三张卡，**等开场动画稳定**后再返回。
 
@@ -302,13 +328,16 @@ class WeekendHandlers:
         旧判据只看指纹（名字/价格/品质/队友），价格从 None 变成 80 这一下
         会被当成「变了」→ 继续等；但反过来「两拍都是 None」就等于认账了，
         于是拿不到价格、买不了。现在价格未出就**继续等**，直到价格出来。
+
+        2026-11-07 新增：返回前把 mate 过一遍**当天缓存**（`_merge_mate_cache`）
+        ——「再买一次！」横幅会盖住左卡徽章，读不到时沿用当天见过的事实。
         """
         cards = self.read_gacha_cards(texts)
         sig = self._gacha_signature(cards)
         prev_sig = getattr(self, "_gacha_sig", None)
         if sig and sig == prev_sig and time.monotonic() - getattr(self, "_gacha_at", 0.0) < 3.0:
             if self._gacha_prices_ready(cards):
-                return cards
+                return self._merge_mate_cache(cards)
         last_cards, empty_streak = cards, 0
         for _ in range(3):
             self.sleep(0.8)
@@ -323,7 +352,7 @@ class WeekendHandlers:
                     self.log_info("扭蛋：卡片已稳定（" + "、".join(
                         c["name"] for c in nxt) + "）")
                 self._gacha_sig, self._gacha_at = nsig, time.monotonic()
-                return nxt
+                return self._merge_mate_cache(nxt)
             if nsig:
                 last_cards, empty_streak = nxt, 0
             else:
@@ -355,7 +384,7 @@ class WeekendHandlers:
             self.log_warning("扭蛋：卡片一直在变（动画/刷新），按最后一次识别结果处理")
         self._gacha_sig = self._gacha_signature(last_cards)
         self._gacha_at = time.monotonic()
-        return last_cards
+        return self._merge_mate_cache(last_cards)
 
     def handle_street(self, texts):
         """步行街扭蛋：**判断在 `training/places/street.py`**（地点模块）。

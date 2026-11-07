@@ -4274,6 +4274,13 @@ class GachaMateBadge(unittest.TestCase):
     用户现场：三张金卡只有右边那张有队友角标，日志却是
     `随机加成(金+队友/100币/320)、意识升级包++(金+队友/100币/321)、运控升级包++(金+队友/100币/321)`
     —— 每张金卡都被加了 20 分队友分，最后按顺序选了中间那张。
+
+    2026-11-07 重写夹具（用户：「识别区域有问题」——复现证实旧判据在徽章
+    完全可见的帧上也返回 False，1408 帧回归见 `tools/check_mate_badge.py`）：
+    - 徽章胶囊色值按**实测**重定：BGR≈(137,91,74)（b-r≈63、S≈117），
+      旧夹具的 (82,60,55) 是 10-30 的估算值（b-r=27），新判据按实测色定阈值；
+    - 旧版橙色「!」气泡兜底分支**已删除**——它就是 10-31 金卡全误报的根源，
+      且 1408 帧回归证明当前版本徽章一律是深蓝胶囊，橙色分支从未正确命中过。
     """
 
     W, H = 1549, 871
@@ -4291,9 +4298,9 @@ class GachaMateBadge(unittest.TestCase):
         frame[int(self.H * 0.305):int(self.H * 0.362), x:x + int(self.W * 0.055)] = (40, 170, 250)
 
     def _navy_chip(self, frame, cx):
-        """当前版本的队友角标：深蓝底 + 头像。"""
+        """当前版本的队友角标：深蓝胶囊 + 头像（色值 2026-11-07 实测帧采样）。"""
         x = int(self.W * (cx - 0.10))
-        frame[int(self.H * 0.265):int(self.H * 0.325), x:x + int(self.W * 0.060)] = (82, 60, 55)
+        frame[int(self.H * 0.265):int(self.H * 0.325), x:x + int(self.W * 0.060)] = (137, 91, 74)
 
     def _old_orange_bubble(self, frame, cx):
         """旧版橙色「!」气泡：浮在卡片上沿之上（y < 0.30h）。"""
@@ -4313,11 +4320,11 @@ class GachaMateBadge(unittest.TestCase):
         self._navy_chip(frame, 0.74)
         self.assertTrue(DryRunTask(frame, []).has_mate_badge(0.74))
 
-    def test_old_orange_bubble_above_card_still_counts(self):
+    def test_old_orange_bubble_no_longer_counts(self):
+        """橙色气泡兜底已删（10-31 金卡全误报的根源）：单独一块橙色不再是队友。"""
         frame = self._frame()
-        self._gold_card(frame, 0.26)
         self._old_orange_bubble(frame, 0.26)
-        self.assertTrue(DryRunTask(frame, []).has_mate_badge(0.26))
+        self.assertFalse(DryRunTask(frame, []).has_mate_badge(0.26))
 
 
 class ArcadeAnimationWait(unittest.TestCase):

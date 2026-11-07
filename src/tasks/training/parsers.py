@@ -1017,17 +1017,33 @@ class TrainingParsersMixin:
     def has_mate_badge(self, cx):
         """卡头左上角有没有队友标记（= 这次带队友加成）。
 
-        2026-10-30 截图（扭蛋增强界面）该标记是**深蓝底 + 浅色头像 + 「!」**，
-        不是旧版的橙色「!」气泡，而且位置更靠下（y≈0.29~0.34h，旧 ROI 只到 0.26h）。
-        所以 ROI 放宽到 y 0.22~0.36，并同时接受「橙色气泡」和「深蓝紫块」两种样子。
+        2026-11-07 重写（用户：「不可能遮住的，识别区域有问题」——他说对了）：
+        旧判据 `b > r+20` 在**徽章完全可见**的帧上也返回 False。定因（离线
+        复现脚本 `tools/check_mate_badge.py`，1408 帧历史扭蛋页回归）：
+          1. ROI 上沿 0.22h 把**卡片上方的灰蓝背景带**框了进来 —— 背景色
+             BGR≈(101,111,128)，`b-r≈30` 就命中旧判据（实测旧掩码里 `b-r`
+             的 p50=42）；徽章胶囊（y 213~266）和背景带（y 191~207）在
+             掩码里连成一整块 214×58，长宽比 3.69 超 2.8 上限被拒 → 漏检；
+          2. 徽章自己分离出来的小块 49×25，面积占比 0.019 < 0.03 下限 → 也拒。
+        也就是说旧判据在当前版本画面上**从来没对过**（10-31「三张金卡都记成
+        有队友」、11-03「有队友的卡没识别到」两次事故同源：前者是 orange
+        分支误报，后者是 deep 分支漏检，两头都坏）。
 
-        2026-10-31 20:35 实跑（用户：「三张金卡都记成有队友，选了中间没队友的」）：
-        日志里 `随机加成(金+队友/…)、意识升级包++(金+队友/…)` —— **金卡自己被记满了队友**。
-        原因：金卡的卡头本身就是橙黄渐变（`r>200, 90<g<200, b<90` 全中），
-        卡上的装饰圆/高光在 ROI 里正好是一个 frac≈0.15、长宽比≈1 的块，
-        形状判据拦不住 → `orange` 分支对每张金卡都返回 True，队友加分（+20）等于没有。
-        所以 `orange` 现在**只认浮在卡片上沿之上**的旧版气泡（底部 y < 0.30h），
-        卡片本体的金色不参与；深蓝标记（当前版本的样子）不受这条限制。
+        新判据（全部离线验证过）：
+          - ROI 上沿收到 **0.245h**：避开背景带（徽章顶 213/871≈0.244h），
+            保留整枚徽章；
+          - 色判据 `b-r>=45 且 S>=95 且 r<150`：徽章胶囊底色 b-r≈63~65、
+            S≈117；背景带 b-r≈11~30、S≈61~68 —— 用**饱和度**把两者分开，
+            旧判据只看 b-r 分不开；金卡卡头 b-r 为负不会命中（10-31 的
+            误报坑不会复发，orange 兜底分支一并删除）；
+          - 连通块加**实心率 fill>=0.45**：横幅文字描边的碎片块 fill≈0.2
+            全被拦掉（191616/191808 横幅帧验证）。
+          - 真徽章几何（1408 帧回归实测）：136~140×53~54 @ y=213、
+            长宽比 2.5~2.6、fill≈0.5、占 ROI 0.16~0.18。
+
+        遗留盲区：「再买一次！」橙色横幅（x 210~382, y 203~280）**物理盖住**
+        左卡徽章位置（x 215~356, y 212~266），那几拍任何颜色判据都读不到 ——
+        由 `settle_gacha_cards` 的「mate 按卡名当天缓存」兜底（见 weekend.py）。
         """
         frame = self.frame
         if frame is None:
@@ -1035,45 +1051,31 @@ class TrainingParsersMixin:
         h, w = frame.shape[:2]
         x1 = int(w * (cx - 0.12))
         x2 = int(w * (cx + 0.02))
-        y1, y2 = int(h * 0.22), int(h * 0.36)
+        y1, y2 = int(h * 0.245), int(h * 0.36)
         roi = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
         if roi.size == 0:
             return False
         b = roi[:, :, 0].astype(int)
-        g = roi[:, :, 1].astype(int)
         r = roi[:, :, 2].astype(int)
-        orange = (r > 200) & (g > 90) & (g < 200) & (b < 90)
-        # 队友标记也可能是「深蓝底 + 头像」的圆（BGR 约 82/60/55），
-        # 蓝色分量高于红色。用 b > r+20 就能抓住，同时不会命中金色/橙色横幅。
-        deep = (b > r + 20) & (r < 130) & (g < 130) & (b < 170)
+        s = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)[:, :, 1].astype(int)
+        deep = (b - r >= 45) & (s >= 95) & (r < 150)
 
-        roi_area = float(orange.size)
-
-        def has_badge_blob(mask, max_bottom=None):
-            """ROI 里有没有「像角标」的连通块（大小/长宽比过滤，可选再限制竖直位置）。"""
-            m = mask.astype(np.uint8)
-            if not m.any():
-                return False
-            n, _lab, stats, _cent = cv2.connectedComponentsWithStats(m, 8)
-            for i in range(1, n):
-                ww, hh, area = int(stats[i, 2]), int(stats[i, 3]), int(stats[i, 4])
-                frac = area / roi_area
-                if not (0.03 <= frac <= 0.28 and 0.5 <= ww / max(hh, 1) <= 2.8):
-                    continue
-                if max_bottom is not None:
-                    bottom = y1 + int(stats[i, 1]) + hh
-                    if bottom > max_bottom:
-                        continue
-                return True
+        roi_area = float(deep.size)
+        m = deep.astype(np.uint8)
+        if not m.any():
             return False
-
-        # 必须按**形状 + 相对面积**过滤：左侧第一张卡会被左上角「再买一次！」
-        # 橙色横幅覆盖（189x77，占 ROI 33%），只按像素个数会把它当队友标记
-        # （2026-10-30 16:46 日志里左卡被误记成「蓝+队友」）。
-        if has_badge_blob(deep):
-            return True
-        # 旧版「橙色 ! 气泡」只是兜底：只认浮在卡片上沿之上（y<0.30h）的那一小块
-        return has_badge_blob(orange, max_bottom=int(h * 0.30))
+        n, _lab, stats, _cent = cv2.connectedComponentsWithStats(m, 8)
+        for i in range(1, n):
+            ww, hh, area = int(stats[i, 2]), int(stats[i, 3]), int(stats[i, 4])
+            if area < 100:
+                continue
+            frac = area / roi_area
+            ar = ww / max(hh, 1)
+            fill = area / float(ww * hh)
+            # 实心率是横幅帧的最后一道闸：描边碎片 fill≈0.2，真徽章≈0.5
+            if 0.04 <= frac <= 0.30 and 0.5 <= ar <= 3.0 and fill >= 0.45:
+                return True
+        return False
 
     GO_OUT_WORD = "出行"
 
