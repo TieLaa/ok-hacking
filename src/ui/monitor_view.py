@@ -15,7 +15,7 @@ import re
 from functools import partial
 
 from PySide6.QtCore import QEvent, Qt, Signal, Slot
-from PySide6.QtGui import QIntValidator, QPixmap
+from PySide6.QtGui import QIntValidator, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -382,6 +382,29 @@ class MonitorView(QWidget):
     def _slot_hard_stop(self):
         self.actions.hard_stop_training()
 
+    @staticmethod
+    def _stop_icon() -> QIcon:
+        """【■】停止方块 = `OKIcon.STOP`（ok 全家共用，TaskCard / ok-end-field 同款）。
+
+        为什么不能直接 `OKIcon.STOP.icon()`：svg 写死 `fill="#ffffff"`（纯白），
+        不带 color 时返回原图 —— 蓝底 Primary（第一栏/任务卡）看得见，
+        灰底普通按钮上直接隐形（2026-11-07 用户实测「只剩灰按钮」）。
+        qfluentwidgets 的 `icon(color=...)` 走 `writeSvg` 重涂 path 填色；
+        ok-end-field（`EndfieldPrimitives.draw_fluent_icon`）按文字明暗选主题
+        同源。这里构建时按当前主题选色，主题切换由 MonitorTab._apply_style
+        统一刷新。
+
+        **坑**（离屏验证三轮才定位）：`: /qss/*` 资源由 `ok.ui.qt.resources`
+        注册 —— 真 GUI 里 `app.py` 一启动就 import 了，所以正常；但任何
+        **绕过主程序的离屏/测试代码**必须自己先 `import ok.ui.qt.resources`，
+        否则 `OKIcon.STOP.icon()` 返回空图标（首次读资源时 QFile 打不开）。
+        """
+        from PySide6.QtGui import QColor
+        from qfluentwidgets import isDarkTheme
+        import ok.ui.qt.resources  # noqa: F401  注册 :/qss 资源（幂等）
+        color = QColor("#ffffff" if isDarkTheme() else "#000000")
+        return OKIcon.STOP.icon(color=color)
+
     # ---------- 目标分 / 专注药 槽（用户 2026-11-05） ----------
 
     @Slot(bool)
@@ -654,21 +677,13 @@ class MonitorView(QWidget):
 
             lay.addWidget(self._btn_train)
 
-            # 【■】完全停止小方钮（用户 2026-11-07 口径）：**只有方块没有文字**，
+            # 【■】完全停止小方钮（用户 2026-11-07 口径）：**只有方块图标没有文字**，
             # 与【开始/暂停】互斥联动 —— 没跑时置灰，点了【开始】才可点；
             # 点它 = 停脚本 + 清队列参数/进度，【开始】回到初始状态。
             # **不断开游戏连接**（执行器/截图会话归第一栏【停止】管）。
-            #
-            # 为什么用字形「■」而不是 OKIcon.STOP：那个 svg 写死 fill="#ffffff"（白），
-            # 第一栏是蓝底 Primary 看得见，这里灰底普通按钮上白方块直接隐形；
-            # 文字字形跟 QSS 文字色走，明暗主题/悬停/置灰全自动正确。
-            self._btn_hard_stop = PushButton("■")
+            self._btn_hard_stop = PushButton(self._stop_icon(), "")
             self._btn_hard_stop.setFixedHeight(30)
             self._btn_hard_stop.setFixedWidth(30)
-            _f = self._btn_hard_stop.font()
-            _f.setPixelSize(16)
-            _f.setBold(True)
-            self._btn_hard_stop.setFont(_f)
             self._btn_hard_stop.setEnabled(False)
             self._btn_hard_stop.setToolTip(
                 "完全停止：停掉脚本并清空多角色队列参数与进度（不断开游戏连接）。"
