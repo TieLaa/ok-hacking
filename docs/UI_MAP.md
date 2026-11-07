@@ -90,6 +90,12 @@
 - **第 7 周以后不买「精力饮料」**（2026-11-05 用户口径）：免费的照样拿；
   过滤在 `places/shop.py: pick_shop_item`，阈值复用 `LATE_SHOP_FROM_WEEK`，
   周数读不到时不过滤（不因顶栏 OCR 抖动整拍罢工）。
+- **恢复精力的商品优先级最低**（2026-11-07 用户口径）：任何周都垫底，
+  判据 `places/shop.py: _is_stamina_drink`（名字含「精力饮料」）；
+  池里只剩恢复的才买它（垫底 ≠ 不买）。
+- 扭蛋侧的**恢复卡三类资格门槛**（2026-11-08 用户口径）在
+  `places/street.py: recover_rejected`：立刻溢出 / 全部恢复缺口 ≤100 /
+  持续型精力过半，都拒买；商店商品卡上没有效果文本，门槛暂不适用。
 - 位置：**只有两处** —— 判据在 `daycycle.late_shop_step`（和「训练/休息」「出行」
   两个日入口同一个模块），调用点是 `flow.run` 主循环里、`_handle_any` 之前
   （`if self.late_shop_step(texts): continue`）。**不是**一个独立 handler，

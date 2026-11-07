@@ -513,21 +513,94 @@ class GachaRules(unittest.TestCase):
         self.assertEqual(FakeTask.stamina_recover("清空精力，运气+30"), 0)
         self.assertEqual(FakeTask.stamina_recover("主力运控+72，队友属性大幅提升"), 0)
 
-    def test_recover_card_beats_equal_quality(self):
-        """2026-10-27 用户截图（45/130，金卡+队友 ×2）：
+    def test_attribute_card_beats_equal_recover_card(self):
+        """2026-11-07 用户口径：同等条件下恢复精力的优先级最低。
 
-        运控增加++ 与 精力恢复++ 同为基础 141 分，旧 max() 取第一个 → 买错。
-        恢复 210 点（上限 130-45=85 有效）折半 +42 → 恢复卡必须胜出。
+        同品质同队友同价，且门槛也过了（20/130 + 立刻90=110 ≤ 130 不溢出）
+        ——属性卡仍然胜出。取代 2026-10-27 的「恢复卡平分要赢」（当时口径）。
         """
         task = FakeTask(gacha_texts([
             ("运控增加++", "主力运控+72，队友属性大幅提升"),
-            ("投射增加+", "主力投射+48，队友属性中幅提升"),
             ("精力恢复++", "立刻恢复90精力，之后每天恢复30点，持续4天，队友属性大幅提升"),
-        ], stamina="45/130", money="106", price=["100", "80", "100"]),
-            qualities=["金", "紫", "金"], mates=[True, False, True])
+        ], stamina="20/130", money="300", price=["100", "100"]),
+            qualities=["金", "金"], mates=[False, False])
         self.assertTrue(task.handle_street(task._texts))
-        self.assertEqual(task.actions[0][0], "click")
-        self.assertGreaterEqual(task.actions[0][1], 1300)   # 点第三张卡，不是第一张
+        self.assertLess(task.actions[0][1], 900)            # 属性卡胜出
+
+    def test_recover_immediate_overflow_rejected(self):
+        """2026-11-08 用户口径①：立刻恢复xx，当前+xx 超上限就拒买。
+
+        45/130 + 立刻90 = 135 > 130，回不上的 85 点白花钱 → 不买它。
+        """
+        task = FakeTask(gacha_texts([
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+            ("精力恢复++", "立刻恢复90精力，之后每天恢复30点，持续4天，队友属性大幅提升"),
+        ], stamina="45/130", money="300", price=["100", "100"]),
+            qualities=["金", "金"], mates=[False, False])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertLess(task.actions[0][1], 900)            # 选第一张运控卡
+        self.assertIn("溢出", "".join(task.logs))
+
+    def test_full_recover_needs_big_gap(self):
+        """2026-11-08 用户口径②：「全部恢复」缺口 >100 才买，≤100 拒。
+
+        同一张卡：40/130（缺口 90）拒（日志带理由）；25/130（缺口 105）过门槛，
+        池里只剩它（属性卡是蓝卡、不在白名单）→ 买。
+        """
+        card = ("精力回满", "恢复全部精力，队友属性小幅提升")
+        task = FakeTask(gacha_texts([
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+            card,
+        ], stamina="40/130", money="300", price=["100", "100"]),
+            qualities=["金", "金"], mates=[False, False])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertLess(task.actions[0][1], 900)            # 缺口 90 ≤ 100 → 不买
+        self.assertIn("缺口 90 ≤ 100", "".join(task.logs))
+        task = FakeTask(gacha_texts([
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+            card,
+        ], stamina="25/130", money="300", price=["100", "100"]),
+            qualities=["蓝", "金"], mates=[False, False])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertGreaterEqual(task.actions[0][1], 900)    # 过门槛且只剩它 → 买
+
+    def test_daily_recover_only_when_below_half(self):
+        """2026-11-08 用户口径③：「接下来几日恢复xx」精力占比 < 1/2 才买。
+
+        纯持续卡（每天恢复10点×4天）：70/130（0.54 ≥ 0.5）拒；
+        60/130（0.46 < 0.5）过门槛，池里只剩它（属性卡蓝卡）→ 买。
+        """
+        card = ("精力滋养", "每天恢复10点，持续4天，队友属性小幅提升")
+        task = FakeTask(gacha_texts([
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+            card,
+        ], stamina="70/130", money="300", price=["100", "100"]),
+            qualities=["金", "金"], mates=[False, False])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertLess(task.actions[0][1], 900)            # 过半 → 不买
+        self.assertIn("一半", "".join(task.logs))
+        task = FakeTask(gacha_texts([
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+            card,
+        ], stamina="60/130", money="300", price=["100", "100"]),
+            qualities=["蓝", "金"], mates=[False, False])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertGreaterEqual(task.actions[0][1], 900)    # 不过半且只剩它 → 买
+
+    def test_mixed_card_immediate_counts_for_gate(self):
+        """混合卡（立刻60 + 每天20×4）：溢出门只看立刻量，60/130 可买。
+
+        2026-11-08 实拍（第4周星期六）：「立刻恢复60精力，之后每 / 天恢复20点，
+        持续4天」——持续段不占这次的口子（60+60=120 ≤ 130 过门槛）。
+        池里只剩它（属性卡蓝卡）→ 买。
+        """
+        task = FakeTask(gacha_texts([
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+            ("精力恢复+", "立刻恢复60精力，之后每天恢复20点，持续4天"),
+        ], stamina="60/130", money="300", price=["100", "100"]),
+            qualities=["蓝", "金"], mates=[False, False])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertGreaterEqual(task.actions[0][1], 900)    # 过门槛且只剩它 → 买
 
     def test_recover_card_not_bought_at_full_stamina(self):
         """精力满时恢复卡不加分：别为了回不上的精力白花钱。"""
@@ -4095,6 +4168,42 @@ class PurchaseRules(unittest.TestCase):
     def test_shop_drink_filter_survives_missing_week(self):
         """顶栏 OCR 抖一下、周数读不到：不过滤，按老规则正常买（不整拍罢工）。"""
         task, texts = self._shop([("精力饮料", 30)], money=120)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「精力饮料」", "".join(task.logs))
+
+    def test_shop_stamina_drink_loses_to_other_cards(self):
+        """2026-11-07 用户口径：恢复精力的商品优先级最低——金训练手册压过紫饮料。"""
+        task, texts = self._shop([("精力饮料+", 50), ("训练手册", 100)],
+                                 money=200, quality="金")
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「训练手册」", "".join(task.logs))
+
+    def test_shop_buys_stamina_drink_when_only_option(self):
+        """恢复精力垫底是「排最后」，不是「不买」：池里只剩它就买。"""
+        task, texts = self._shop([("精力饮料+", 50), ("旧货", 45)],
+                                 money=50, quality="紫")
+        # 旧货品质仍是注入的金（card_quality 被 stub），但名字无关；金旧货 45
+        # 和饮料 50 都买得起 → 先买非恢复的旧货
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「旧货」", "".join(task.logs))
+        task, texts = self._shop([("精力饮料+", 35), ("旧货", 45)],
+                                 money=40, quality="紫")
+        # 旧货 45 > 零用钱 40 买不起 → 彩金紫池里只剩饮料（35 ≤ 40）→ 垫底购买
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「精力饮料+」", "".join(task.logs))
+
+    def test_shop_expensive_drink_loses_in_buy_most_expensive(self):
+        """「买最贵」策略下恢复精力也垫底：贵的饮料不压过便宜的其他卡。"""
+        task, texts = self._shop([("精力饮料++", 70), ("弹跳秘籍", 60)],
+                                 money=200, quality="金")
+        task.config["购买策略"] = "买最贵"
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「弹跳秘籍」", "".join(task.logs))
+
+    def test_shop_free_drink_still_first(self):
+        """0 元免费的饮料不受垫底影响（免费商品优先分支在策略之前）。"""
+        task, texts = self._shop([("器材手册+", 150), ("精力饮料", "免费")],
+                                 money=80)
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「精力饮料」", "".join(task.logs))
 

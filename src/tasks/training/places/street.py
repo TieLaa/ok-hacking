@@ -23,7 +23,13 @@
        「增强款 / 队友」这两个用户明确要求的档位，见下面的事故记录；
     3. 「消耗/清空精力」的卡：只有精力低于阈值（默认 30）才买，
        **品质也一样要在白名单里**（蓝/其他照样不买，见 2026-11-04 事故）；
-    4. 没有合格卡就退出，不点确定。
+    4. 恢复精力的卡**三类资格门槛**（2026-11-08 用户口径，`recover_rejected`）：
+       ① 立刻恢复xx → 当前+xx 超上限拒买（溢出）；② 全部恢复 → 缺口 >100 才买；
+       ③ 接下来几日恢复xx → 当前精力不到上限一半才买。读不到精力不拦。
+       另：恢复精力的商品/扭蛋/小游戏在**同等条件**下优先级最低
+       （2026-11-07 口径，用户原话「同等条件下，恢复精力的商品/扭蛋/小游戏
+       优先级最低」）——比较键里恢复价值排最后就是这个意思；
+    5. 没有合格卡就退出，不点确定。
 
 历史事故（都写在这里，避免又被改坏）：
 
@@ -130,18 +136,48 @@ class StreetPlace:
             return base_of.get(c["quality"], 0)
 
         def recover_bonus(c):
-            """恢复卡按「这次真能补上的精力」折半加分；满精力时 room=0 不加分。
+            """恢复卡之间的比较值：按「这次真能补上的精力」折半。
 
-            2026-10-27（用户截图 45/130 三选一）：「精力恢复++」
-            （立刻恢复90，之后每天30×4天，金卡+队友）和「运控增加++」
-            同为 141 分，max() 取第一个把恢复卡丢掉了 —— 恢复量必须参与比较。
-            但**不能进 score**（2026-11-03 事故）：那样它会压过用户明确要求的
-            「增强款 / 队友」两个档位。现在只排在「增强款 → 队友」之后。
+            2026-11-08 用户口径：恢复精力的卡在**同等条件**下优先级最低
+            （见下面 max 的比较键），这个加分**只在多张恢复卡之间**起作用
+            ——属性卡永远排在恢复卡前面，轮不到它。
+            历史口径（已被取代，留档防回改）：2026-10-27「恢复量必须参与比较」、
+            2026-11-03「排在增强款→队友之后」，都是「恢复卡同分要赢」；
+            2026-11-07 用户改口「同等条件下恢复精力优先级最低」。
             """
             if not c.get("recover") or stamina is None:
                 return 0
             room = max(stamina_max - stamina, 0)
             return int(min(c["recover"], room) * 0.5)
+
+        def recover_rejected(c):
+            """恢复卡的三类资格门槛（用户 2026-11-08 口径），过不了 → 不买。
+
+            读不到精力/上限时**不拦**（顶栏 OCR 抖一帧不能让扭蛋整拍罢工，
+            同「第 7 周周数读不到不过滤」的既有口径）。
+            混合卡（立刻60 + 每天20×4天）：立刻量只数「立刻恢复60精力」那段，
+            持续部分不占这次的口子（`stamina_recover_immediate` 已摘掉持续段）。
+            """
+            if not self.is_stamina_recover_card(c.get("effect")):
+                return None
+            if stamina is None or stamina_max is None:
+                return None                      # 读不到 → 不拦，按老规则买
+            room = max(stamina_max - stamina, 0)
+            imm = c.get("recover_immediate") or 0
+            if c.get("full_recover"):
+                # ② 全部恢复（拉满）：缺口 >100 才值得花一张卡的钱
+                if room <= 100:
+                    return f"缺口 {room} ≤ 100"
+                return None
+            if imm:
+                # ① 立刻恢复xx：当前 + 立刻量 > 上限 = 溢出，回不上的白花钱
+                if stamina + imm > stamina_max:
+                    return f"立刻 {imm} 会溢出（{stamina}+{imm}>{stamina_max}）"
+                return None
+            # ③ 接下来几日恢复xx（没有立刻量）：精力还剩一半以上时不缺这几天的
+            if stamina_max > 0 and stamina / stamina_max >= 0.5:
+                return f"精力 {stamina}/{stamina_max} ≥ 一半"
+            return None
 
         ok = []
         for c in cards:
@@ -157,6 +193,12 @@ class StreetPlace:
                 continue
             # 清空卡额外一道门槛：只有精力低于阈值时才买（这时是拿精力换属性）
             if c["clear"] and not allow_clear:
+                continue
+            # 恢复卡三类资格门槛（2026-11-08 用户口径）：立刻溢出 / 全部恢复缺口
+            # ≤100 / 持续型精力过半，都不买（拒绝理由进日志，方便复盘调阈值）。
+            why = recover_rejected(c)
+            if why:
+                c["reject"] = why
                 continue
             # 读不到价格就不买：买不起时点「确定」游戏不扣钱、页面也不关，
             # 旧代码会一直「选卡 → 确定 → 没反应」（2026-10-26 实测）。
@@ -176,17 +218,18 @@ class StreetPlace:
             f"{'·增强' if c.get('enhanced') else ''}"
             f"{'·恢复' + str(c['recover']) if c.get('recover') else ''}"
             f"{'·清空' if c['clear'] else ''}"
+            f"{'·' + c['reject'] if c.get('reject') else ''}"
             f"{'/' + str(c['price']) + '币' if c['price'] is not None else '/价格未出'}"
             f"/{score(c)})" for c in cards)
         if not ok:
             return None, detail, cards
-        # 取舍顺序（用户 2026-11-01：「同分排序 增强款 > 队友」，都相同再比价格；
-        # 2026-11-03 补：恢复量排在「增强款 → 队友」**之后**，不能反过来压掉它们）：
-        # 品质 → 增强款 → 队友 → 恢复价值 → 便宜的。
-        # 2026-10-30 的老口径就是这个顺序；这里只是把它从 score 挪到比较键里，
-        # 免得「增强款 +30 / 队友 +20」把恢复精力的加成压掉。
+        # 取舍顺序（用户 2026-11-07 口径：**同等条件下恢复精力的优先级最低**，
+        # 取代 2026-10-27/11-03 的「恢复卡同分要赢」；都相同再比价格）：
+        # 品质 → 增强款 → 队友 → **非恢复优先** → 恢复价值 → 便宜的。
+        # 非恢复卡恒为 1、恢复卡恒为 0，恢复卡只有池里全是恢复卡时才轮得到。
         best = max(ok, key=lambda c: (c["score"], bool(c.get("enhanced")),
-                                      c["mate"], recover_bonus(c), -c["price"]))
+                                      c["mate"], not c.get("recover"),
+                                      recover_bonus(c), -c["price"]))
         return best, detail, cards
 
     # ---------- 地图侧：值不值得来 ----------

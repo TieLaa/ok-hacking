@@ -735,6 +735,58 @@ class TrainingParsersMixin:
                      for m2 in re.finditer(r"恢复(\d+)(?:精力|点)", s))
         return total
 
+    @staticmethod
+    def stamina_recover_immediate(text):
+        """效果文本里**这次立刻**能补上的精力（用户 2026-11-08 溢出门用）。
+
+        与 `stamina_recover`（总量，持续部分折算进来）不同：溢出判断只看
+        「当前 + 立刻量 > 上限」，持续恢复是后面几天慢慢吃的，不占这次的口子。
+        2026-11-08 实拍（第4周星期六扭蛋页，OCR 拆行）：
+            立刻恢复60精力，之后每 / 天恢复20点，持续4天
+        「每」和「天恢复20点」被拆成两框 —— 所以先把持续段整体摘掉再数「恢复N」，
+        否则每天那 20 会被当成立刻量重复计入。
+        """
+        s = (text or "").replace(" ", "").replace("　", "")
+        if "精力" not in s and "每天恢复" not in s:
+            return 0
+        if "清空" in s or "消耗" in s:
+            return 0
+        m = re.search(r"每天恢复(\d+)点.*?持续(\d+)天", s)
+        if m:
+            s = s.replace(m.group(0), "")
+        return sum(int(m2.group(1))
+                   for m2 in re.finditer(r"恢复(\d+)(?:精力|点)", s))
+
+    @staticmethod
+    def is_stamina_full_recover(text):
+        """是不是「全部恢复（把精力拉满）」型效果（用户 2026-11-08 口径）。
+
+        排除清空型（「清空全部精力 / 消耗所有精力」方向相反，见 `is_stamina_clear`）
+        和带数字的恢复（「恢复60精力」是立刻型，不是拉满）——
+        「全部/所有」后面跟「精力」才算，别把「获得全部属性」那种拽进来。
+        """
+        s = (text or "").replace(" ", "").replace("　", "")
+        if "清空" in s or "消耗" in s:
+            return False
+        if "全部" not in s and "所有" not in s:
+            return False
+        return any(p in s for p in labels.GACHA_FULL_RECOVER_PHRASES)
+
+    @staticmethod
+    def is_stamina_recover_card(text):
+        """这张卡/商品是不是恢复精力的（三类合一，见各门槛在 street.gacha_candidates）。
+
+        三类（用户 2026-11-08 口径）：
+        ① 立刻恢复xx → 当前 + 立刻量 > 上限就拒买（溢出，回不上的白花钱）
+        ② 全部恢复 → 上限 - 当前 > 100 才买（缺口太小不值一张卡）
+        ③ 接下来几日恢复xx → 当前 / 上限 < 1/2 才买（精力还多时不缺这几天的）
+        """
+        s = (text or "").replace(" ", "").replace("　", "")
+        if "清空" in s or "消耗" in s:
+            return False
+        return (TrainingParsersMixin.stamina_recover(s) > 0
+                or TrainingParsersMixin.is_stamina_full_recover(s))
+
     # 「打折」卡的价格药丸里有**两个**数字：左边划掉的原价、右边实付价。
     # 同一张卡的两个数字上下差几像素、左右差约 0.03w；相邻两张卡的药丸相隔约 0.25w。
     PRICE_ROW_TOL = 0.02
@@ -870,6 +922,8 @@ class TrainingParsersMixin:
                 "effect": effect,
                 "clear": self.is_stamina_clear(effect),
                 "recover": self.stamina_recover(effect),
+                "recover_immediate": self.stamina_recover_immediate(effect),
+                "full_recover": self.is_stamina_full_recover(effect),
                 "x": int(title.x + title.width / 2),
                 "y": int(title.y + title.height / 2),
             })
