@@ -2681,7 +2681,7 @@ class WeekendMapRules(unittest.TestCase):
     def test_boost_label_still_forces_street_first(self):
         """钱够（>门槛 270）+ 标签贴对 → 走「扭蛋增强」直进步行街。"""
         texts = (self._map_with_boost(self.BOOST)
-                 + [box(1000, 20, str(GACHA_WORK_MONEY_GATE + 50), 120, 45)])
+                 + [box(1000, 20, str(WEEKEND_WORK_MONEY_GATE + 50), 120, 45)])
         task = self.styled("扭蛋流", texts)
         task.weekend_state()
         self.assertTrue(task.handle_weekend(texts))
@@ -2725,17 +2725,148 @@ class WeekendMapRules(unittest.TestCase):
             self.assertTrue(task.handle_weekend(task._texts), style)
             self.assertEqual(task.actions[-1][1], "餐厅", style)     # 接着打工
 
-    def test_saturday_non_training_styles_go_to_restaurant(self):
-        """周六：商店流/小游戏流去餐厅打工（不进步行街/游戏厅）。
+    def test_saturday_shop_style_goes_to_restaurant(self):
+        """周六：商店流去餐厅打工（不进步行街/游戏厅）。
 
-        扭蛋流单独一条（见下一个用例）：2026-10-30 起扭蛋流周六先去步行街抽扭蛋，
-        没消费才接着去餐厅（constants.WEEKEND_PLAN 的 ("六","扭蛋流")）。
+        扭蛋流 / 小游戏流各自有一条完整的「主地点 vs 餐厅」决策链
+        （2026-11-08 用户表格，见下面 `test_minigame_*` / `test_gacha_*`）。
         """
-        for style in ("商店流", "小游戏流"):
-            task = self.styled(style, self._map("星期六"))
+        task = self.styled("商店流", self._map("星期六"))
+        task.weekend_state()
+        self.assertTrue(task.handle_weekend(task._texts))
+        self.assertEqual(task.actions[-1][1], "餐厅")
+
+    # ---------- 扭蛋流 / 小游戏流：共用决策链（用户 2026-11-08 表格） ----------
+    #
+    #   0 零用钱读不到      → 主地点
+    #   1 零用钱 ≤ 270      → 只去餐厅打工（队友/标签都不豁免）
+    #   2 零用钱 > 500      → 主地点
+    #   3 步行街增强/打折   → 步行街（只对扭蛋流）
+    #   4 游戏厅打折        → 游戏厅（只对小游戏流）
+    #   5 两边都有队友      → 主地点
+    #   6 只有一边有队友    → 去有队友的那边
+    #   7 都没队友          → 周五/六餐厅，周日主地点
+
+    # 游戏厅名字 (814,461,148,57) 左边同一行的「打折」标签。
+    ARCADE_DISCOUNT = box(650, 465, "打折", 70, 55)
+
+    def test_minigame_money_unknown_goes_arcade(self):
+        """0 行：小游戏流钱读不到 → 游戏厅（不拿打工赌今天的消费）。"""
+        for day in ("星期五", "星期六", "星期日"):
+            texts = self._weekend_map(day)
+            task = self.styled("小游戏流", texts)
+            task.venue_has_mate = lambda b: False
             task.weekend_state()
-            self.assertTrue(task.handle_weekend(task._texts), style)
-            self.assertEqual(task.actions[-1][1], "餐厅", style)
+            self.assertTrue(task.handle_weekend(texts), day)
+            self.assertEqual(task.actions[-1][1], "游戏厅", day)
+
+    def test_minigame_low_money_goes_restaurant_even_with_mate(self):
+        """1 行：小游戏流钱 ≤ 门槛 → 只去餐厅打工，有队友、游戏厅打折也不算。"""
+        for day in ("星期五", "星期六", "星期日"):
+            for money in (0, WEEKEND_WORK_MONEY_GATE - 50,
+                          WEEKEND_WORK_MONEY_GATE):
+                texts = self._weekend_map(day, money) + [self.ARCADE_DISCOUNT]
+                task = self.styled("小游戏流", texts)
+                task.venue_has_mate = lambda b: True
+                task.weekend_state()
+                self.assertTrue(task.handle_weekend(texts), (day, money))
+                self.assertEqual(task.actions[-1][1], "餐厅", (day, money))
+
+    def test_minigame_rich_money_goes_arcade(self):
+        """2 行：小游戏流钱 > 500 → 游戏厅，不再比队友（周六也一样）。"""
+        money = 501
+        for day in ("星期五", "星期六", "星期日"):
+            texts = self._weekend_map(day, money)
+            task = self.styled("小游戏流", texts)
+            task.venue_has_mate = lambda b: False
+            task.weekend_state()
+            self.assertTrue(task.handle_weekend(texts), day)
+            self.assertEqual(task.actions[-1][1], "游戏厅", day)
+
+    def test_gacha_rich_money_goes_street(self):
+        """2 行：扭蛋流钱 > 500 → 步行街，即使都没队友、周六也不去打工。"""
+        money = 501
+        for day in ("星期五", "星期六", "星期日"):
+            texts = self._weekend_map(day, money)
+            task = self.styled("扭蛋流", texts)
+            task.venue_has_mate = lambda b: False
+            task.weekend_state()
+            self.assertTrue(task.handle_weekend(texts), day)
+            self.assertEqual(task.actions[-1][1], "步行街", day)
+
+    def test_minigame_arcade_discount_pulls_to_arcade(self):
+        """4 行：小游戏流钱在 (270, 500]、都没队友、周六 → 游戏厅打折改去游戏厅。"""
+        texts = (self._weekend_map("星期六", WEEKEND_WORK_MONEY_GATE + 50)
+                 + [self.ARCADE_DISCOUNT])
+        task = self.styled("小游戏流", texts)
+        task.venue_has_mate = lambda b: False
+        task.weekend_state()
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertEqual(task.actions[-1][1], "游戏厅")
+        self.assertTrue(any("游戏厅在打折" in m for m in task.logs), task.logs)
+
+    def test_minigame_ignores_street_boost_and_discount(self):
+        """3 行对小游戏流无：步行街「扭蛋增强！」/ 打折都不改道，都没队友时周六打工。"""
+        texts = (self._map_with_boost(self.BOOST, day="星期六")
+                 + [box(1000, 20, str(WEEKEND_WORK_MONEY_GATE + 50), 120, 45),
+                    self.STREET_DISCOUNT])
+        task = self.styled("小游戏流", texts)
+        task.venue_has_mate = lambda b: False
+        task.weekend_state()
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertEqual(task.actions[-1][1], "餐厅")
+        self.assertFalse(any("步行街在打折" in m for m in task.logs), task.logs)
+
+    def test_gacha_ignores_arcade_discount(self):
+        """4 行对扭蛋流无：游戏厅打折不算，都没队友时周六去餐厅。"""
+        texts = (self._weekend_map("星期六", WEEKEND_WORK_MONEY_GATE + 50)
+                 + [self.ARCADE_DISCOUNT])
+        task = self.styled("扭蛋流", texts)
+        task.venue_has_mate = lambda b: False
+        task.weekend_state()
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertEqual(task.actions[-1][1], "餐厅")
+
+    def test_minigame_both_have_mates_goes_arcade(self):
+        """5 行：两边都有队友 → 游戏厅。"""
+        texts = self._weekend_map("星期六", WEEKEND_WORK_MONEY_GATE + 50)
+        task = self.styled("小游戏流", texts)
+        task.venue_has_mate = lambda b: True
+        task.weekend_state()
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertEqual(task.actions[-1][1], "游戏厅")
+
+    def test_minigame_one_mate_goes_there(self):
+        """6 行：只有一边有队友 → 去有队友的那边（含餐厅）。"""
+        for mate, place in (("餐厅", "餐厅"), ("游戏厅", "游戏厅")):
+            texts = self._weekend_map("星期六", WEEKEND_WORK_MONEY_GATE + 50)
+            task = self.styled("小游戏流", texts)
+            task.venue_has_mate = (lambda name: lambda b: b.name == name)(mate)
+            task.weekend_state()
+            self.assertTrue(task.handle_weekend(texts), mate)
+            self.assertEqual(task.actions[-1][1], place, mate)
+
+    def test_minigame_no_mate_weekday_work_sunday_arcade(self):
+        """7 行：都没队友 → 周五/六餐厅，周日游戏厅。"""
+        want = {"星期五": "餐厅", "星期六": "餐厅", "星期日": "游戏厅"}
+        for day, place in want.items():
+            texts = self._weekend_map(day, WEEKEND_WORK_MONEY_GATE + 50)
+            task = self.styled("小游戏流", texts)
+            task.venue_has_mate = lambda b: False
+            task.weekend_state()
+            self.assertTrue(task.handle_weekend(texts), day)
+            self.assertEqual(task.actions[-1][1], place, day)
+
+    def test_weekday_unknown_falls_back_to_saturday_row(self):
+        """读不到星期 → 按周六那一行兜底（两条流派都要走比较逻辑，不是原样返回）。"""
+        texts = list(self.MAP)              # 没有顶栏日期、也没有零用钱
+        for style, place in (("扭蛋流", "步行街"), ("小游戏流", "游戏厅")):
+            task = self.styled(style, texts)
+            task.venue_has_mate = lambda b: False
+            task.weekend_state()
+            self.assertTrue(task.handle_weekend(texts), style)
+            self.assertEqual(task.actions[-1][1], place, style)
+
 
     def test_saturday_gacha_style_goes_street_then_restaurant(self):
         """周六扭蛋流：先进步行街；走完没消费才去餐厅打工。"""
@@ -2771,8 +2902,8 @@ class WeekendMapRules(unittest.TestCase):
             self.assertTrue(task.handle_weekend(task._texts), day)
             self.assertTrue(task.weekend_state().get("outing_done"), day)
 
-    def _gacha_map(self, day, money=None):
-        """扭蛋流地图：可带顶栏零用钱（不传 = OCR 读不到）。"""
+    def _weekend_map(self, day, money=None):
+        """周末地图（扭蛋流 / 小游戏流共用）：可带顶栏零用钱（不传 = OCR 读不到）。"""
         texts = self._map(day)
         if money is not None:
             texts.append(box(1000, 20, str(money), 120, 45))
@@ -2781,13 +2912,13 @@ class WeekendMapRules(unittest.TestCase):
     def test_gacha_low_money_goes_restaurant_even_with_mate(self):
         """2026-11-03 用户口径：钱 ≤ 门槛直接打工，**不看队友**（周日也一样）。
 
-        门槛 = GACHA_WORK_MONEY_GATE（2026-11-07 从 300 改 270）：
+        门槛 = WEEKEND_WORK_MONEY_GATE（2026-11-07 从 300 改 270）：
         270 整也算「≤门槛」，271 不算。
         """
-        gate = GACHA_WORK_MONEY_GATE
+        gate = WEEKEND_WORK_MONEY_GATE
         for day in ("星期五", "星期六", "星期日"):
             for money in (0, gate - 50, gate):   # gate 整也算「≤gate」
-                texts = self._gacha_map(day, money)
+                texts = self._weekend_map(day, money)
                 task = self.styled("扭蛋流", texts)
                 task.venue_has_mate = lambda b: True    # 两边都有队友也不算数
                 task.weekend_state()
@@ -2796,7 +2927,7 @@ class WeekendMapRules(unittest.TestCase):
 
     def test_gacha_money_unknown_goes_street(self):
         """钱读不到 → 去步行街（不拿打工赌今天的消费）。"""
-        texts = self._gacha_map("星期六")
+        texts = self._weekend_map("星期六")
         task = self.styled("扭蛋流", texts)
         task.venue_has_mate = lambda b: False
         task.weekend_state()
@@ -2807,7 +2938,7 @@ class WeekendMapRules(unittest.TestCase):
         """钱 >门槛（270）都没队友：周五/六打工，周日步行街。"""
         want = {"星期五": "餐厅", "星期六": "餐厅", "星期日": "步行街"}
         for day, place in want.items():
-            texts = self._gacha_map(day, GACHA_WORK_MONEY_GATE + 50)
+            texts = self._weekend_map(day, WEEKEND_WORK_MONEY_GATE + 50)
             task = self.styled("扭蛋流", texts)
             task.venue_has_mate = lambda b: False
             task.weekend_state()
@@ -2817,7 +2948,7 @@ class WeekendMapRules(unittest.TestCase):
     def test_gacha_over_300_only_one_mate_goes_there(self):
         """钱 >门槛（270）：只有一边有队友 → 去有队友的那边。"""
         for mate, place in (("餐厅", "餐厅"), ("步行街", "步行街")):
-            texts = self._gacha_map("星期六", GACHA_WORK_MONEY_GATE + 50)
+            texts = self._weekend_map("星期六", WEEKEND_WORK_MONEY_GATE + 50)
             task = self.styled("扭蛋流", texts)
             task.venue_has_mate = (lambda name: lambda b: b.name == name)(mate)
             task.weekend_state()
@@ -2835,7 +2966,7 @@ class WeekendMapRules(unittest.TestCase):
 
         用户 2026-11-03 口径：「扭蛋增强或者打折都优先步行街，其他逻辑不变」。
         """
-        texts = (self._gacha_map("星期六", GACHA_WORK_MONEY_GATE + 50)
+        texts = (self._weekend_map("星期六", WEEKEND_WORK_MONEY_GATE + 50)
                  + [self.STREET_DISCOUNT])
         task = self.styled("扭蛋流", texts)
         task.venue_has_mate = lambda b: False
@@ -2848,7 +2979,7 @@ class WeekendMapRules(unittest.TestCase):
         """打折的是**餐厅** → 不改道（只有步行街的折扣才算）。"""
         want = {"星期五": "餐厅", "星期六": "餐厅", "星期日": "步行街"}
         for day, place in want.items():
-            texts = (self._gacha_map(day, GACHA_WORK_MONEY_GATE + 50)
+            texts = (self._weekend_map(day, WEEKEND_WORK_MONEY_GATE + 50)
                      + [self.RESTAURANT_DISCOUNT])
             task = self.styled("扭蛋流", texts)
             task.venue_has_mate = lambda b: False
@@ -2859,8 +2990,8 @@ class WeekendMapRules(unittest.TestCase):
 
     def test_gacha_low_money_ignores_street_discount(self):
         """钱 ≤门槛（270）：步行街在打折也照样去餐厅打工（打折不豁免钱门槛）。"""
-        for money in (0, GACHA_WORK_MONEY_GATE - 50, GACHA_WORK_MONEY_GATE):
-            texts = self._gacha_map("星期六", money) + [self.STREET_DISCOUNT]
+        for money in (0, WEEKEND_WORK_MONEY_GATE - 50, WEEKEND_WORK_MONEY_GATE):
+            texts = self._weekend_map("星期六", money) + [self.STREET_DISCOUNT]
             task = self.styled("扭蛋流", texts)
             task.venue_has_mate = lambda b: True        # 有队友也不算数
             task.weekend_state()
@@ -2870,7 +3001,7 @@ class WeekendMapRules(unittest.TestCase):
     def test_gacha_boost_and_discount_both_reported(self):
         """增强标签 + 打折同时命中 → 同一档，日志把两个标签都写出来。"""
         texts = (self._map_with_boost(self.BOOST, day="星期六")
-                 + [box(1000, 20, str(GACHA_WORK_MONEY_GATE + 50), 120, 45),
+                 + [box(1000, 20, str(WEEKEND_WORK_MONEY_GATE + 50), 120, 45),
                     self.STREET_DISCOUNT])
         task = self.styled("扭蛋流", texts)
         task.venue_has_mate = lambda b: False

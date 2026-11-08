@@ -18,7 +18,8 @@
     通用交互层        动作：选选项、按确定、按坐标退出
 """
 
-from src.tasks.training.constants import GACHA_WORK_MONEY_GATE, WEEKEND_PLAN
+from src.tasks.training.constants import (
+    WEEKEND_MAIN_PLACE, WEEKEND_PLAN, WEEKEND_RICH_MONEY, WEEKEND_WORK_MONEY_GATE)
 from src.tasks.ui import labels
 
 
@@ -49,12 +50,15 @@ class MapPlace:
             st = self.weekend_state()
         if day is None:
             day = (st.get("date") or (None, None))[1]
-        # 读不到星期时按周六那一行兜底（每个流派都有定义）
+        # 读不到星期时按周六那一行兜底（每个流派都有定义）。
+        # 这里就归一化，别让 `prefer_mate_venue` 再兜一次（两张表会各走各的）。
+        day = day or "六"
         places = list(WEEKEND_PLAN.get((day, self.style))
                       or WEEKEND_PLAN.get(("六", self.style))
                       or ["公园"])
         # 2026-10-30 用户口径：扭蛋流（默认带野上泷，周五也有额外周末）先抽扭蛋，
         # **今天没消费**才再去餐厅打工；已经买到东西就不去了。
+        # 小游戏流不用这条：游戏厅进过就记 `visited`，没成交时 todo 里自然只剩餐厅。
         if self.style == "扭蛋流" and day in ("五", "六", "日"):
             places = ["步行街"]
             if not st.get("gacha_spent"):
@@ -74,28 +78,43 @@ class MapPlace:
     def prefer_mate_venue(self, texts, places, day=None):
         """周末地图：决定今天先去哪个地点。
 
+        两条决策链，**互斥**：
+
         **训练流周六**（步行街 / 游戏厅 二选一，买扭蛋/玩小游戏当天就结束），
-        用户 2026-10-30 口径，优先级：
+        用户 2026-10-30 口径：
         1. **只有一个有队友** → 去有队友的；
-        2. **都有队友** → 再比**打折**（地点名左边橙色「打折！」爆炸标签），只有一个打折就去那个；
+        2. **都有队友** → 再比**打折**（地点名左边橙色「打折！」爆炸标签），
+           只有一个打折就去那个；
         3. **都没队友、但只有一个在打折** → 去打折的（2026-10-30 用户实机补充）；
         4. 其他情况（都没队友也没打折 / 都打折）→ 保持原顺序
            （步行街 → 游戏厅 → 公园）。
 
-        **扭蛋流周五/周六/周日**（步行街 / 餐厅）：见下面的分支注释，
-        2026-11-03 用户口径 —— 钱 ≤ 门槛（GACHA_WORK_MONEY_GATE，2026-11-07 定 270）
-        直接打工，不看队友。
+        **扭蛋流 / 小游戏流 周五、周六、周日**（用户 2026-11-08 表格）：
+        两条流派**共用同一条**「主地点 vs 餐厅」决策链，主地点来自
+        `WEEKEND_MAIN_PLACE`（扭蛋流=步行街、小游戏流=游戏厅），优先级 0~7：
+          0. 零用钱读不到 → 主地点（不拿打工赌今天的消费）；
+          1. 零用钱 ≤ 270 → **只去餐厅打工**，队友/打折/「扭蛋增强！」都不豁免；
+          2. 零用钱 > 500 → 主地点（钱多到不用再比队友和标签）；
+          3. （扭蛋流）步行街有「扭蛋增强！」或步行街在打折 → 步行街；
+          4. （小游戏流）游戏厅在打折 → 游戏厅；
+          5. 两边都有队友 → 主地点；
+          6. 只有一边有队友 → 去有队友的那边；
+          7. 都没队友 → 周五/周六去餐厅赚钱，周日去主地点消费。
 
         队友气泡判据见 BaseGirlsTask.venue_has_mate（深藏青色块）；
-        打折判据见 venue_on_discount（OCR 文本 + 名字左侧）。
+        打折判据见 venue_on_discount（OCR 文本 + 名字左侧）；
+        第 3/4 行的标签判据见 `main_venue_tags`。
         """
-        if day == "六" and self.style == "训练流":
+        # 读不到星期时按周六那一行兜底（`today_places` 也是这么兜的）：
+        # 不归一化的话，两张表会各走各的（行程按周六排、比较逻辑却不生效）。
+        day = day or "六"
+        main = WEEKEND_MAIN_PLACE.get(self.style) if day in ("五", "六", "日") else None
+        if main is not None:
+            pair = [p for p in places if p in (main, "餐厅")]
+            mode = "主地点"
+        elif day == "六" and self.style == "训练流":
             pair = [p for p in places if p in ("步行街", "游戏厅")]
             mode = "训练流"
-        elif self.style == "扭蛋流" and day in ("五", "六", "日"):
-            # 野上泷（默认带）：周五额外周末也走同一套
-            pair = [p for p in places if p in ("步行街", "餐厅")]
-            mode = "扭蛋流"
         else:
             return places
         if len(pair) < 2:
@@ -109,51 +128,41 @@ class MapPlace:
 
         mates = [p for p in pair if info[p]["mate"]]
         discounted = [p for p in pair if info[p]["discount"]]
-        chosen = None
-        if mode == "扭蛋流":
-            # 用户 2026-11-03 口径（扭蛋流的周五/周六/周日）：
-            #   0. 零用钱读不到 → 去步行街（不拿打工赌今天的消费）；
-            #   1. 零用钱 <= GACHA_WORK_MONEY_GATE（270，2026-11-07 从 300 改）
-            #      → **直接去餐厅打工，不看队友**；
-            #   2. 零用钱 > 门槛：
-            #      - 步行街有「扭蛋增强！」**或步行街在打折** → 步行街；
-            #      - 两边都有队友 → 步行街；
-            #      - 只有一边有队友 → 去有队友的那边；
-            #      - 都没队友 → 周五/周六餐厅，周日步行街。
-            # 注意：≤门槛时「扭蛋增强 / 打折」也不再豁免 —— 钱不够就打工，明天再抽。
-            # 增强标签的判据在 `places/street.py`（连位置一起判，只认贴在
-            # 步行街左上角的那个，别处出现同样字眼不算）；打折判据见
-            # `venue_on_discount`（名字左边同一行有「打折」）。
+
+        if mode == "主地点":
             money = self.read_money(texts)
-            street_tags = self.street_pull_tags(texts, info)
             if money is None:
-                chosen = "步行街"
-                reason = "零用钱读不到，去步行街"
-            elif money <= GACHA_WORK_MONEY_GATE:
-                # 直接打工：不再绕步行街，今天不抽扭蛋
-                self.log_info(f"周末地点：零用钱 {money} <= {GACHA_WORK_MONEY_GATE} → 只去「餐厅」打工")
+                chosen, reason = main, "零用钱读不到，去主地点"
+            elif money <= WEEKEND_WORK_MONEY_GATE:
+                # 直接打工：不再绕主地点，今天不消费
+                self.log_info(
+                    f"周末地点：零用钱 {money} <= {WEEKEND_WORK_MONEY_GATE}"
+                    " → 只去「餐厅」打工")
                 return ["餐厅"]
-            elif street_tags:
-                chosen = "步行街"
-                reason = "、".join(street_tags)
-            elif len(mates) == 2:
-                chosen = "步行街"
-                reason = "两边都有队友，先进步行街"
-            elif mates:
-                chosen = mates[0]
-                reason = f"只有「{mates[0]}」有队友"
-            elif day in ("五", "六"):
-                chosen = "餐厅"
-                reason = "都没队友，周五/周六去餐厅赚钱"
+            elif money > WEEKEND_RICH_MONEY:
+                chosen, reason = main, (f"零用钱 {money} > {WEEKEND_RICH_MONEY}"
+                                        f"，直接去{main}")
             else:
-                chosen = "步行街"
-                reason = "都没队友，周日去步行街消费"
+                tags = self.main_venue_tags(texts, info, main)
+                if tags:
+                    chosen, reason = main, "、".join(tags)
+                elif len(mates) == 2:
+                    chosen, reason = main, "两边都有队友，先进主地点"
+                elif mates:
+                    chosen, reason = mates[0], f"只有「{mates[0]}」有队友"
+                elif day in ("五", "六"):
+                    chosen, reason = "餐厅", "都没队友，周五/周六去餐厅赚钱"
+                else:
+                    chosen, reason = main, "都没队友，周日去主地点消费"
             if chosen == "餐厅":
-                # 直接去打工：不再绕步行街，今天不用抽扭蛋
+                # 直接去打工：不再绕主地点，今天不用消费
                 self.log_info(f"周末地点：{info} → {reason}，只去「餐厅」")
                 return ["餐厅"]
             self.log_info(f"周末地点：{info} → {reason}，先进「{chosen}」")
             return [chosen] + [p for p in places if p != chosen]
+
+        # ---- 训练流周六：队友 → 打折 → 原顺序 ----
+        chosen = None
         if len(mates) == 1:
             chosen = mates[0]
             reason = "只有一个有队友"
@@ -175,26 +184,29 @@ class MapPlace:
         self.log_info(f"周末地点：{info} → {reason}，先进「{chosen}」")
         return [chosen] + [p for p in places if p != chosen]
 
-    # ---------- 步行街今天值不值得优先去 ----------
+    # ---------- 主地点今天值不值得优先去 ----------
 
-    def street_pull_tags(self, texts, info):
-        """步行街「优先去」的标签：**「扭蛋增强！」或打折都算**（用户 2026-11-03）。
+    def main_venue_tags(self, texts, info, main):
+        """主地点今天有没有「优先去」的标签（用户 2026-11-08 表格第 3/4 行）。
 
-        2026-11-03 用户口径原话：「扭蛋增强或者打折都优先步行街，其他逻辑不变」。
-        所以原来只认增强标签的那一档，现在扩成「增强 or 打折」两个标签同一档。
+        - 扭蛋流（主地点=步行街）：**「扭蛋增强！」或步行街打折**都算；
+        - 小游戏流（主地点=游戏厅）：只有**游戏厅在打折**算，没有增强标签这回事。
 
-        两条都不要越过「零用钱 ≤ 门槛（270）→ 直接去餐厅打工」那道闸门：
-        钱不够时增强/打折都不豁免（用户 2026-11-03 同日口径），这是调用方的顺序。
+        两条都不要越过「零用钱 ≤ 270 → 直接去餐厅打工」那道闸门（钱不够时
+        标签不豁免），这是调用方 `prefer_mate_venue` 的顺序。
 
         参数 `info` 是 `prefer_mate_venue` 已经算好的
-        `{"步行街": {"mate":…, "discount":…}, …}`；步行街今天不在候选里时
-        自然拿不到 discount（那时也不该因为打折改道）。
+        `{"步行街": {"mate":…, "discount":…}, "餐厅": {…}}`；主地点今天不在
+        候选里时自然拿不到 discount（那时也不该因为打折改道）。
+        「扭蛋增强！」的判据在 `places/street.py`（连位置一起判，只认贴在
+        步行街左上角的那个，别处出现同样字眼不算）。
         """
         tags = []
-        if self.has_boost_label(texts, self._venue_box(texts, "步行街")):
+        if main == "步行街" and self.has_boost_label(
+                texts, self._venue_box(texts, "步行街")):
             tags.append("有「扭蛋增强！」")
-        if (info.get("步行街") or {}).get("discount"):
-            tags.append("步行街在打折")
+        if (info.get(main) or {}).get("discount"):
+            tags.append(f"{main}在打折")
         return tags
 
     # ---------- 地点名的框 ----------
