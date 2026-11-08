@@ -1405,6 +1405,23 @@ class TrainingParsersMixin:
             count += 1
         return count
 
+    def option_mate_counts(self, boxes):
+        """一排选项/卡片各挂几个队友 → (与 `boxes` 同序的人数, 用的哪套判据)。
+
+        餐厅两卡和公园三图标用的是**同一套**视觉（深蓝胶囊 + chibi 头像挂在名字上方），
+        所以判据也只有一处：**先数脸，只要有一个框数到脸，就只认脸**；
+        整页一张脸都没数到（= 旧版深蓝圆标记的界面）才退回 `mates_on_card` 兜底。
+
+        为什么要这道闸门（2026-11-03 餐厅实跑）：兜底分不清「队友标记」和
+        「卡片自己的图标」，会给没有队友的那张白送 1 个 → 2 人 vs 0 人读成 2 人 vs 1 人，
+        「多两个才改选」的规则永远差 1 个、一次都不生效。
+        """
+        faces = [self.mate_face_count(b) for b in boxes]
+        if any(faces):
+            return [f or 0 for f in faces], "数脸"
+        icons = self.find_teammate_icons(0.0, 1.0)
+        return [self.mates_on_card(b, icons) for b in boxes], "深蓝兜底"
+
     # ---------- 炒股选股页：卡片头顶的「队友头像」（2026-11-02） ----------
 
     # 队友头像是同一套 chibi 表情，**张开的嘴是同一块颜色**：

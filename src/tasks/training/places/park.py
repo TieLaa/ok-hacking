@@ -7,12 +7,25 @@
 
     野餐 = 精力++   划船 = 属性+   散步 = 零用钱+
 
-选哪个（用户 2026-10-30 / 2026-11-01）：
+选哪个（用户 2026-10-30 / 2026-11-01 / 2026-11-08）：
 
+- **队友优先**（2026-11-08 用户口径，和餐厅「桌游GM 多两个就选左边」同一口径）：
+  **划船的队友比野餐多 `MATE_MARGIN`（2）个及以上 → 优先划船**，不分流派、
+  也不看精力（周六/周日的默认规则都要让位）。多 1 个不算，仍然是默认规则说了算。
+  只在**默认选到野餐**时才由队友改判 —— 配置里明确要「散步」的照旧散步。
 - **训练流**：周六 → 划船（属性+，不再满精力吃野餐）；
   周日 → 精力 < `周末野餐阈值` 就野餐补精力，否则划船。
   今天选过一次就记住（`park_choice`），不反复改。
 - **其它流派**：用配置项 `公园选项` 指定的优先项（默认野餐）。
+
+队友数怎么数：公园三个圆形图标头顶的「深蓝胶囊 + chibi 头像」和餐厅两卡**是同一套**
+视觉，所以判据只在 `parsers.option_mate_counts` 写一份（先数脸，整页一张脸都没有
+才退回深蓝兜底）。真实帧 `docs/shots/park_boat_mates.png`：划船 2~3 人、野餐 0 人。
+
+**数不到就当平局、按默认规则走**（有意降级）：肤色判据挑的是「亮暖肤色」，
+`docs/shots/2026-10-26-park.png` 那种偏暗/滤色重的帧两张都数到 0 —— 那时宁可选错
+（走周六划船 / 周日看精力），也不要拿深蓝兜底去瞎加人（那个坑餐厅已经踩过一次，
+见 `places/restaurant.py: card_mate_counts`）。
 
 2026-10-26 踩过的坑（写在 docstring 里，避免又被改坏）：
 
@@ -37,6 +50,10 @@ EXIT_COORDS = (0.945, 0.040)
 class ParkPlace:
     """公园的判断与状态。**不点击**，只给判断。"""
 
+    # 划船的队友比野餐多几个人才改选（用户 2026-11-08 口径：多两个；
+    # 与 `RestaurantPlace.MATE_MARGIN` 同一口径，「差 1 个不算」）。
+    MATE_MARGIN = 2
+
     # ---------- 页面判据 ----------
 
     def park_page(self, texts):
@@ -54,13 +71,39 @@ class ParkPlace:
     # ---------- 今天选哪个（纯判断） ----------
 
     def park_order(self, texts, style, day=None):
-        """今天点哪个公园选项？返回选项名的元组。
+        """今天点哪个公园选项？返回选项名的元组（第一个是要点的）。
 
         `day` = 星期几（"六"/"日"/…）。读不到时按「非周日」处理（划船）。
         """
+        pick = self.park_pick(texts, style, day)
+        return (pick,) + tuple(x for x in labels.PARK_OPTIONS if x != pick)
+
+    def park_pick(self, texts, style, day=None):
+        """今天选哪个选项（选项名）。优先级见模块 docstring：
+
+        默认选到**野餐**时，若**划船队友 − 野餐队友 ≥ `MATE_MARGIN`** → 改选划船
+        （不分流派、不看精力）；其余情况按「周六划船 / 周日看精力 / 配置项 `公园选项`」。
+        """
+        pick = self.park_default_pick(texts, style, day)
+        if pick != "野餐":
+            return pick
+        boat, picnic = self.park_option_boxes(texts)
+        if boat is None or picnic is None:
+            return pick
+        counts, how = self.option_mate_counts([boat, picnic])
+        diff = counts[0] - counts[1]
+        if diff < self.MATE_MARGIN:
+            self.log_info(f"公园：野餐（队友按{how}：划船 {counts[0]} / 野餐 {counts[1]}，"
+                          f"只多 {diff} 人，不够 {self.MATE_MARGIN} 人）")
+            return pick
+        self.log_info(f"公园：默认野餐 → 划船（队友比野餐多 {diff} 人，按{how}："
+                      f"划船 {counts[0]} / 野餐 {counts[1]}）")
+        return "划船"
+
+    def park_default_pick(self, texts, style, day=None):
+        """不看队友时的默认选项：训练流「周六划船 / 周日看精力」，其它流派用配置项。"""
         if style != "训练流":
-            pref = self.config.get("公园选项")
-            return (pref,) + tuple(x for x in labels.PARK_OPTIONS if x != pref)
+            return self.config.get("公园选项")
 
         st = self.day_state()
         day = day if day is not None else (st["date"][1] if st["date"] else None)
@@ -78,5 +121,18 @@ class ParkPlace:
                 st["park_choice"] = "划船"
                 self.log_info("周六公园：划船（属性+，不再满精力吃野餐）")
 
-        return (st["park_choice"],) + tuple(
-            x for x in labels.PARK_OPTIONS if x != st["park_choice"])
+        return st["park_choice"]
+
+    def park_option_boxes(self, texts):
+        """公园选项里「划船」「野餐」两个文字框 → (划船, 野餐)；找不到的那项是 None。
+
+        只拿位置（数队友要框的坐标），**点击永远走 `choose_option` 按名字找**
+        —— 名字框认错位置最多数错人，不会点错地方。
+        """
+        opts = self.texts_in_region(texts, "weekend_options")
+        found = {}
+        for name in labels.PARK_OPTIONS:
+            box = self.exact_text(opts, (name,)) or self.match_text(opts, (name,))
+            if box is not None:
+                found[name] = box
+        return found.get("划船"), found.get("野餐")

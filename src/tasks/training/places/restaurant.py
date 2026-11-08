@@ -76,8 +76,7 @@ class RestaurantPlace:
 
         stamina = self.top_bar(texts).get("stamina")
         blocked = self.blocked_activities()
-        icons = self.find_teammate_icons(0.0, 1.0)
-        counts, how = self.card_mate_counts(found, icons)
+        counts, how = self.card_mate_counts(found)
         ranked, why = self.restaurant_preference(found, counts)
         free = [b for b in ranked if b.name.strip() not in blocked]
         if not free:
@@ -131,7 +130,7 @@ class RestaurantPlace:
         right = max(found, key=lambda b: b.x)
         return WORK_STAMINA_COST if box is right else 0
 
-    def card_mate_counts(self, found, icons):
+    def card_mate_counts(self, found):
         """两张卡各挂几个队友 → (与 `found` 同序的人数, 用的哪套判据)。
 
         **先数脸，只要有一张卡数到脸，就只认脸**：现版本（深蓝胶囊 + chibi）的这个
@@ -142,11 +141,11 @@ class RestaurantPlace:
         实跑帧 `logs/events/1103-203745` 里当服务员头顶 0 张脸，背心图标却让兜底那条带
         的深蓝占比到 0.107（阈值 0.08）→ 白送 1 个队友，2 人 vs 0 人变 2 人 vs 1 人，
         「桌游GM 多两个就选左边」永远差 1 个。数到脸就不许再走兜底，这个加法就没了。
+
+        判据本体在 `parsers.option_mate_counts`（公园三个图标用的是同一套视觉，
+        2026-11-08 起两边共用，不各写一份）。
         """
-        faces = [self.mate_face_count(b) for b in found]
-        if any(faces):
-            return [f or 0 for f in faces], "数脸"
-        return [self.mates_on_card(b, icons) for b in found], "深蓝兜底"
+        return self.option_mate_counts(found)
 
     def option_selectable(self, box, texts, stamina=None, default_cost=0):
         """这张打工卡现在能不能选。

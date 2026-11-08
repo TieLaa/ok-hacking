@@ -2383,6 +2383,91 @@ class PlaceModulesRules(unittest.TestCase):
         order3 = task3.park_order(task3._texts, "扭蛋流", day="日")
         self.assertEqual(order3[0], "野餐")      # 其它流派用配置项（默认野餐）
 
+    # ---------- 公园：划船的队友比野餐多 2 个 → 优先划船（2026-11-08） ----------
+
+    def _park(self, stamina=None):
+        """真实布局（docs/shots/2026-10-26-park.png）：散步 / 划船 / 野餐 横排。"""
+        texts = [box(760, 80, "在公园干点什么好呢?", 460, 60),
+                 box(430, 400, "散步", 120, 40),
+                 box(790, 400, "划船", 120, 40),
+                 box(1150, 400, "野餐", 120, 40),
+                 box(30, 20, "第1周", 120, 40),
+                 box(200, 20, "星期日", 130, 40)]
+        if stamina:
+            texts.append(box(380, 16, stamina, 210, 53))
+        return texts
+
+    def _park_task(self, stamina="20/130", mates=None, style="训练流"):
+        """`mates` 按选项名给队友个数（测试帧是黑的，数脸数不出人 → 直接覆盖判据）。"""
+        task = FakeTask(self._park(stamina))
+        task._style = style
+        task.weekend_state()
+        counts = dict(mates or {})
+        task.mate_face_count = lambda b, **k: counts.get(b.name.strip(), 0)
+        return task
+
+    def test_park_boat_with_two_more_teammates_wins(self):
+        """划船 2 人 / 野餐 0 人（多两个）→ 划船，哪怕精力 20 < 周末野餐阈值 60。"""
+        task = self._park_task(mates={"划船": 2, "野餐": 0})
+        self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "划船")
+
+    def test_park_boat_with_three_more_teammates_wins(self):
+        """多三个也一样（口径是「多两个及以上」）。"""
+        task = self._park_task(mates={"划船": 3, "野餐": 1})
+        self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "划船")
+
+    def test_park_boat_with_one_more_teammate_still_picnic(self):
+        """只多一个不够 —— 低精力仍然野餐（和餐厅「差 1 个不算」同一口径）。"""
+        task = self._park_task(mates={"划船": 1, "野餐": 0})
+        self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "野餐")
+
+    def test_park_boat_two_but_picnic_one_still_picnic(self):
+        """2 人 vs 1 人只差 1 个 → 仍然野餐。"""
+        task = self._park_task(mates={"划船": 2, "野餐": 1})
+        self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "野餐")
+
+    def test_park_mate_rule_ignores_style(self):
+        """队友口径和餐厅一样**不分流派**：其它流派配置项是野餐也照样划船。"""
+        task = self._park_task(mates={"划船": 2, "野餐": 0}, style="扭蛋流")
+        self.assertEqual(task.park_order(task._texts, "扭蛋流", day="日")[0], "划船")
+
+    def test_park_picnic_with_more_teammates_keeps_boat(self):
+        """反方向不改：野餐多两个也不影响周六固定划船（用户只要求划船这一侧）。"""
+        task = self._park_task(mates={"划船": 0, "野餐": 2})
+        self.assertEqual(task.park_order(task._texts, "训练流", day="六")[0], "划船")
+
+    def test_park_keeps_configured_walk(self):
+        """配置里明确要「散步」的流派不受队友口径影响（只仲裁「野餐 vs 划船」）。"""
+        task = self._park_task(mates={"划船": 3, "野餐": 0}, style="扭蛋流")
+        task.config["公园选项"] = "散步"
+        self.assertEqual(task.park_order(task._texts, "扭蛋流", day="日")[0], "散步")
+
+    def test_park_counts_faces_on_real_frame(self):
+        """真帧（docs/shots/park_boat_mates.png，1549x871，第1周周日 40/130）：
+
+        划船头顶 3 个 chibi（数到 2~3 个）、野餐 0 个 —— 用户要的就是这一页：
+        「划船的队友比野餐多 2 个 → 优先划船」，旧规则会按精力 40 < 60 去野餐。
+        """
+        path = os.path.join(ROOT, "docs", "shots", "park_boat_mates.png")
+        if cv2 is None or not os.path.exists(path):
+            self.skipTest("缺少样本 %s" % path)
+        frame = cv2.imread(path)
+        texts = [box(760, 80, "在公园干点什么好呢?", 460, 60),
+                 box(395, 455, "散步", 100, 40),
+                 box(740, 455, "划船", 100, 40),
+                 box(1045, 455, "野餐", 100, 40),
+                 box(30, 20, "第1周", 120, 40),
+                 box(200, 20, "星期日", 130, 40),
+                 box(380, 16, "40/130", 210, 53)]
+        task = DryRunTask(frame, texts)
+        task._style = "训练流"
+        task.weekend_state()
+        boat, picnic = box(740, 455, "划船", 100, 40), box(1045, 455, "野餐", 100, 40)
+        self.assertGreaterEqual(task.mate_face_count(boat), 2)
+        self.assertEqual(task.mate_face_count(picnic), 0)
+        self.assertEqual(task.park_order(texts, "训练流", day="日")[0], "划船")
+
+
     def test_arcade_picks_free_card_first(self):
         """游戏厅：免费（0 元）的卡优先拿（钱读不到也能买）。"""
         from src.tasks.training.places.arcade import ArcadePlace
