@@ -39,7 +39,8 @@ class EntryHandlers:
             return False
         if self.has_story_arrow():
             return False
-        skip = self.match_text(self.texts_in_region(texts, "top_right"), ("跳过", "点击屏幕继续"))
+        skip = self.match_text(self.texts_in_region(texts, "top_right"),
+                              ("跳过", labels.TAP_TO_CONTINUE))
         if skip is not None:
             self.click_box(skip, after_sleep=0.35)
             return True

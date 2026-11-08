@@ -81,7 +81,7 @@ class PopupHandlers:
         # 「点击屏幕继续」：**点那行字本身**（用户 2026-10-28：MVP 页点屏幕正中
         # 没反应）。同一画面第二拍还是这页，才退回点屏幕中央（训练日开场的
         # 「新目标」弹窗是整屏可点，点文字可能被下面的按钮挡住）。
-        hint = self.match_text(texts, "点击屏幕继续")
+        hint = self.match_text(texts, labels.TAP_TO_CONTINUE)
         if hint is not None:
             sig = frozenset(t.name.strip() for t in texts)
             if getattr(self, "_tap_sig", None) == sig:

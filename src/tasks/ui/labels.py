@@ -269,10 +269,12 @@ WHEEL_BUTTON_POINT = (0.500, 0.923)       # 两页实测按钮中心（比例坐
 STOCK_PICK_TITLE = "请选择你要投资的股票"
 
 # 「点击屏幕继续」类过场提示：整行点一下就能推进（MVP 结算 / 训练评分 / 胜负动画）。
-# 唯一来源 —— `handlers/match.py: handle_tap_to_continue`、`flow._stuck_advance`
-# 都引用这里。**必须全等匹配**：「继续」两个字也出现在「继续训练」「继续匹配」
+# 唯一来源 —— `handlers/match.py`、`handlers/popup.py`、`handlers/entry.py`、
+# `flow._stuck_advance` 全部引用这里，不要再在调用处写字面量。
+# **必须全等匹配**：「继续」两个字也出现在「继续训练」「继续匹配」
 # 「继续倾听和泉的问题」这类正文里，包含匹配会点到台词上。
-TAP_TO_CONTINUE_TEXTS = ("点击屏幕继续", "继续")
+TAP_TO_CONTINUE = "点击屏幕继续"
+TAP_TO_CONTINUE_TEXTS = (TAP_TO_CONTINUE, "继续")
 
 # 兜底 handler（`handlers/unmarked.py`）**不许**认领的邻页标记。
 #

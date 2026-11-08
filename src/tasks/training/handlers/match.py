@@ -187,7 +187,7 @@ class MatchHandlers:
             self.click_box(nxt, after_sleep=0.5)
             self.log_info("结算：下一步")
             return True
-        if self.match_text(texts, "点击屏幕继续") is not None:
+        if self.match_text(texts, labels.TAP_TO_CONTINUE) is not None:
             self.click(int(self.width_of_screen(0.5)), int(self.height_of_screen(0.9)), after_sleep=0.5)
             self.log_info("结算：点击继续")
             return True
@@ -329,7 +329,7 @@ class MatchHandlers:
             # 8380 已达标却按 7420 继续白跑了 9 局。这里只留日志和参考。
         self._score_click_at = time.time()
         # 推进这一页：优先点「点击屏幕继续」的文字框，认不出点屏幕中央（这页点哪都走）
-        target_box = self.match_text(texts, ("点击屏幕继续", "继续"))
+        target_box = self.match_text(texts, labels.TAP_TO_CONTINUE_TEXTS)
         if target_box is not None:
             self.click_box(target_box, after_sleep=0.6)
         else:
@@ -529,7 +529,7 @@ class MatchHandlers:
         排在专属 handler 之后（顺序见 handlers/__init__.py）：
         带「下一步 / 确定 / 跳过 / 放弃 / 继续」按钮的页面不抢，交给对应 handler。
         """
-        hint = self.match_text(texts, "点击屏幕继续")
+        hint = self.match_text(texts, labels.TAP_TO_CONTINUE)
         if hint is None:
             return False
         if self.exact_text(texts, ("下一步", "确定", "跳过", "继续", "放弃")) is not None:
