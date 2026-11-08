@@ -10,6 +10,7 @@ import time
 from ok.feature.Box import Box
 
 from src.tasks.ui import labels
+from src.tasks.ui import zoom_reread
 
 
 class TrainingHandlers:
@@ -51,7 +52,11 @@ class TrainingHandlers:
     BOOST_CARD_SLEEP = 0.40       # 点完卡片的等待（原 0.55）
     BOOST_CONFIRM_GAP = 0.05      # 卡片→确定 的额外间隔（原 0.35）
     BOOST_CONFIRM_LOCK = 1.2      # 点过确定后的静默期（原 2.0）
-    BOOST_GAIN_MISSING_MAX = 3    # 收益列连缺 N 拍后按旧回退兜底（防永远停页）
+    BOOST_GAIN_MISSING_MAX = 3    # 收益列连缺 N 拍后不再等，只从读全的卡里选（防永远停页）
+    # 收益漏读时「裁这一张卡重读」的裁切范围（归一化）：卡心 ±0.12，
+    # 纵向 0.25~0.65 同时覆盖卡上小号（y≈0.35）与大号（y≈0.56）两组收益数字。
+    BOOST_GAIN_DX = 0.12
+    BOOST_GAIN_Y = (0.25, 0.65)
 
     def handle_training_result(self, texts):
         """训练结果浮层：精力降低了X / 属性提升了 / 触发训练后事件。
@@ -336,6 +341,38 @@ class TrainingHandlers:
             out.append({"x": min(max(cx, 0.12), 0.88), "y": 0.55,
                         "label": label, "score": sc})
         return out[0], out[1]
+
+    def _boost_gain_reread(self, cx):
+        """只裁这一张卡的数字区放大重读，补回整帧漏掉的收益 `+N`。
+
+        2026-11-08 实跑（`logs/unknown/1108-101106_boost_gain_missing_s308`）：
+        左卡是**浅蓝底 + 白字「+48」**，整帧 OCR 大小两条都漏（对比度太低）；
+        只裁这张卡再读，x1 就 1.00 命中。所以漏读不是噪声，是这类卡面的固定病。
+
+        `cx` 是卡心（归一化 x）。只用来**读值**，点击仍用整帧的百分比列坐标。
+        读不到返回 None；读到就返回一个只用于聚到这一列的 Box。
+        """
+        frame = getattr(self, "frame", None)
+        if frame is None or not getattr(frame, "size", 0):
+            return None
+        h, w = frame.shape[:2]
+        x1 = int(max(0.0, cx - self.BOOST_GAIN_DX) * w)
+        x2 = int(min(1.0, cx + self.BOOST_GAIN_DX) * w)
+        y1 = int(self.BOOST_GAIN_Y[0] * h)
+        y2 = int(self.BOOST_GAIN_Y[1] * h)
+        got = zoom_reread.reread_px(frame, self, (x1, y1, x2, y2))
+        nums = []
+        for text, _score in got:
+            m = labels.GAIN_RE.match(str(text).replace(" ", ""))
+            if m:
+                nums.append(int(m.group(1)))
+        if not nums:
+            return None
+        # 卡上小号/大号是同一个数字；取出现最多的（并列取大）
+        v = max(set(nums), key=lambda n: (nums.count(n), n))
+        self.log_info(f"加强训练：卡 x={cx:.2f} 的收益整帧漏读 → 卡面重读 +{v}")
+        return Box(name=f"+{v}", x=int(cx * w) - 10, y=y1,
+                   width=20, height=y2 - y1)
 
     def handle_subject_select(self, texts):
         """训练科目页：先探测带队友小人的科目，再按「队友 + 装备 + 满经验暴击」选。
@@ -668,9 +705,13 @@ class TrainingHandlers:
 
         # 2026-11-07 实跑踩坑（logs/events/1107-223718）：OCR 漏读一张卡的收益数字
         # （「+48」没进框），旧版回退「成功率当收益」→ 100%×100=100 分反而全场最高，
-        # 选了期望最低的左卡。改法：**收益列不全就整拍跳过**，等下一拍重读，
-        # 宁可慢一拍也不按缺数决策。连着多拍都缺（BOOST_GAIN_MISSING_MAX，
-        # 说明是页面变体而非 OCR 噪声）才按旧回退兜底，避免永远停在这页。
+        # 选了期望最低的左卡。当时改成「收益列不全就整拍跳过」，但兜底仍是同一条错规则。
+        # 2026-11-08 又中一次（logs/unknown/1108-101106_boost_gain_missing_s308）：
+        # 左卡浅蓝底白字 +48 整帧两处都漏，等 3 拍后 100% 当 +100 → 又选了左卡。
+        # 现在两层修：
+        #   ① 缺收益的卡**先裁卡面重读一次**（这类浅底白字整帧必漏，裁一次就中）；
+        #   ② 重读仍缺就只从**读全了的卡**里选，**永不拿百分比当收益**；
+        #      一张都读不全时按成功率选（同分布下成功率高的期望更高），不选左卡兜底。
         # 存证限流 10 秒一张（dump_unknown 没有自带限流）。
         def cluster(items, tol=0.08):
             """按 x 聚类成一列（同一张卡的所有数字）。返回 [(中心 x, [框...]), ...]。"""
@@ -685,9 +726,27 @@ class TrainingHandlers:
 
         rate_cols = cluster(rates)
         gain_cols = cluster(gains)
-        # 收益列**比百分比列少**（含一张都没读到的空收益列）都算缺数：
-        # 空收益时旧回退同样是「成功率当收益」，100% 卡照样顶上去。
-        if len(gain_cols) < len(rate_cols):
+
+        def gain_for(cx):
+            """离这一列最近的收益框；太远（>0.20）算没有。"""
+            if not gain_cols:
+                return None
+            _gcx, ggroup = min(gain_cols, key=lambda c: abs(c[0] - cx))
+            if abs(_gcx - cx) < 0.20:
+                return max(ggroup, key=lambda b: b.height)
+            return None
+
+        for cx, _group in rate_cols:
+            if gain_for(cx) is not None:
+                continue
+            box = self._boost_gain_reread(cx)
+            if box is not None:
+                gains.append(box)
+                gain_cols = cluster(gains)
+
+        # 收益列和百分比列必须一一对上：少一个（收益漏读）或多一个（百分比漏读，
+        # 收益会被邻卡抢走）都不能按缺数决策。
+        if len(gain_cols) != len(rate_cols):
             self._boost_gain_missing = getattr(self, "_boost_gain_missing", 0) + 1
             if self._boost_gain_missing <= self.BOOST_GAIN_MISSING_MAX:
                 if (time.monotonic()
@@ -701,7 +760,8 @@ class TrainingHandlers:
                 return True
             self.log_warning(
                 "加强训练：连续 "
-                f"{self._boost_gain_missing} 拍收益列不全，按旧回退兜底（成功率当收益）")
+                f"{self._boost_gain_missing} 拍「百分比 {len(rate_cols)} / 收益 "
+                f"{len(gain_cols)}」对不上 → 只从读全的卡里选（不拿成功率当收益）")
         else:
             self._boost_gain_missing = 0
 
@@ -712,20 +772,28 @@ class TrainingHandlers:
                 f"{c:.2f}:{','.join(b.name.strip() for b in bs)}" for c, bs in gain_cols))
 
         picks = []
+        unknown = []
         for cx, group in rate_cols:
             # 同一列里取字号最大的那个（大号才是卡片主数字）
             rate_box = max(group, key=lambda b: b.height)
             p = int(labels.PERCENT_RE.match(rate_box.name.strip()).group(1))
-            gain = None
-            if gain_cols:
-                _gcx, ggroup = min(gain_cols, key=lambda c: abs(c[0] - cx))
-                if abs(_gcx - cx) < 0.20:
-                    gain_box = max(ggroup, key=lambda b: b.height)
-                    gain = gain_box
-            v = int(labels.GAIN_RE.match(gain.name.strip()).group(1)) if gain else p
+            gain = gain_for(cx)
+            if gain is None:
+                # 这张卡的收益读不出来：**不参与打分**，更不能拿 p 顶替
+                unknown.append((p, cx))
+                continue
+            v = int(labels.GAIN_RE.match(gain.name.strip()).group(1))
             picks.append((v * p / 100.0, v, p, cx))
         if not picks:
-            return False
+            # 一张卡的收益都读不到：同分布假设下成功率越高期望越高 → 按成功率选
+            p, card_cx = max(unknown, key=lambda u: u[0])
+            self.click(int(card_cx * self.width), int(self.height * 0.5),
+                       after_sleep=self.BOOST_CARD_SLEEP)
+            self.sleep(self.BOOST_CONFIRM_GAP)
+            self.click_button("confirm", after_sleep=0.6, must=False)
+            self._boost_confirmed_at = time.monotonic()
+            self.log_warning(f"加强训练：收益全部漏读 → 按成功率选 {p}% 那张")
+            return True
 
         # 2026-10-29 用户：训练等级上调后加强训练从 2 张变 3 张。
         # 这里本来就是按列聚类、逐列算期望，2/3 张通用；只有「列数 < 2」或
@@ -750,6 +818,8 @@ class TrainingHandlers:
         self.click_button("confirm", after_sleep=0.6, must=False)
         self._boost_confirmed_at = time.monotonic()
         detail = "  ".join(f"{pp}%/+{vv}={e:.0f}" for e, vv, pp, _cx in picks)
+        if unknown:
+            detail += "（收益漏读、未参与：" + "、".join(f"{pp}%" for pp, _cx in unknown) + "）"
         self.log_info(f"加强训练：{detail} → 选 {p}%/+{v}")
         return True
 

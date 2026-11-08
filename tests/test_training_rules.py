@@ -3877,6 +3877,68 @@ class BoostTrainingClicks(unittest.TestCase):
         self.assertTrue(tick_boost(task, texts))
         self.assertEqual(task.actions[0], ("click", 717, 540))    # 100%/+50 = 50 > 24
 
+    # 2026-11-08 实跑三张卡（logs/unknown/1108-101106_boost_gain_missing_s308）：
+    # 左 100%/+48（浅蓝底白字，整帧 OCR 两条都漏）/ 中 100%/+78 / 右 80%/+102
+    # 卡心 x 按截图取 0.25 / 0.50 / 0.75（1549 宽 → 1920 宽同比例）。
+    THREE_CARDS_LEFT_GAIN_MISSING = [
+        box(600, 200, "加强训练", 720, 50),
+        box(420, 208, "100%", 120, 45),
+        box(900, 210, "100%", 120, 40),
+        box(1380, 207, "80%", 120, 46),
+        box(900, 304, "+78", 75, 42),
+        box(900, 485, "+78", 82, 48),
+        box(1380, 304, "+102", 97, 40),
+        box(1380, 490, "+102", 103, 40),
+        box(900, 900, "确定", 200, 60),
+    ]
+
+    def test_boost_missing_gain_excludes_card_not_percent_fallback(self):
+        """收益漏读的卡不参与打分：**永不**拿「100%」当「+100」。
+
+        旧兜底（成功率当收益）会让左卡 100%×100=100 分顶到最高 → 选了期望最低的
+        左卡（用户当场看到「3 选 1 选了左边蓝卡」）。现在等满 MAX 拍后只在
+        读全的卡里选：80%/+102=81.6 > 100%/+78=78。
+        """
+        texts = list(self.THREE_CARDS_LEFT_GAIN_MISSING)
+        task = FakeTask(texts)
+        task.dump_unknown = lambda *a, **k: None
+        task._boost_gain_reread = lambda cx: None          # 重读也没救回来
+        for _ in range(4):                                  # 头一拍 + 等满 MAX 拍
+            task.handle_boost_training(texts)
+        task.actions.clear()
+        self.assertTrue(task.handle_boost_training(texts))
+        self.assertIn("选 80%/+102", "".join(task.logs))
+        self.assertEqual(task.actions[0], ("click", 1440, 540))
+
+    def test_boost_gain_reread_recovers_missing_card(self):
+        """缺收益的卡先裁卡面重读：左卡 +90 读回来（100%/+90=90）就该选它。"""
+        texts = list(self.THREE_CARDS_LEFT_GAIN_MISSING)
+        task = FakeTask(texts)
+        task.dump_unknown = lambda *a, **k: None
+        task._boost_gain_reread = lambda cx: box(
+            int(cx * task.width) - 10, 300, "+90", 20, 40)
+        self.assertTrue(tick_boost(task, texts))
+        self.assertIn("0.25:+90", "".join(task.logs))     # 重读结果聚进了左卡这一列
+        self.assertIn("选 100%/+90", "".join(task.logs))
+        self.assertEqual(task.actions[0], ("click", 480, 540))
+
+    def test_boost_all_gains_missing_falls_back_to_rate(self):
+        """收益一张都读不到：按成功率选（同分布下成功率高的期望更高）。"""
+        texts = [box(600, 200, "加强训练", 720, 50),
+                 box(420, 208, "80%", 120, 45),
+                 box(900, 210, "100%", 120, 40),
+                 box(1380, 207, "90%", 120, 46),
+                 box(900, 900, "确定", 200, 60)]
+        task = FakeTask(texts)
+        task.dump_unknown = lambda *a, **k: None
+        task._boost_gain_reread = lambda cx: None
+        for _ in range(4):
+            task.handle_boost_training(texts)
+        task.actions.clear()
+        self.assertTrue(task.handle_boost_training(texts))
+        self.assertIn("按成功率选 100%", "".join(task.logs))
+        self.assertEqual(task.actions[0], ("click", 960, 540))
+
 
 class StoryArrowClicks(unittest.TestCase):
     """剧情页一次只点一下，重试交给主循环（2026-10-26 用户观察）。
