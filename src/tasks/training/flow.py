@@ -44,6 +44,14 @@ ARCADE_WAIT_MARKS = ("出行", "公园", "步行街", "游戏厅", "失败率", 
                      "训练", "商店", "获得奖励", "点击屏幕继续", "跳过", "下一步",
                      "战术板", "赛程")
 
+# 卡住接管时优先点的「推进型」按钮（按顺序试），点不到才回退点屏幕中央。
+#
+# 为什么不能只点中央（2026-11-08 实跑，logs/debug/1108-231656_noresp3s）：
+# 炒股选股页是「选卡 → 确定」两段式，屏幕中央正好是中间那张卡 —— 三次接管全
+# 点在卡上，界面纹丝不动，一分钟后被判死停任务。两段式页面只有点按钮才推进。
+STUCK_ADVANCE_BUTTONS = ("next", "decide")
+STUCK_ADVANCE_TEXTS = ("点击屏幕继续", "继续")
+
 # 监控页（src/ui/MonitorTab.py）只认「域」这一级，不逐个 handler 维护文案。
 # 新增 handler 只要模块不变就自动归类，不会因为漏配而显示成技术名。
 UI_AREAS = {
@@ -769,8 +777,36 @@ class TrainingFlowMixin:
             self.log_error(self._abort_reason, notify=True)
             return True                            # 下一拍 run() 看到 _abort_reason 就退出
         self._clear_day_home_brakes()
-        self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=0.3)
+        if not self._stuck_advance(texts):
+            self.click(int(self.width * 0.5), int(self.height * 0.5), after_sleep=0.3)
         return True
+
+    def _stuck_advance(self, texts):
+        """卡住接管时先点「推进型」按钮；点不到返回 False（回退点屏幕中央）。
+
+        顺序：下一步 → 决定 → 点击屏幕继续/继续 → 确定。
+        **花钱/删档/花钻石的页面不给「确定」**：接管只帮用户把流程推过去，
+        不替用户花钱或删档（那种页面退回点中央，宁可多接管一轮）。
+
+        2026-11-08 事故：接管原本无条件点屏幕中央，而炒股选股页中央就是中间
+        那张卡 → 三次接管全白费、一分钟后停任务（`logs/debug/1108-231656_noresp3s`）。
+        """
+        for key in STUCK_ADVANCE_BUTTONS:
+            if self.click_button(key, texts=texts, after_sleep=0.35, must=False):
+                self.log_warning(
+                    f"卡住接管：点「{labels.BUTTONS[key][0]}」推进（不再点中央）")
+                return True
+        for text in STUCK_ADVANCE_TEXTS:
+            if self.click_text((text,), after_sleep=0.35, must=False):
+                self.log_warning(f"卡住接管：点「{text}」推进（不再点中央）")
+                return True
+        if self.match_text(texts, labels.STUCK_TAKEOVER_DANGER) is not None:
+            # 购买/删档/花钻石的确认页：不许替用户做主，退回点中央
+            return False
+        if self.click_button("confirm", texts=texts, after_sleep=0.35, must=False):
+            self.log_warning("卡住接管：点「确定」推进（不再点中央）")
+            return True
+        return False
 
 
     def _clear_day_home_brakes(self):

@@ -4282,6 +4282,51 @@ class StuckTakeover(unittest.TestCase):
         self.assertTrue(task.stuck_takeover(task._texts))
         self.assertTrue(any("看不到日期" in str(x) for x in task.logs))
 
+    # ---------- 接管动作：先点推进按钮，别只点中央（2026-11-08 炒股选股页） ----------
+
+    # 炒股选股页真实布局（1549x871 → 这里按 1920x1080 放）：三张卡 + 确定。
+    STOCK_PICK = [box(40, 12, "第2周", 120, 40),
+                  box(190, 12, "星期二", 130, 40),
+                  box(420, 465, "稳健型", 120, 50),
+                  box(890, 464, "风险型", 120, 50),
+                  box(1360, 462, "平衡型", 120, 50),
+                  box(1150, 940, "确定", 95, 55)]
+
+    def _takeover(self, texts):
+        task = self.make(texts)
+        self.day_key(task, texts)
+        self.clicks(task, 4)                        # 超过上限 3
+        task._sig_changed_at = time.time()
+        self.assertTrue(task.stuck_takeover(texts))
+        return task
+
+    def test_takeover_clicks_confirm_before_center(self):
+        """两段式页面（选卡 → 确定）：接管必须点「确定」，点中央正好落在中间那张卡。"""
+        task = self._takeover(self.STOCK_PICK)
+        self.assertEqual(task.actions[-1][:2], ("click_box", "确定"))
+        self.assertTrue(any("不再点中央" in str(x) for x in task.logs))
+
+    def test_takeover_prefers_next_over_confirm(self):
+        """同屏有「下一步」时先点它：它永远只是推进，不会确认任何选择。"""
+        texts = self.STOCK_PICK + [box(900, 900, "下一步", 200, 55)]
+        task = self._takeover(texts)
+        self.assertEqual(task.actions[-1][:2], ("click_box", "下一步"))
+
+    def test_takeover_never_confirms_purchase(self):
+        """花钱页（购买 + 确定）：退回点中央 —— 宁可多接管一轮，也不替用户买。"""
+        texts = self.STOCK_PICK + [box(700, 600, "购买", 160, 50)]
+        task = self._takeover(texts)
+        self.assertEqual(task.actions[-1], ("click", 960, 540))
+
+    def test_takeover_never_confirms_delete(self):
+        """删档页（删档 + 确定）：同样只点中央。"""
+        texts = [box(40, 12, "第2周", 120, 40),
+                 box(190, 12, "星期二", 130, 40),
+                 box(700, 400, "删档重来", 300, 60),
+                 box(1150, 940, "确定", 95, 55)]
+        task = self._takeover(texts)
+        self.assertEqual(task.actions[-1], ("click", 960, 540))
+
     # ---------- 判据①：点击后 3 秒无响应 ----------
 
     def test_no_response_three_seconds_takes_over(self):

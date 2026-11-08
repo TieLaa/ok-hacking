@@ -268,6 +268,10 @@ WHEEL_BUTTON_POINT = (0.500, 0.923)       # 两页实测按钮中心（比例坐
 #   3) 兜底 `handle_unmarked_cards` 也不许认领（见 QUALITY_CARD_EXCLUDE）。
 STOCK_PICK_TITLE = "请选择你要投资的股票"
 
+# 卡住接管（`flow.stuck_takeover`）时的「不替用户做主」标记：
+# 花钱 / 删档 / 花钻石的确认页只许点屏幕中央（推不动也比误买、误删强）。
+STUCK_TAKEOVER_DANGER = ("购买", "删档", "重置", "钻石")
+
 # 兜底 handler（`handlers/unmarked.py`）**不许**认领的邻页标记。
 #
 # 为什么需要：兜底的判据是「2~3 张按品质上色的卡」，这个形态在扭蛋/商店/游戏厅
