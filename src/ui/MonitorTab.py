@@ -640,16 +640,54 @@ class MonitorTab(CustomTab):
         else:
             self._connection_start()
 
-    def _connection_start(self):
-        """启动 = 接入游戏 + 开跑自动训练 —— 完全对齐框架 start_clicked。
+    def _bring_game_to_front(self):
+        """把**已经在跑**的游戏窗口恢复并置前（最小化/被别的窗口挡住时）。
 
-        `start_controller.start(task)` 内部处理**所有状态**（TaskCard.start_clicked
-        就是这么干的）：未连接 → 刷新设备+拉起 exe+enable 任务+执行器启动；
-        paused → task.unpause()；别的任务在跑 → 排队。不再自己判断分支。
+        为什么需要（2026-11-08 用户实测）：游戏进程一直在跑，但窗口在后台
+        或最小化了。框架 `start_controller.start_device()` 只在
+        `device['connected']` 为假时才执行 exe / 等窗口；已连接时只
+        `do_refresh` —— 窗口不会被恢复，用户看到的就是"点了启动却什么都没
+        发生"（而且 WGC 对最小化窗口零帧，脚本也跑不动）。
+
+        走 `GirlsInteraction.ensure_foreground()`（项目唯一的置前实现：
+        IsIconic → SW_RESTORE、Alt 注入、AttachThreadInput、TopMost 三重保险，
+        并且**先等用户空闲**才抢，不打断正在操作的人）。进程没起时它返回
+        False，拉起 exe 仍归 `start_controller`。
+        """
+        try:
+            interaction = getattr(self.executor, "interaction", None)
+            ensure = getattr(interaction, "ensure_foreground", None)
+            if callable(ensure):
+                ok = ensure()
+                logger.info(f"监控页：游戏窗口置前 → {'成功' if ok else '未成功（窗口可能不存在）'}")
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"置前游戏窗口失败（不影响启动）: {e}")
+
+    def _connection_start(self):
+        """启动 = 连接游戏（用户口径，从始至终未变）。
+
+        分工：
+        - 第一栏【启动/停止】只负责连接/断开游戏；
+        - 第二栏【开始/暂停】只负责自动训练脚本；
+        - 点第二栏【开始】时如果还没连接，才"顺手点一下【启动】"。
+
+        **唯一的例外：agent 注入的队列参数**（`task._queue_spec`，多角色队列
+        是 agent 的隐藏通道，没有实装到界面）。带参数进来时自动开跑
+        （`start_controller.start(task)` = 连接 + enable，等于自动点【开始】）；
+        参数为空则只连接（`start_controller.start()`，不带 task）。
+
+        先把已在跑的游戏窗口恢复/置前（`_bring_game_to_front`），否则
+        "点了启动没反应" —— 框架对已连接的设备不做任何窗口操作。
         """
         task = self._task()
+        spec = (getattr(task, "_queue_spec", None) or "") if task else ""
+        self._bring_game_to_front()
         try:
-            og.app.start_controller.start(task)
+            if spec:
+                logger.info(f"监控页：注入队列参数 → 启动即自动开跑（{spec}）")
+                og.app.start_controller.start(task)
+            else:
+                og.app.start_controller.start()
         except Exception as e:  # noqa: BLE001
             logger.error(f"启动失败: {e}")
         self._update_data()
@@ -904,20 +942,20 @@ class MonitorTab(CustomTab):
         return False
 
     def toggle_auto_training(self):
-        """第二栏按钮：【开始 / 暂停】—— 完全对齐框架 TaskCard 的语义。
+        """第二栏按钮：【开始 / 暂停】—— **只管自动训练脚本**（用户口径）。
 
-        框架 TaskCard（ok/ui/qt/tasks/TaskCard.py）的点击逻辑：
-        - start_clicked：enabled 且 paused → `task.unpause()`；否则 →
-          `start_controller.start(task)` —— **所有状态都交给它处理**
-          （未连接就刷新设备+拉起 exe+enable 任务+执行器启动；paused 就恢复）；
-        - pause_clicked：`task.pause()`（框架版：暂停当前任务，可无损恢复）。
+        分工（从始至终未变）：
+        - 第一栏【启动/停止】只负责连接/断开游戏；
+        - 第二栏【开始/暂停】只负责自动训练脚本；
+        - 点【开始】时**如果还没连接游戏**，顺手替你点一下第一栏【启动】。
 
-        我们之前用 `task.disable()` 当「暂停」，disable 后恢复只能重跑 run()，
-        而且和第一栏【启动】的判据互相打架（暂停态点【启动】被判成「已连接」
-        走了断开分支 → 暂停被重置）。现在照框架改：
-        - 在跑（enabled 且没 paused）→ `task.pause()` → 显示【开始】
-        - 已暂停 → `task.unpause()` → 显示【暂停】
-        - 没启动 → `start_controller.start(task)`（一把梭）
+        三态：
+        - 在跑 → `task.pause()` 挂起，按钮回【开始】（可恢复）；
+        - 已暂停 → `task.unpause()` 恢复；
+        - 未启动：
+          - 已连接 → `task.enable()` 开跑；
+          - 未连接 → `start_controller.start(task)`（**这次带 task**：
+            顺手连接 + 连接完成后 enable，等于"点了【启动】再点【开始】"）。
         """
         task = self._task()
         if task is None:
@@ -929,38 +967,34 @@ class MonitorTab(CustomTab):
         try:
             if running:
                 # 在跑 → 暂停（框架 pause_clicked：task.pause()）
-                task.pause()
+                try:
+                    task.pause()
+                except Exception as e:              # noqa: BLE001
+                    # 框架的 pause(task) 在 current_task != 自己时会抛（刚好在换任务）。
+                    # 暂停意图仍然要落地，否则按钮点了没反应、脚本继续抢鼠标。
+                    logger.warning(f"框架 pause 失败，直接置暂停标志: {e}")
+                    task._paused = True
                 logger.info("监控页：自动训练 → 暂停（task.pause，可无损恢复）")
             elif paused:
                 # 已暂停 → 恢复（框架 start_clicked 第一分支）
                 task.unpause()
                 logger.info("监控页：自动训练 → 继续（task.unpause）")
+            elif self._connected():
+                # 已连接：只开跑自动训练（不碰连接，那是第一栏的事）
+                task.enable()
+                logger.info("监控页：自动训练 → 开始（已连接，仅 enable 任务）")
             else:
-                # 未启动 → 一把梭（框架 start_clicked 兜底）
-                og.app.start_controller.start(task)
-                logger.info("监控页：自动训练 → 启动（start_controller.start）")
+                # 未连接：顺手点一下【启动】—— 连接 + 连接完成后 enable。
+                # 接入是异步的，期间重复点击不重复发起（否则队列里堆 do_start）。
+                if self._starting():
+                    logger.info("监控页：正在接入游戏，稍候…（不重复发起）")
+                else:
+                    logger.info("监控页：还没连接游戏 → 顺手启动（连接并开跑）")
+                    self._bring_game_to_front()
+                    og.app.start_controller.start(task)
         except Exception as e:  # noqa: BLE001
             logger.error(f"自动训练开关失败: {e}")
         self._update_data()
-
-    def _auto_start(self):
-        """第二栏【开始】的前置：没接上游戏时**主动接入**（用户 2026-11-02 口径）。
-
-        走第一栏 `_connection_start()` 的同一条链路（`start_controller.start(task)`：
-        刷新设备 → 必要时拉起游戏 exe → 等窗口稳定 → enable 任务 → 执行器启动），
-        所以这里**不能**再自己 `task.enable()`：
-        1. `start_controller` 自己会 enable 这个 task（`_mark_task_enabled`）；
-        2. 还没接上就 enable，任务只会排在队列里等，按钮文案也不会变
-           —— 就是上一版「点了没反应」的样子。
-
-        接入是异步的（`start()` 只是 post 到 handler 线程，几秒到几十秒），
-        期间再点一次不重复发起，否则队列里会堆好几个 `do_start`、重复拉游戏窗口。
-        """
-        if self._starting():
-            logger.info("监控页：正在接入游戏，稍候…（不重复发起）")
-            return
-        logger.info("监控页：还没接上游戏 → 主动接入（等同第一栏【启动】）")
-        self._connection_start()
 
     @staticmethod
     def _starting() -> bool:

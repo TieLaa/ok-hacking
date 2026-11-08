@@ -30,7 +30,7 @@ from ok.feature.Box import Box  # noqa: E402
 from tools.check_handlers import DryRunTask  # noqa: E402
 from src.tasks.training.parsers import (  # noqa: E402
     CRIT_RING_FACTOR, CRIT_RING_MIN, ring_is_border)
-from src.tasks.training.constants import GACHA_WORK_MONEY_GATE, WEEKEND_PLAN  # noqa: E402
+from src.tasks.training.constants import WEEKEND_WORK_MONEY_GATE, WEEKEND_PLAN  # noqa: E402
 from src.tasks.ui import topbar_day  # noqa: E402
 
 
@@ -5649,26 +5649,51 @@ class MonitorButtonActions(unittest.TestCase):
         tab.toggle_auto_training()
         self.assertEqual(app.calls, [])
 
-    def test_start_when_connected_still_goes_through_start_controller(self):
-        """已连接时点【开始】也走 `start_controller.start(task)`（框架口径）。
+    def test_connection_start_without_queue_param_only_connects(self):
+        """第一栏【启动】不带 task = 只连接，不自动开跑（用户口径）。
 
-        2026-11-07 对齐框架 TaskCard.start_clicked：无论什么状态都交给
-        start_controller（它内部处理 paused/running/未启动所有分支）。
-        旧断言「已连接就不碰 start_controller」随 disable 暂停方案一起废弃。
+        参数为空（普通界面操作）→ start_controller.start() 无 task，
+        训练任务保持未启用，第二栏显示【开始】。
+        """
+        tab, task, executor, _ = self._tab(connected=False)
+        app = self._fake_app()
+        tab._connection_start()
+        self.assertEqual(len(app.calls), 1)
+        self.assertIsNone(app.calls[0][1])       # 不带 task
+        self.assertNotIn("enable", task.calls)
+
+    def test_connection_start_with_queue_param_auto_starts(self):
+        """第一栏【启动】带注入队列参数 → 自动开跑（agent 隐藏通道）。
+
+        多角色队列是 agent 的参数通道（没有实装到界面）：传了参数就
+        连接 + enable（等于自动点【开始】）；参数为空则只连接。
+        """
+        tab, task, executor, _ = self._tab(connected=False)
+        task._queue_spec = "望月透:8000"
+        app = self._fake_app()
+        tab._connection_start()
+        self.assertEqual(len(app.calls), 1)
+        self.assertIs(app.calls[0][1], task)     # 带 task = 自动开跑
+
+    def test_start_when_connected_only_enables_task(self):
+        """已连接时点【开始】→ 只 `task.enable()`，不碰连接（用户口径）。
+
+        第一栏【启动/停止】管连接，第二栏【开始/暂停】管脚本 —— 已连接时
+        点【开始】不该再走 start_controller（那是第一栏的活）。
         """
         tab, task, executor, _ = self._tab(connected=True)
         app = self._fake_app()
         tab.toggle_auto_training()
-        self.assertEqual(len(app.calls), 1)
-        self.assertIs(app.calls[0][1], task)
+        self.assertEqual(app.calls, [])
+        self.assertIn("enable", task.calls)
 
-    def test_start_auto_training_goes_through_start_controller(self):
-        """接上游戏时点第二栏【开始】→ start_controller.start(task)（框架口径）。"""
+    def test_start_auto_training_enables_when_connected(self):
+        """接上游戏时点第二栏【开始】→ 只 enable 训练任务。"""
         tab, task, executor, _ = self._tab(connected=True)
         app = self._fake_app()
         tab.toggle_auto_training()
-        self.assertEqual(len(app.calls), 1)
-        self.assertIs(app.calls[0][1], task)
+        self.assertEqual(app.calls, [])
+        self.assertTrue(task.enabled)
 
     def test_disconnect_resets_second_bar_state(self):
         """第一栏【停止】（断开游戏）→ 训练任务被 disable、按钮复位成【开始】。

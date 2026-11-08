@@ -94,6 +94,32 @@ def _stall_limits():
 
 class TrainingFlowMixin:
 
+    def input_blocked(self):
+        """输入层每一下动作前会问一次：现在该不该动手（True = 别动）。
+
+        挂到 `interaction.abort_check` 上，供等待用户空闲的循环和点击前的二次校验用。
+        覆盖三种：紧急停止键、任务被停、用户点了【暂停】。
+        """
+        if STOP.event.is_set() or not self._enabled:
+            return True
+        return bool(getattr(self, "paused", False))
+
+    def wait_while_paused(self):
+        """暂停 = 原地挂起，不退出、不丢本局进度。
+
+        框架的 `Task.pause()`（ok/task/task.py:1214）对一次性任务只置 `_paused=True`，
+        `TaskExecutor` 不会打断正在执行的 `task.run()`，所以本局会照常点下去——
+        用户点【暂停】后鼠标仍然被抢，根因就在这里（2026-11-08）。这里自己挂住：
+        暂停期间一拍都不做，继续后从当前这一拍接着跑。
+        """
+        if not getattr(self, "paused", False) or not self._enabled or STOP.event.is_set():
+            return
+        self.log_info("已暂停 → 挂起（鼠标已放手；点【开始】从当前进度接着跑）", notify=True)
+        while self.paused and self._enabled and not STOP.event.is_set():
+            self.sleep(0.2)
+        if self._enabled and not STOP.event.is_set():
+            self.log_info("已继续 → 恢复挂机")
+
     def run(self):
         """一次 run = 把**多角色队列**里的角色依次练到目标分（用户 2026-11-04 口径）。
 
@@ -102,6 +128,14 @@ class TrainingFlowMixin:
         返回 True 即任务完成）。注入了 → 每一局跑完回来记一次分、必要时换队长，
         直到**全部达标提前终止**，或撞上 `最大局数` 兜底。
         """
+        try:
+            return self.run_rounds()
+        finally:
+            # interaction 是框架全局单例：本任务退出后必须把 abort_check 摘掉，
+            # 否则 TriggerTask（快速比赛）会被一个「已停止的训练任务」永远拦着。
+            self.release_input_gate()
+
+    def run_rounds(self):
         self.init_captain_queue()
         max_runs = max(1, int(self.config.get("最大局数")))
         # 队列在**上次运行**里就已经全部达标（进度存在 logs/training_queue.json）→
@@ -121,6 +155,20 @@ class TrainingFlowMixin:
                                notify=True)
                 return False
 
+    def release_input_gate(self):
+        """把 abort_check 从共享 interaction 上摘掉（只摘自己挂的那个）。
+
+        `og.device_manager.interaction` 是框架全局单例，TriggerTask 也在用它；
+        训练任务退出后留着 `input_blocked`，快速比赛的点击会被永远拦掉。
+        """
+        interaction = getattr(self, "_gate_interaction", None)
+        self._gate_interaction = None
+        if interaction is None:
+            return
+        checker = getattr(interaction, "abort_check", None)
+        if getattr(checker, "__self__", None) is self:
+            interaction.abort_check = None
+
     def run_one_round(self):
         """跑**一局**：从当前界面一直到「注册球员完成、回大厅」。
 
@@ -128,6 +176,8 @@ class TrainingFlowMixin:
         多角色时上层（`run`）负责换队长再进来一次。
         """
         self._steps = 0
+        # 暂停中不要开新局（队列模式会在两局之间回来）：等着，继续后接着开
+        self.wait_while_paused()
         # MCP / GUI 双入口：定产物目录。MCP 的 runner 已经 reset+verify 过，
         # GUI/CLI 走这里自己恢复基线（失败只告警，不打断用户手动起的任务）。
         self.begin_attempt()
@@ -146,9 +196,12 @@ class TrainingFlowMixin:
         except Exception:                        # noqa: BLE001
             pass
         interaction = self.apply_user_idle_wait(self.config.get("空闲等待(秒)"))
-        # 等待用户空闲可能很久：把紧急停止挂进去，否则按了停止键要等用户停手才生效
+        # 等待用户空闲可能很久：紧急停止、任务被停、用户点了【暂停】都要能立刻
+        # 中断等待（否则暂停后它还在等 3 秒才收手）。暂停后的常态拦截见
+        # `wait_while_paused`：框架的 task.pause() 对一次性任务只置标志，不会打断 run()。
         if interaction is not None and hasattr(interaction, "abort_check"):
-            interaction.abort_check = STOP.event.is_set
+            interaction.abort_check = self.input_blocked
+            self._gate_interaction = interaction      # 退出时按这个引用摘掉（见 run）
         # 2026-11-01 修正（用户口径）：队长/流派**只有两条解析路径，都不许保底**：
         #   A. 配置里填了「指定队长」→ 查表定流派；
         #      查得到 √，查不到 → **弹窗**。
@@ -207,6 +260,8 @@ class TrainingFlowMixin:
             if not self._enabled:
                 self.log_info("任务已停止")
                 return False
+            # 暂停：框架不会打断 run()，这里自己挂住（不退出、不丢进度）
+            self.wait_while_paused()
             self._steps += 1
 
             # 本拍只用这一帧：识别、存证、调试包都从它来。
@@ -390,46 +445,42 @@ class TrainingFlowMixin:
     def init_captain_queue(self):
         """定下这一次 run 要练的角色顺序（用户 2026-11-07 口径）。
 
-        队列只是**内存参数**（`self._queue_spec`，外部注入），不是配置项：
-        - `config["队长队列"]`（配置残留）一律**忽略**——界面为准；
-        - 「指定队长」有值 → 清掉旧队列，按界面选的队长单跑；
-        - 「指定队长」为空且内存里有注入的队列 → 按队列跑。
+        队列是**内存参数**（`self._queue_spec`），有两个写入方：
+        1. **界面「刷到目标分」**（`MonitorTab.set_score_stop`）——单人「队长:目标分」；
+        2. **agent 注入**（MCP / `next_captain.json`）——可多人串行。
+        两者都走这个字段，所以这里**必须保留**，不能因为「指定队长有值」就清
+        （2026-11-08 实测 bug：勾「刷到目标分」+ 填分后点开始，任务一 run
+        就把参数清掉 → 界面回填成未勾选、目标分被清空）。
 
-        `多角色队列` 配置键已废弃（保留在 default_config 里只为不炸老存档），
-        `self._queue = None` → 全程走老的单队长逻辑，不会静默换行为。
+        清空的职责在**界面侧**：`MonitorTab.set_captain` —— 用户改队长时清
+        `_queue_spec`（「指定新队长 → 旧的安排作废」）。任务侧只读不写。
 
-        **暂停→继续不丢进度**（2026-11-07）：暂停只是 disable（run 循环退出），
-        `self._queue` 还挂在任务实例上、游标在内存里。这里**先看活着的队列**：
-        还在且指纹没变（队列参数没被界面清掉/换人）→ 直接接着跑，不重建；
-        队列没了/换参数了 → 从 `_queue_spec` 新建（全新 run，从头开始）。
+        `多角色队列` 配置键已废弃（保留在 default_config 里只为不炸老存档）。
+
+        **暂停→继续不丢进度**：`self._queue` 还挂在任务实例上、游标在内存里。
+        这里**先看活着的队列**：还在且指纹没变 → 接着跑，不重建。
         """
         self._run_score = None
-        want = (self.config.get("指定队长") or "").strip()
         spec = (getattr(self, "_queue_spec", "") or "").strip()
         living = getattr(self, "_queue", None)
-        if want:
-            # 界面选了队长 → 旧队列清空（单队长也清，用户口径：
-            # 「不管单个指定还是队列，指定新队长时都清空」）
-            if spec or living is not None:
-                self.log_info("界面已指定队长 → 清掉旧的多角色队列")
+        if not spec:
+            # 没队列参数（正常单队长模式，或界面改队长时刚被清掉）
+            if living is not None:
+                self.log_info("队列参数已空（界面改过队长）→ 单队长模式")
             self._queue = None
-            self._queue_spec = None
             return None
         if living is not None and not living.empty:
             # 暂停后继续（或 run() 正常返回又进来）：队列对象还活着 → 接着跑。
-            # 指纹对不上 = 队列参数被换过（界面清了 / 注入了新串）→ 重建。
-            if spec and living.signature() != CaptainQueue(spec).signature():
-                self.log_info("队列参数已变更 → 重建多角色队列")
-            else:
+            # 指纹对不上 = 队列参数被换过 → 重建。
+            if living.signature() == CaptainQueue(spec).signature():
                 self._queue = living
                 self.log_info(f"多角色队列继续（暂停后续跑）：{living.summary()}")
                 return self._queue
+            self.log_info("队列参数已变更 → 重建多角色队列")
         self._queue = None
-        if not spec:
-            return None
         queue = CaptainQueue(spec)
         if queue.empty:
-            self.log_warning("注入的多角色队列解析为空 → 按单队长跑")
+            self.log_warning("队列参数解析为空 → 按单队长跑")
             self._queue_spec = None
             return None
         self._queue = queue
