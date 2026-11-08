@@ -513,6 +513,23 @@ class GachaRules(unittest.TestCase):
         self.assertEqual(FakeTask.stamina_recover("清空精力，运气+30"), 0)
         self.assertEqual(FakeTask.stamina_recover("主力运控+72，队友属性大幅提升"), 0)
 
+    def test_codex_gacha_recover_texts_parse(self):
+        """2026-11-08 图鉴实抓：三款精力恢复扭蛋（OCR 会把「每天」拆成「每 | 天」）。
+
+        图鉴原文：精力恢复=立刻40+每天10×4；+ = 60+20×4；++ = 90+30×4。
+        另外「精力补充」= 提高精力上限10点 + 恢复所有精力 → 属于「全部恢复」型。
+        """
+        cases = [
+            ("立刻恢复40精力，之后每 天恢复10点，持续4天", 80, 40),
+            ("立刻恢复60精力，之后每 天恢复20点，持续4天", 140, 60),
+            ("立刻恢复90精力，之后每 天恢复30点，持续4天", 210, 90),
+        ]
+        for text, total, immediate in cases:
+            self.assertEqual(FakeTask.stamina_recover(text), total, text)
+            self.assertEqual(FakeTask.stamina_recover_immediate(text), immediate, text)
+        self.assertTrue(FakeTask.is_stamina_full_recover(
+            "提高精力上限10点，并恢 复所有精力，队友属性大幅提升"))
+
     def test_attribute_card_beats_equal_recover_card(self):
         """2026-11-07 用户口径：同等条件下恢复精力的优先级最低。
 
@@ -566,7 +583,6 @@ class GachaRules(unittest.TestCase):
 
     def test_daily_recover_only_when_below_half(self):
         """2026-11-08 用户口径③：「接下来几日恢复xx」精力占比 < 1/2 才买。
-
         纯持续卡（每天恢复10点×4天）：70/130（0.54 ≥ 0.5）拒；
         60/130（0.46 < 0.5）过门槛，池里只剩它（属性卡蓝卡）→ 买。
         """
@@ -601,6 +617,29 @@ class GachaRules(unittest.TestCase):
             qualities=["蓝", "金"], mates=[False, False])
         self.assertTrue(task.handle_street(task._texts))
         self.assertGreaterEqual(task.actions[0][1], 900)    # 过门槛且只剩它 → 买
+
+    def test_full_recover_card_is_lowest_priority(self):
+        """「精力补充」（全部恢复型，recover=0）也是恢复卡：同等条件必须垫底。
+
+        2026-11-08 修：旧排序键用 `recover > 0` 判「是否恢复卡」，全部恢复卡
+        recover=0 会被当成非恢复卡、反而排最前（模拟：20/130 时它压过三张精力恢复）。
+        现在按效果文本判（`is_stamina_recover_card`），属性卡恒排在它前面。
+        """
+        task = FakeTask(gacha_texts([
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+            ("精力补充", "提高精力上限10点，并恢 复所有精力，队友属性大幅提升"),
+        ], stamina="20/130", money="300", price=["100", "100"]),
+            qualities=["金", "金"], mates=[False, False])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertLess(task.actions[0][1], 900)            # 属性卡胜出（垫底规则）
+        # 池里只剩它（属性卡蓝卡不在白名单）→ 缺口 110 > 100，过门槛 → 买
+        task = FakeTask(gacha_texts([
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
+            ("精力补充", "提高精力上限10点，并恢 复所有精力，队友属性大幅提升"),
+        ], stamina="20/130", money="300", price=["100", "100"]),
+            qualities=["蓝", "金"], mates=[False, False])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertGreaterEqual(task.actions[0][1], 900)
 
     def test_recover_card_not_bought_at_full_stamina(self):
         """精力满时恢复卡不加分：别为了回不上的精力白花钱。"""
@@ -3675,6 +3714,28 @@ class CaptainRoster(unittest.TestCase):
         norms = [norm_name(n) for n in names]
         self.assertEqual(len(norms), len(set(norms)), f"下拉里有重复角色: {names}")
 
+    def test_dropdown_hides_extra_styles(self):
+        """2026-11-08 用户口径：队长下拉只留训练流 / 扭蛋流，其它流派先隐藏。"""
+        from src.ui.MonitorTab import MonitorTab
+        groups = MonitorTab._captains()
+        self.assertEqual(list(groups), ["训练流", "扭蛋流"])
+        shown = [n for ns in groups.values() for n in ns]
+        self.assertNotIn("远野桐", shown)      # 小游戏流
+        self.assertNotIn("雨森琉璃", shown)    # 商店流
+
+    def test_dropdown_keeps_group_of_configured_captain(self):
+        """正跑着的队长属于被隐藏的流派 → 它那一组要补回来。
+
+        否则 `_sync_captain` 回填不到（下拉里没这个人），勾一下勾选框
+        就会退回第一个训练流角色，把正在跑的队长悄悄换掉。
+        """
+        from src.ui.MonitorTab import MonitorTab
+        groups = MonitorTab._captains("远野桐")      # 小游戏流
+        self.assertEqual(list(groups), ["训练流", "扭蛋流", "小游戏流"])
+        self.assertIn("远野桐", groups["小游戏流"])
+        # 可见流派里的队长不该改变分组和顺序
+        self.assertEqual(list(MonitorTab._captains("近江奏")), ["训练流", "扭蛋流"])
+
     def test_wrong_spelling_still_resolves_style(self):
         from src.tasks.training.parsers import TrainingParsersMixin
         self.assertEqual(TrainingParsersMixin.style_for_name("羽漱川湊"), "扭蛋流")
@@ -4426,6 +4487,24 @@ class PurchaseRules(unittest.TestCase):
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「器材手册」", "".join(task.logs))
         self.assertNotIn("苦味饮料", "".join(task.logs).split("商店：买")[-1])
+
+    def test_shop_only_stamina_drinks_bought(self):
+        """2026-11-08 用户口径：**只有精力饮料和酸奶值得买**，其余饮料一律不买。"""
+        for name in ("全能饮料", "全能饮料+", "专属饮料", "专属饮料++",
+                     "偶然饮料", "偶然饮料++", "特训牛奶", "特训牛奶+"):
+            task, texts = self._shop([(name, 60)], money=500)
+            self.assertTrue(task.handle_shop(texts))
+            self.assertNotIn(f"买「{name}」", "".join(task.logs))
+        # 酸奶值得买（恢复量未登记 → 只垫底、不拦）
+        task, texts = self._shop([("酸奶", 60)], money=500)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「酸奶」", "".join(task.logs))
+
+    def test_shop_yogurt_is_deprioritized(self):
+        """酸奶和精力饮料一样垫底：同屏有属性类商品时先买属性类。"""
+        task, texts = self._shop([("酸奶", 60), ("弹跳秘籍", 60)], money=500)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「弹跳秘籍」", "".join(task.logs))
 
     def test_shop_stamina_gate_blocks_overflow(self):
         """2026-11-08 用户口径①：登记了恢复量的饮料，当前+恢复量超上限不买。"""
@@ -5694,6 +5773,56 @@ class MonitorButtonActions(unittest.TestCase):
         tab.toggle_auto_training()
         self.assertEqual(app.calls, [])
         self.assertTrue(task.enabled)
+
+    def test_switch_captain_keeps_score_stop_state(self):
+        """换队长要**保留**「刷到目标分」的勾选和目标分（用户 2026-11-08 口径）。
+
+        「刷到目标分」是界面自己的开关（`_score_stop_on`），队列参数只是它的
+        载体。换队长只把参数换成「新队长:原目标分」，不抹界面状态。
+        """
+        from src.ui.MonitorTab import MonitorTab
+
+        class _FakeTask:
+            def __init__(self):
+                self.config = {"指定队长": "望月透"}
+                self._queue_spec = None
+                self._score_stop_on = False
+                self._queue = None
+
+            def reset_style(self):
+                pass
+
+        tab = MonitorTab.__new__(MonitorTab)
+        task = _FakeTask()
+        tab._task = lambda: task
+        tab._update_data = lambda: None
+        tab._view = None
+        tab.set_score_stop(True)        # 勾上（目标分还没填）
+        tab.set_score_target(8000)      # 填 8000
+        self.assertTrue(task._score_stop_on)
+        self.assertEqual(task._queue_spec, "望月透:8000")
+        tab.set_captain("近江奏")        # 换队长
+        self.assertTrue(task._score_stop_on)                 # 勾选保留
+        self.assertEqual(task._queue_spec, "近江奏:8000")     # 参数换新队长、目标分保留
+
+    def test_clear_queue_state_also_clears_score_stop(self):
+        """第一栏【停止】= 一切归零：勾选也要关掉（否则界面撒谎）。"""
+        from src.ui.MonitorTab import MonitorTab
+
+        class _FakeTask:
+            def __init__(self):
+                self.config = {"指定队长": "望月透"}
+                self._queue_spec = "望月透:8000"
+                self._score_stop_on = True
+                self._queue = None
+
+        tab = MonitorTab.__new__(MonitorTab)
+        task = _FakeTask()
+        tab._task = lambda: task
+        tab._update_data = lambda: None
+        tab._clear_queue_state()
+        self.assertIsNone(task._queue_spec)
+        self.assertFalse(task._score_stop_on)
 
     def test_disconnect_resets_second_bar_state(self):
         """第一栏【停止】（断开游戏）→ 训练任务被 disable、按钮复位成【开始】。

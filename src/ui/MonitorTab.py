@@ -243,8 +243,13 @@ class MonitorTab(CustomTab):
         if self._view is not None:
             self.vBoxLayout.removeWidget(self._view)
             self._view.deleteLater()
+        task = self._task()
+        config = dict(getattr(task, "config", {}) or {}) if task else {}
+        # 当前队长要传进去：它的流派就算被 `CAPTAIN_DROPDOWN_STYLES` 隐藏了，
+        # 下拉里也得留着这个人，否则回填不到 / 一勾就被换成训练流。
         self._view = MonitorView(self._layout_data, _Actions(self), editing=self._editing,
-                                  captains=self._captains())
+                                  captains=self._captains(
+                                      (config.get("指定队长") or "").strip()))
         self.add_widget(self._view)
         self._apply_style()
         self._update_data()
@@ -427,7 +432,7 @@ class MonitorTab(CustomTab):
             "quick_enabled": self._enabled_of(self._task_by_name("QuickMatchTask")),
             # 第二栏新增控件的状态（用户 2026-11-05）：「刷到目标分」= 队列参数
             # 在内存里挂着（2026-11-07 起队列不再走配置键）
-            "score_stop": bool(getattr(task, "_queue_spec", None)) if task else False,
+            "score_stop": bool(getattr(task, "_score_stop_on", False)) if task else False,
             "score_target": self._queue_target_text(task, config),
             "stamina_allowed": bool(config.get("自动恢复精力")),
             "fail_limit": config.get("失败率上限(%)", MISSING),
@@ -558,17 +563,17 @@ class MonitorTab(CustomTab):
     def set_captain(self, name):
         """勾选框/下拉改队长：写回 task.config（Config 会自动存盘）。
 
-        **界面是唯一真相**（用户 2026-11-07 口径）：
-        不管这里写的是谁，任务里注入的多角色队列参数（`_queue_spec`）都要
-        **同时清空** —— 「我在 hacking 上每次指定新队长，旧的安排就清掉，
-        不管它是单个指定还是传参进来的队列」。运行期变量 `_style` 也清，
-        流派回到「按队长重新认」。
+        **换队长时「刷到目标分」的勾选和目标分保留**（用户 2026-11-08 口径）：
+        「刷到目标分」是界面自己的开关（`task._score_stop_on`），它和
+        agent 注入的队列参数是两回事 —— 换队长只重建队列参数为新队长
+        +原目标分，不能把勾选/分数一起抹掉。
 
-        **取消勾选 = 清空变量**（用户 2026-11-01 口径）：
-        旧版只在「勾选框被取消」时才清空，但页面初始化时勾选框是**默认勾上**的，
-        于是第一次进页面就等于「指定了一个队长」，流派被写成这个队长的
-        （扭蛋流扭到训练流），用户后面再取消勾选也晚了 ——
-        因为取消勾选时变量里已经是名字，界面上的勾选框状态和配置对不上。
+        **agent 注入的队列参数要清**（用户 2026-11-07 口径）：
+        「每次指定新队长，旧的安排就清掉，不管单个指定还是传参进来的队列」
+        —— 没勾「刷到目标分」时，换队长就把 `_queue_spec` 清空。
+
+        运行期变量 `_style` 也清，流派回到「按队长重新认」。
+        取消勾选（name 为空）时同样清 `_score_stop_on`。
 
         流派本身存在 `task._style`（运行期变量），config 里只存队长名字。
         """
@@ -583,14 +588,21 @@ class MonitorTab(CustomTab):
                 logger.info(f"监控页：指定队长 → {value}")
             else:
                 logger.info("监控页：取消指定队长 → 清空变量，流派改回按游戏内队长识别")
-        # 界面改队长 → 队列参数一并清（单个/队列都清，用户 2026-11-07 口径）
-        if getattr(task, "_queue_spec", None):
+        # 队列参数：勾着「刷到目标分」→ 换成新队长（保留目标分）；
+        # 没勾 → 清掉（可能是 agent 注入的多人队列，界面改队长即作废）。
+        if getattr(task, "_score_stop_on", False) and value:
+            old_target = self._spec_target(getattr(task, "_queue_spec", "") or "")
+            task._queue_spec = f"{value}:{old_target}" if old_target else value
+            logger.info(f"监控页：换队长 → 队列参数重建为「{task._queue_spec}」"
+                        f"（目标分勾选保留）")
+        elif getattr(task, "_queue_spec", None):
             task._queue_spec = None
             logger.info("监控页：界面指定队长 → 注入的多角色队列参数已清空")
-        # 运行期变量（`_style`）也要跟着清：不然旧流派会一直留在 _style 里，
-        # 界面上的「流派」和实际跑的还是它 —— 取消勾选后必须回到「按日历认队长」。
-        # 注意**不能**因为 config 没变就跳过：用户可能就是想让已定的流派重置。
         if not value:
+            # 取消勾选队长 = 无队长模式，顺带关掉「刷到目标分」
+            if getattr(task, "_score_stop_on", False):
+                task._score_stop_on = False
+                logger.info("监控页：取消指定队长 → 「刷到目标分」一并关闭")
             reset = getattr(task, "reset_style", None)
             if callable(reset):
                 try:
@@ -600,10 +612,32 @@ class MonitorTab(CustomTab):
         self._update_data()
 
     @staticmethod
-    def _captains() -> dict:
-        """流派 → [角色名]，数据来自业务常量 STYLE_BY_NAME。"""
+    def _spec_target(spec: str) -> int:
+        """从队列参数串里取目标分（`"队长:8000"` → 8000；没有返回 0）。"""
         try:
-            from src.tasks.training.constants import STYLE_BY_NAME
+            from src.tasks.training.queue import parse_queue
+            items = parse_queue(spec or "")
+        except Exception:  # noqa: BLE001
+            return 0
+        for item in items:
+            if item.get("target"):
+                return int(item["target"])
+        return 0
+
+    @staticmethod
+    def _captains(captain: str = "") -> dict:
+        """流派 → [角色名]，数据来自业务常量 STYLE_BY_NAME。
+
+        显示哪些分组由 `CAPTAIN_DROPDOWN_STYLES` 决定（用户 2026-11-08：
+        先只保留训练流 / 扭蛋流，商店流 / 小游戏流先隐藏）。
+
+        `captain` = 配置里当前的队长名：它那一组**不管隐藏与否都要在**——
+        下拉里没有这个人，`_sync_captain` 就回填不到，勾选框一勾
+        就会退回「第一个训练流角色」，把正在跑的队长悄悄换掉。
+        """
+        try:
+            from src.tasks.training.constants import (
+                CAPTAIN_DROPDOWN_STYLES, STYLE_BY_NAME)
         except Exception as e:  # noqa: BLE001
             logger.error(f"读取角色表失败: {e}")
             return {}
@@ -611,7 +645,18 @@ class MonitorTab(CustomTab):
         for name, style in STYLE_BY_NAME.items():
             groups.setdefault(style, []).append(name)
         order = ["训练流", "商店流", "扭蛋流", "小游戏流"]
-        return {key: sorted(groups[key]) for key in order if key in groups}
+        keys = [key for key in order if key in CAPTAIN_DROPDOWN_STYLES]
+        if not keys:                      # 常量写空了也别让下拉整个空掉
+            keys = list(order)
+        if captain:
+            try:
+                from src.tasks.training.parsers import TrainingParsersMixin
+                style = TrainingParsersMixin.style_for_name(captain)
+            except Exception:             # noqa: BLE001
+                style = ""
+            if style and style in groups and style not in keys:
+                keys = [key for key in order if key in set(keys) | {style}]
+        return {key: sorted(groups[key]) for key in keys if key in groups}
 
     # ---------- 快捷操作 ----------
 
@@ -717,13 +762,18 @@ class MonitorTab(CustomTab):
         self._update_data()
 
     def _clear_queue_state(self):
-        """清掉训练任务上的队列参数 / 内存队列 / 进度文件（第一栏【停止】与
-        第二栏【■】共用的那半段逻辑）。任务不存在时静默跳过。"""
+        """清掉训练任务上的队列参数 / 内存队列 / 进度文件 / 目标分开关
+        （第一栏【停止】与第二栏【■】共用的那半段逻辑）。任务不存在时静默跳过。
+
+        「一切归零」：连界面「刷到目标分」的勾选也一起关掉（`_score_stop_on`），
+        否则参数被清了、勾还亮着，界面在撒谎。
+        """
         task = self._task()
         if task is None:
             return
         task._queue_spec = None
         task._queue = None
+        task._score_stop_on = False
         try:
             from src.tasks.training.queue import QUEUE_PROGRESS
             if os.path.exists(QUEUE_PROGRESS):
@@ -796,12 +846,16 @@ class MonitorTab(CustomTab):
           目标分暂时为空 → 队列参数挂「队长」（无目标），该角色按未达标
           一直刷，填入分数后下一局自动按目标判定。
         - 取消勾选：清掉队列参数，恢复「跑完一局就结束」的老行为。
+
+        **勾选状态存在 `task._score_stop_on`**（界面自己的开关，和 agent 注入
+        的队列参数分开）：换队长时勾选/目标分要保留，只重建队列参数。
         """
         task = self._task()
         if task is None:
             logger.warning("监控页：没有找到训练任务，「刷到目标分」未保存")
             return
         if not enabled:
+            task._score_stop_on = False
             if getattr(task, "_queue_spec", None):
                 task._queue_spec = None
                 logger.info("监控页：刷到目标分 → 关（清队列参数，跑完一局就结束）")
@@ -810,17 +864,16 @@ class MonitorTab(CustomTab):
         captain = (task.config.get("指定队长") or "").strip()
         target = self._read_target(task)
         if not captain:
-            logger.warning("监控页：勾「刷到目标分」失败 —— 请先在左侧指定队长",
-                           notify=True)
+            logger.warning("监控页：勾「刷到目标分」失败 —— 请先在左侧指定队长")
             self.notify_stop_check()
             return
+        task._score_stop_on = True
         task._queue_spec = f"{captain}:{target}" if target else captain
         if target:
-            logger.info(f"监控页：刷到目标分 → 开（{captain} 刷到 {target} 分后停止）",
-                        notify=True)
+            logger.info(f"监控页：刷到目标分 → 开（{captain} 刷到 {target} 分后停止）")
         else:
             logger.warning(f"监控页：刷到目标分 → 开（{captain}，目标分未填 —— "
-                           f"填入「目标分」输入框后自动生效）", notify=True)
+                           f"填入「目标分」输入框后自动生效）")
         self._update_data()
 
     def set_score_target(self, target: int):
@@ -831,8 +884,7 @@ class MonitorTab(CustomTab):
         target = max(0, int(target or 0))
         if not target:
             return                          # 清空/乱输入不动参数，等勾选时再校验
-        spec = getattr(task, "_queue_spec", None) or ""
-        if not spec:
+        if not getattr(task, "_score_stop_on", False):
             return                          # 没勾「刷到目标分」，只是提前记着，不生效
         captain = (task.config.get("指定队长") or "").strip()
         if not captain:
@@ -856,7 +908,7 @@ class MonitorTab(CustomTab):
         if view is not None:
             task = self._task()
             view._syncing_extras = False
-            view._sync_extras({"score_stop": bool(getattr(task, "_queue_spec", None))
+            view._sync_extras({"score_stop": bool(getattr(task, "_score_stop_on", False))
                                if task else False})
 
     def set_stamina_allowed(self, allowed: bool):
@@ -875,8 +927,7 @@ class MonitorTab(CustomTab):
         if bool(task.config.get("自动恢复精力")) != value:
             task.config["自动恢复精力"] = value
             logger.info("监控页：允许吃专注药 → " + ("开（专注不足自动喝饮料，不花钻石）"
-                                              if value else "关（专注不足也不喝，宁停不耗）"),
-                        notify=True)
+                                              if value else "关（专注不足也不喝，宁停不耗）"))
         self._update_data()
 
     def set_quick_match(self, enabled):
@@ -1069,7 +1120,7 @@ class MonitorTab(CustomTab):
                          getattr(task, "_queue", None))
         self._clear_queue_state()
         if had_queue:
-            logger.info("监控页：完全停止 → 队列参数与进度已清空", notify=True)
+            logger.info("监控页：完全停止 → 队列参数与进度已清空")
         else:
             logger.info("监控页：完全停止 → 脚本已停（没有队列参数）")
         # 接入中点停止的边界：start_controller 的接入流程走完后会把任务
@@ -1089,7 +1140,7 @@ class MonitorTab(CustomTab):
                     try:
                         t.disable()
                         self._clear_queue_state()
-                        logger.info("监控页：接入完成后已补停（队列参数同步清空）", notify=True)
+                        logger.info("监控页：接入完成后已补停（队列参数同步清空）")
                     except Exception as e:  # noqa: BLE001
                         logger.error(f"接入完成后补停失败: {e}")
 

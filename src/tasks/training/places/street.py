@@ -227,9 +227,13 @@ class StreetPlace:
         # 取代 2026-10-27/11-03 的「恢复卡同分要赢」；都相同再比价格）：
         # 品质 → 增强款 → 队友 → **非恢复优先** → 恢复价值 → 便宜的。
         # 非恢复卡恒为 1、恢复卡恒为 0，恢复卡只有池里全是恢复卡时才轮得到。
-        best = max(ok, key=lambda c: (c["score"], bool(c.get("enhanced")),
-                                      c["mate"], not c.get("recover"),
-                                      recover_bonus(c), -c["price"]))
+        # 2026-11-08 修：判据从 `recover > 0` 改成按效果文本
+        # （`is_stamina_recover_card`）——「精力补充」这类**全部恢复卡 recover=0**，
+        # 旧判据把它当成非恢复卡，反而排在所有恢复卡前面（同类 bug 的前提已消失）。
+        best = max(ok, key=lambda c: (
+            c["score"], bool(c.get("enhanced")), c["mate"],
+            not self.is_stamina_recover_card(c.get("effect")),
+            recover_bonus(c), -c["price"]))
         return best, detail, cards
 
     # ---------- 地图侧：值不值得来 ----------

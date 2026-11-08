@@ -11,10 +11,16 @@
 - 点击前必须 `SetForegroundWindow`（游戏不在前台时真实点击会落到别的窗口）。
 - 点击前把光标移到目标并留一点时间，点完还原光标，避免打扰用户。
 - `mouse_down/mouse_up` 成对，异常也要抬起，否则会卡住鼠标键。
-- **用户键鼠操作优先**（见下面的 USER_IDLE_* 常量，2026-10-29 改定）：这个游戏
-  只有前台才吃真实点击，所以脚本必须抢前台——那就把"抢的时机"交给用户：你一动
-  键鼠，脚本立刻停手；你停手满 `user_idle_wait` 秒（默认 3），才重新 Alt 拉起
-  游戏继续挂机。等待没有上限，绝不因为"等太久"就去抢正在操作的用户。
+- **用户键鼠操作优先**（2026-10-29 定，2026-11-08 换判据）：这个游戏只有前台才
+  吃真实点击，所以脚本必须抢前台——那就把"抢的时机"交给用户：你一动键鼠，脚本
+  立刻停手；你停手满 `user_idle_wait` 秒（默认 3），才重新 Alt 拉起游戏继续挂机。
+  等待没有上限，绝不因为"等太久"就去抢正在操作的用户。
+
+  判据从 `GetLastInputInfo` 换成了低级钩子（`user_activity.UserActivityMonitor`）：
+  旧判据只有一个时间戳，分不清是脚本注入的还是真人动的，动作执行期间（点击 0.15s、
+  抢前台 0.6s、拖拽 0.3s+）用户的输入会被记成"脚本自己的"，下一步就直接抢——
+  实测表现就是"我正用着鼠标，光标被拽走了"。钩子按 `LLMHF_INJECTED` /
+  `LLKHF_INJECTED` 过滤注入事件，只认真人。
 """
 
 import ctypes
@@ -29,6 +35,8 @@ from ok.device.interaction_methods.base import BaseInteraction
 from ok.device.interaction_methods.keys import vk_key_dict
 from ok.util.logger import Logger
 
+from src.interaction.user_activity import USER_ACTIVITY
+
 logger = Logger.get_logger(__name__)
 
 CURSOR_SETTLE = 0.04     # 绝对定位后等引擎采样（一步到位，不用滑行）
@@ -37,16 +45,15 @@ FOREGROUND_WAIT = 0.15
 # ---------- 用户优先（前台挂机） ----------
 # 2026-10-29 需求（第二版）：**用户任意键鼠操作优先**。之前的写法是"暂停 5 秒
 # 到点就继续"，到点后第一个动作就是 Alt 抢前台，用户刚停手就被踢下焦点，等于没让。
-# 现在改成：只看"用户最后一次输入距今多久"，静默满 user_idle_wait 秒才算空闲。
-# 判据用 GetLastInputInfo：系统"最后一次输入事件"的时间戳（键盘、鼠标移动、
-# 滚轮、点击都算）。脚本自己的 mouse_event / keybd_event 也会更新它，所以每次
-# 脚本动作结束后把这个 tick 记成基准；tick 变了 = 中间有别人的输入。
-# 比低级钩子（WH_KEYBOARD_LL / WH_MOUSE_LL）安全：钩子回调跑在 Python 里会拖慢
-# 整个系统的输入响应，这里只是读一个时间戳。
-USER_IDLE_WAIT = 3.0         # 秒：用户最后一次输入之后静默这么久才继续（0 = 不等，一直抢）
+# 现在改成：只看"用户最后一次**真人**输入距今多久"，静默满 user_idle_wait 秒才算空闲。
+#
+# 判据在 2026-11-08 换成低级钩子（见 user_activity.py）：`GetLastInputInfo` 分不清
+# 脚本注入和真人输入，动作执行期间用户的输入会被记成"脚本自己的"，下一步立刻抢。
+# 钩子按 flags 里的 INJECTED 位过滤，注入的一律不算。
+USER_IDLE_WAIT = 3.0         # 秒：用户最后一次真人输入之后静默这么久才继续（0 = 不等，一直抢）
 IDLE_POLL = 0.1              # 秒：等待期间的采样间隔
 IDLE_LOG_EVERY = 30.0        # 秒：等这么久还没空闲就提醒一次（只提醒，**不强制恢复**）
-STEAL_MARK_SETTLE = 0.02     # 秒：脚本动作结束后等系统把这次注入记进输入队列
+STEAL_MARK_SETTLE = 0.02     # 秒：旧判据记账时等系统把注入记进输入队列（钩子生效后不用）
 
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
@@ -85,6 +92,7 @@ class GirlsInteraction(BaseInteraction):
         # 任务层用它挂紧急停止（等待可能很久，热键不能等到用户停手才生效）。
         self.abort_check = None
         self._stop_requested = False     # 等待期间收到停止请求 → 下一次点击直接跳过
+        self._activity_logged = False    # 钩子状态只打一次日志，别刷屏
 
     @property
     def steal_pause(self):
@@ -130,6 +138,10 @@ class GirlsInteraction(BaseInteraction):
 
         # 用户还在用电脑 → 一声不响地等，绝不抢焦点
         self.wait_for_user_idle()
+        # 等待期间用户点了【暂停】/按了停止键：不要再抢前台
+        if self._blocked():
+            logger.info("收到停止/暂停请求 → 放弃抢前台")
+            return False
 
         injected = False
         try:
@@ -200,9 +212,37 @@ class GirlsInteraction(BaseInteraction):
 
     # ---------- 用户优先（键鼠操作让路） ----------
 
+    def _blocked(self):
+        """外部（任务层）说「现在不要动手」：紧急停止 / 已停止 / 已暂停。
+
+        和 `abort_check` 是同一个语义。`_stop_requested` 是「等待中被打断」留下的
+        标记，消费一次就清掉，否则下一次点击会白跳。
+        """
+        if self._stop_requested:
+            self._stop_requested = False
+            return True
+        if self.abort_check is None:
+            return False
+        try:
+            return bool(self.abort_check())
+        except Exception as e:                      # noqa: BLE001
+            logger.debug(f"abort_check 失败（按不打断处理）: {e}")
+            return False
+
+    def user_active(self, window=0.2):
+        """最近 `window` 秒内有没有**真人**键鼠输入（脚本注入的不算）。
+
+        钩子不可用时返回 False —— 也就是退回旧行为：只有 wait_for_user_idle 会挡，
+        动作执行途中挡不住。用于「等待结束后又抓起鼠标」这种二次校验。
+        """
+        return USER_ACTIVITY.available and USER_ACTIVITY.idle_seconds() < window
+
     @staticmethod
     def _last_input_tick():
-        """系统最后一次输入事件的 GetTickCount 毫秒；读不到返回 None。"""
+        """系统最后一次输入事件的 GetTickCount 毫秒；读不到返回 None。
+
+        只在钩子装不上时兜底用：这个值分不清注入和真人输入，见模块 docstring。
+        """
         try:
             info = _LastInputInfo()
             info.cbSize = ctypes.sizeof(_LastInputInfo)
@@ -227,13 +267,12 @@ class GirlsInteraction(BaseInteraction):
         return delta / 1000.0
 
     def mark_script_input(self, settle=STEAL_MARK_SETTLE):
-        """动作结束：把当前的「最后一次输入」认定成脚本自己的。
+        """旧判据的记账口：把当前的「最后一次输入」认定成脚本自己的。
 
-        脚本注入的 mouse_event / keybd_event 也会更新 GetLastInputInfo，不记账的话
-        下一次检测会把脚本自己的点击当成用户输入，白等 user_idle_wait 秒。settle 是
-        等系统把这次注入记进输入队列的时间（注入是异步入队的）。
+        钩子生效后不需要它（注入事件本来就带 INJECTED 标志，不会算成用户活动），
+        只有在钩子装不上、退回 tick 判据时才有意义。
         """
-        if self.user_idle_wait <= 0:
+        if self.user_idle_wait <= 0 or USER_ACTIVITY.available:
             return
         if settle:
             time.sleep(settle)
@@ -244,28 +283,36 @@ class GirlsInteraction(BaseInteraction):
     def wait_for_user_idle(self):
         """动作前调用：用户还在操作就一直等，直到他停手满 user_idle_wait 秒。
 
-        判据是「最后一次输入事件距今多久」，不是「暂停了几秒」。差别很关键：
-        旧写法暂停到点就继续，而继续的第一个动作就是 Alt 抢前台，用户刚停手就被
-        踢下焦点，等于没让。现在只有用户真的静默满 user_idle_wait 秒才动手。
+        判据是「最后一次**真人**输入距今多久」（低级钩子，注入事件已过滤），不是
+        「暂停了几秒」。旧写法暂停到点就继续，而继续的第一个动作就是 Alt 抢前台，
+        用户刚停手就被踢下焦点，等于没让；而旧判据（GetLastInputInfo）还会把用户在
+        动作执行期间的输入记成"脚本自己的"，于是下一步立刻抢。现在只有真的静默
+        满 user_idle_wait 秒才动手。
 
         **没有等待上限**：用户的操作永远优先。如果日志里出现"仍在操作"的提醒，
-        说明有别的程序在持续注入键鼠事件，不是用户本人在用 —— 去查那个程序，
-        不要在这里加"等太久就抢"的兜底。
+        说明有别的程序在持续注入**带 INJECTED 标志**的键鼠事件——但那些已被过滤，
+        出现这个提醒就真的是有人在动（或输入驱动在冒充真人）。
 
         返回这次是否等过（复盘用）。0 = 不等（一直抢）。
         """
         if self.user_idle_wait <= 0:
             return False
-        tick = self._last_input_tick()
-        if tick is None:
+        if not USER_ACTIVITY.start():
+            if not self._activity_logged:
+                self._activity_logged = True
+                logger.warning(f"输入判据：低级钩子装不上（{USER_ACTIVITY.error}）"
+                               "→ 退回 GetLastInputInfo，动作执行途中的输入检测不到")
+            return self._wait_for_user_idle_by_tick()
+        if not self._activity_logged:
+            self._activity_logged = True
+            logger.info("输入判据：低级钩子已启用（只认真人键鼠，注入事件已过滤）")
+        if USER_ACTIVITY.idle_seconds() >= self.user_idle_wait:
             return False
-        if self._script_input_tick is None:
-            self._script_input_tick = tick
-            return False
-        # tick 跟基准一致 = 上次脚本记账之后没人动过键鼠
-        if tick == self._script_input_tick:
-            return False
+        self._wait_until_idle(USER_ACTIVITY.idle_seconds)
+        return True
 
+    def _wait_until_idle(self, idle_getter):
+        """阻塞到 `idle_getter()` 返回 >= user_idle_wait；期间响应停止/暂停。"""
         start = time.monotonic()
         self.steal_count += 1
         logger.info(f"检测到键鼠操作 → 暂停，等你停手 {self.user_idle_wait:.1f} 秒后继续")
@@ -273,14 +320,12 @@ class GirlsInteraction(BaseInteraction):
         while True:
             time.sleep(IDLE_POLL)
             if self.abort_check is not None and self.abort_check():
-                # 用户按了停止键：不要再抢前台（那一瞬间最不该做的事）,也不必真点这一下
-                logger.info("收到停止请求 → 结束等待，取消本次操作")
+                # 用户按了停止键/点了暂停：不要再抢前台（那一瞬间最不该做的事），
+                # 也不必真点这一下
+                logger.info("收到停止/暂停请求 → 结束等待，取消本次操作")
                 self._stop_requested = True
-                return True
-            now_tick = self._last_input_tick()
-            if now_tick is None:
-                now_tick = tick
-            idle = self._idle_seconds(now_tick) or 0.0
+                return
+            idle = idle_getter() or 0.0
             if idle >= self.user_idle_wait:
                 break
             waited = time.monotonic() - start
@@ -288,9 +333,27 @@ class GirlsInteraction(BaseInteraction):
                 last_log = time.monotonic()
                 logger.info(f"用户仍在操作 → 继续等待（已等 {waited:.0f} 秒，最近一次输入 {idle:.1f} 秒前）")
 
-        self._script_input_tick = now_tick
         logger.info(f"用户已停手 {self.user_idle_wait:.1f} 秒 → 恢复挂机"
                     f"（本次让路 {time.monotonic() - start:.1f} 秒）")
+
+    def _wait_for_user_idle_by_tick(self):
+        """钩子装不上时的兜底：旧的 GetLastInputInfo 判据。
+
+        比旧版多修一处：`_script_input_tick is None`（任务刚启动、interaction 对象
+        刚重建）**不再直接放行**，而是按「刚刚有人操作」处理，先等够 user_idle_wait。
+        """
+        tick = self._last_input_tick()
+        if tick is None:
+            return False
+        if self._script_input_tick is None:
+            self._script_input_tick = tick
+        elif tick == self._script_input_tick:
+            # tick 跟基准一致 = 上次脚本记账之后没人动过键鼠
+            return False
+        if (self._idle_seconds(tick) or 0.0) >= self.user_idle_wait:
+            return False
+        self._wait_until_idle(lambda: self._idle_seconds(self._last_input_tick()))
+        self._script_input_tick = self._last_input_tick()
         return True
 
     # ---------- 光标 ----------
@@ -344,67 +407,98 @@ class GirlsInteraction(BaseInteraction):
         "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
     }
 
+    def _restore_cursor(self, saved, target):
+        """点完把光标还给用户，但**只在它仍停在我们放的位置时**。
+
+        `SetCursorPos` 不产生 raw 输入（游戏感知不到），所以不会把游戏内的光标搞错。
+        但如果用户在我们按住的那 100ms 里动了鼠标，光标已经不在 `target` 上，这时候
+        再复原就是硬拽——2026-11-08 用户反馈"用着鼠标被抢走"的一部分就是这里。
+        """
+        if saved is None or target is None:
+            return
+        try:
+            if tuple(win32api.GetCursorPos()) == (int(target[0]), int(target[1])):
+                win32gui.SetCursorPos(int(saved[0]), int(saved[1]))
+        except Exception:                           # noqa: BLE001
+            pass
+
     def click(self, x=-1, y=-1, move_back=False, name=None, down_time=0.03, move=True, key="left"):
         if x < 0 or y < 0:
             x = round(self.capture.width * 0.5)
             y = round(self.capture.height * 0.5)
 
         # 用户还在用键鼠 → 一声不响地等着（2026-10-29：用户操作永远优先）
+        if self._blocked():
+            return
         self.wait_for_user_idle()
-        if self._stop_requested:
-            # 等待期间按了紧急停止：这一下不点，把焦点/鼠标还给用户
-            self._stop_requested = False
-            logger.info("已收到停止请求，本次点击跳过")
+        if self._blocked():
+            logger.info("停止/暂停请求 → 本次点击跳过")
             return
 
         # 抢不到前台就**绝不点击**：真实鼠标事件一定会落到别的窗口上，
         # 轻则空点、重则把别的程序按坏（实测点到了 ok-script GUI 上）。
         if not self.ensure_foreground():
+            if self._blocked():         # 是抢前台途中被停止/暂停叫停的，不是故障
+                return
             raise RuntimeError("游戏窗口未能置前，放弃本次点击")
+        # 等完到真正点下去之间还有几百毫秒（抢前台 + 定位 + 按住）。这期间用户
+        # 又抓起鼠标就收手——这是旧判据（只有动作前查一次）覆盖不到的窗口。
+        if self.user_active(0.2):
+            logger.info("等待结束后你又开始操作 → 放弃本次点击（不抢前台、不动光标）")
+            return
         saved = win32api.GetCursorPos()
-        if move:
-            self._move_cursor(x, y)
+        target = self._move_cursor(x, y) if move else None
         # 按住时间不能太短：实测「启程」这类按钮 70ms 的点击会被丢弃，
         # 人手点击一般在 80~150ms，这里统一抬到 100ms 起步。
         down_time = max(float(down_time), 0.10)
+        # 点下去之前最后再看一眼：光标刚被用户接走就整下放弃（不要在别人手上按鼠标）
+        if self.user_active(0.08):
+            logger.info("点击前检测到你接管了鼠标 → 放弃本次点击")
+            self._restore_cursor(saved, target)
+            return
         down, up = self._EVENTS.get(key, self._EVENTS["left"])
         try:
             win32api.mouse_event(down, 0, 0, 0, 0)
             time.sleep(down_time)
         finally:
             win32api.mouse_event(up, 0, 0, 0, 0)
-            # 点完把物理光标还给用户：SetCursorPos **不产生 raw 输入**，
-            # 游戏内部的光标仍停在点击点，下一次点击前会重新绝对定位，
-            # 所以不会像「用 SetCursorPos 代替移动」那样把坐标搞错。
-            # 2026-10-26 用户反馈：脚本跑起来抢不到鼠标。
-            try:
-                win32gui.SetCursorPos(int(saved[0]), int(saved[1]))
-            except Exception:                       # noqa: BLE001
-                pass
-            # 这次点击的 mouse_event 会更新系统「最后一次输入」时间戳；记成脚本
-            # 自己的，下次检测才不会把自己的点击误判成用户操作。
+            self._restore_cursor(saved, target)
             self.mark_script_input()
 
     def mouse_down(self, x=-1, y=-1, name=None, key="left"):
         if x < 0 or y < 0:
             x = round(self.capture.width * 0.5)
             y = round(self.capture.height * 0.5)
+        if self._blocked():
+            return
         self.wait_for_user_idle()
-        self.ensure_foreground()
+        if self._blocked() or self.user_active(0.2):
+            return
+        if not self.ensure_foreground():
+            return
         self._move_cursor(x, y)
         self._down_key = key
         win32api.mouse_event(self._EVENTS.get(key, self._EVENTS["left"])[0], 0, 0, 0, 0)
-        # 按下也是一次注入：不记账的话，下一次动作会把它当成"用户还在操作"。
         self.mark_script_input()
 
     def mouse_up(self, name=None, key="left"):
-        key = getattr(self, "_down_key", key)
+        # 抬起永远不拦：停止/异常时必须能把按住的键松开。
+        # 但**没按下过就不要发空 UP** —— 那会把用户正在拖的东西松掉。
+        if getattr(self, "_down_key", None) is None:
+            return
+        key = self._down_key
+        self._down_key = None
         win32api.mouse_event(self._EVENTS.get(key, self._EVENTS["left"])[1], 0, 0, 0, 0)
         self.mark_script_input()
 
     def scroll(self, x, y, scroll_amount):
+        if self._blocked():
+            return
         self.wait_for_user_idle()
-        self.ensure_foreground()
+        if self._blocked() or self.user_active(0.2):
+            return
+        if not self.ensure_foreground():
+            return
         self._move_cursor(x, y)
         win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0, int(scroll_amount) * 120, 0)
         self.mark_script_input()
@@ -413,8 +507,13 @@ class GirlsInteraction(BaseInteraction):
         # 2026-11-01：删掉没用过的 `down_btn` 参数（vulture 报的唯一一处真死参数，
         # 全仓无调用点传它）。其余 move_back / settle_time 是 ok 框架
         # `interaction_methods/base.py` 的签名契约，必须留着 —— 见 .vulture_whitelist.py
+        if self._blocked():
+            return
         self.wait_for_user_idle()
-        self.ensure_foreground()
+        if self._blocked() or self.user_active(0.2):
+            return
+        if not self.ensure_foreground():
+            return
         self._move_cursor(int(x), int(y))
         self.mark_script_input()
 
@@ -428,14 +527,22 @@ class GirlsInteraction(BaseInteraction):
 
         节奏对齐实测正常的 `tools/collect_ssr.py:Screen.swipe`：按住后停 0.10s
         让游戏判定成拖动，然后匀速走 24 步（每步不额外 settle），松手前停 0.05s。
+
+        拖拽中途每 6 步看一眼真人输入：用户抢过鼠标就提前松手（finally 里松），
+        否则整段拖拽期间用户完全没法拿回指针。
         """
         total = float(duration)
         if total > 5:                       # 框架传的是毫秒
             total /= 1000.0
         total = max(total, 0.05)
 
+        if self._blocked():
+            return
         self.wait_for_user_idle()
-        self.ensure_foreground()
+        if self._blocked() or self.user_active(0.2):
+            return
+        if not self.ensure_foreground():
+            return
         self._move_to(x1, y1)
         time.sleep(0.05)
         win32api.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
@@ -444,6 +551,9 @@ class GirlsInteraction(BaseInteraction):
         try:
             time.sleep(0.10)
             for i in range(1, steps + 1):
+                if i % 6 == 0 and self.user_active(0.05):
+                    logger.info("拖拽中你接管了鼠标 → 提前松手")
+                    break
                 nx = int(x1 + (x2 - x1) * i / steps)
                 ny = int(y1 + (y2 - y1) * i / steps)
                 self._move_to(nx, ny, settle=0)
@@ -462,14 +572,20 @@ class GirlsInteraction(BaseInteraction):
         return win32api.VkKeyScan(str(key)) & 0xFF
 
     def send_key_down(self, key):
+        if self._blocked():
+            return
         self.wait_for_user_idle()
-        self.ensure_foreground()
+        if self._blocked() or self.user_active(0.2):
+            return
+        if not self.ensure_foreground():
+            return
         vk = self._vk(key)
         win32api.keybd_event(vk, 0, 0, 0)
         self._pressed_keys[str(key).lower()] = self._pressed_keys.get(str(key).lower(), 0) + 1
         self.mark_script_input()
 
     def send_key_up(self, key):
+        # 抬起永远不拦：停止/异常时必须能把按住的键松开
         name = str(key).lower()
         if self._pressed_keys.get(name, 0) <= 0:
             return
@@ -484,7 +600,11 @@ class GirlsInteraction(BaseInteraction):
         self.send_key_up(key)
 
     def input_text(self, text, **kwargs):
+        if self._blocked():
+            return
         self.wait_for_user_idle()
+        if self._blocked() or self.user_active(0.2):
+            return
         for ch in str(text):
             vk = win32api.VkKeyScan(ch) & 0xFF
             win32api.keybd_event(vk, 0, 0, 0)
