@@ -73,7 +73,7 @@ class TalentHandlers:
 
     # ==================== 模拟炒股（天赋「股神!」：闪堂电 / 亚理纱贾丝敏） ====================
 
-    STOCK_TITLE = "请选择你要投资的股票"
+    STOCK_TITLE = labels.STOCK_PICK_TITLE
     STOCK_TYPES = ("稳健型", "平衡型", "风险型")
 
     def handle_stock_pick(self, texts):

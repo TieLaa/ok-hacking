@@ -850,6 +850,13 @@ class MatchHandlers:
             return False
         if self.match_text(texts, ("上新时间", "能力详情")) is not None:
             return False
+        # 炒股选股页（天赋「股神!」，2026-11-08 实跑）：标题三张卡名 + 股票名 +
+        # 卡片说明全在 cx≈0.50 那一列，形态判据「竖向 3 选 1」会认领它，
+        # 于是每拍只点中间那张卡、从不点「确定」→ 连点 120+ 次、接管 3 次后停任务
+        # （logs/debug/1108-231656_noresp3s）。这一页归 handle_stock_pick：
+        # 按队友数选卡**再点确定**。注册表顺序已把它排在本 handler 之前，这里是第二道闸。
+        if self.match_text(texts, labels.STOCK_PICK_TITLE) is not None:
+            return False
         if self.match_text(self.texts_in_region(texts, "main_action"),
                            ("VS", "比赛", "训练")) is not None:
             return False

@@ -5119,6 +5119,45 @@ class TalentStockEvent(unittest.TestCase):
         self.assertGreater(task.actions[0][1], int(task.width * 0.6))   # 最右那张
         self.assertIn("队友2", "".join(task.logs))
 
+    # ---------- 2026-11-08 实跑：handle_event_choice 抢走选股页，连点 120+ 次 ----------
+
+    # 真实帧 logs/debug/1108-231656_noresp3s/ocr.txt（1549x871，第1周星期三，零用钱 200）：
+    # 三张卡「稳健型/风险型/平衡型」+ 股票名 + 卡片说明**全在 cx≈0.50 那一列**，
+    # 于是「竖向 3 选 1」形态判据认领了这一页 —— 每拍只点中间那张卡、从不点「确定」，
+    # 界面不动，接管 3 次后任务停（用户看到的就是「又卡住了」）。
+    def _stuck_stock_texts(self):
+        return [box(616, 115, "请选择你要投资的股票", 317, 37),
+                box(1389, 99, "跳过", 66, 35),
+                box(402, 186, "灵猫娱乐宣布裁员2000人。", 326, 37),
+                box(455, 315, "相信奇迹！", 142, 39),
+                box(340, 370, "稳健型", 102, 40),
+                box(720, 369, "风险型", 109, 40),
+                box(1104, 368, "平衡型", 106, 45),
+                box(319, 418, "北海石油", 141, 43),
+                box(704, 418, "灵猫娱乐", 141, 43),
+                box(1088, 418, "丰川重工", 143, 43),
+                box(255, 463, "石油，无需多言，懂的", 271, 32),
+                box(641, 463, "人类游戏史上战国题材", 269, 32),
+                box(1021, 463, "豪车缔造者，造车企业", 273, 32),
+                box(381, 608, "30", 47, 40),
+                box(757, 610, "200", 64, 37),
+                box(1138, 607, "120", 67, 41),
+                box(536, 747, "放弃", 78, 54),
+                box(928, 753, "确定", 76, 43)]
+
+    def test_event_choice_yields_to_stock_page(self):
+        """选股页必须让给 handle_stock_pick：通用选项 handler 点了卡不点「确定」。"""
+        task = FakeTask(self._stuck_stock_texts())
+        self.assertFalse(task.handle_event_choice(task._texts))
+        self.assertEqual(task.actions, [])          # 一下都不许点
+
+    def test_stock_pick_runs_before_event_choice(self):
+        """注册表顺序：炒股页在 handle_event_choice 之前（否则同上，只点卡不点确定）。"""
+        from src.tasks.training.handlers import HANDLERS
+        names = [h.__name__ for h in HANDLERS]
+        self.assertLess(names.index("handle_stock_pick"),
+                        names.index("handle_event_choice"))
+
     def test_stock_result_clicks_sell(self):
         """股票走势页只能点「卖出」。"""
         texts = [box(600, 240, "第2周股票走势", 500, 60),

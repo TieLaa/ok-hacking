@@ -86,14 +86,17 @@ HANDLERS = (
     # 必须排在通用「确定/下一步」类 handler 之前，否则会被 popup 的「关闭/取消」抢走。
     TrainingHandlers.handle_breath_difficulty,
     TrainingHandlers.handle_subject_select,
-    MatchHandlers.handle_event_choice,
-    MatchHandlers.handle_prepare,
-    # 炒股页（天赋「股神!」，handlers/talent.py）：必须在 handle_dialog_continue 之前。
-    # 2026-10-30 事故：股票走势面板右上角有「跳过」（快进图标），
-    # handle_dialog_continue 先命中就反复点它，什么都推进不了，
-    # 3 轮「点不动」后任务直接停。炒股页自己的「卖出/下一步」永远轮不到。
+    # 炒股页（天赋「股神!」，handlers/talent.py）：必须排在 handle_event_choice **之前**。
+    # 2026-11-08 实跑事故（logs/debug/1108-231656_noresp3s）：选股页的「稳健型/
+    # 风险型/平衡型」+ 股票名 + 卡片说明全在居中的一列，handle_event_choice 的
+    # 「竖向 3 选 1」判据先命中 → 每拍只点中间那张卡、从不点「确定」，
+    # 界面纹丝不动，接管 3 次后任务停。桩（选卡 + 确定）只有 handle_stock_pick 会做。
+    # 同时必须在 handle_dialog_continue 之前：股票走势面板右上角有「跳过」（快进图标），
+    # 被它先命中就反复点跳过、什么都推进不了（2026-10-30 事故）。
     TalentHandlers.handle_stock_pick,
     TalentHandlers.handle_stock_result,
+    MatchHandlers.handle_event_choice,
+    MatchHandlers.handle_prepare,
     EntryHandlers.handle_dialog_continue,
     EntryHandlers.handle_lobby,
     EntryHandlers.handle_training_entry,
