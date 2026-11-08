@@ -49,8 +49,14 @@ ARCADE_WAIT_MARKS = ("出行", "公园", "步行街", "游戏厅", "失败率", 
 # 为什么不能只点中央（2026-11-08 实跑，logs/debug/1108-231656_noresp3s）：
 # 炒股选股页是「选卡 → 确定」两段式，屏幕中央正好是中间那张卡 —— 三次接管全
 # 点在卡上，界面纹丝不动，一分钟后被判死停任务。两段式页面只有点按钮才推进。
+#
+# **接管永远不点「确定」**（2026-11-09 收紧）：扭蛋选卡页（「请选择1个扭蛋」+
+# 60/80/100 + 确定）和游戏厅选卡页（「请选择一个小游戏」+ 价格 + 确定）整页
+# 没有「购买/钻石」字样，用关键词黑名单根本挡不住 —— 点下去就是替用户花零用钱，
+# 还绕过了 handle_street / handle_arcade 的品质与精力判断。所以只允许点
+# 「下一步 / 决定 / 过场提示」这三类不会产生消费的按钮；两段式页面推不动就
+# 让 3 次接管后的停任务兜底（停任务比乱花钱安全，正解在 handler 判据/顺序）。
 STUCK_ADVANCE_BUTTONS = ("next", "decide")
-STUCK_ADVANCE_TEXTS = ("点击屏幕继续", "继续")
 
 # 监控页（src/ui/MonitorTab.py）只认「域」这一级，不逐个 handler 维护文案。
 # 新增 handler 只要模块不变就自动归类，不会因为漏配而显示成技术名。
@@ -784,9 +790,13 @@ class TrainingFlowMixin:
     def _stuck_advance(self, texts):
         """卡住接管时先点「推进型」按钮；点不到返回 False（回退点屏幕中央）。
 
-        顺序：下一步 → 决定 → 点击屏幕继续/继续 → 确定。
-        **花钱/删档/花钻石的页面不给「确定」**：接管只帮用户把流程推过去，
-        不替用户花钱或删档（那种页面退回点中央，宁可多接管一轮）。
+        只点这三类，**永远不点「确定」**：
+          1. `下一步` / `决定`（`labels.BUTTONS`，全等匹配）；
+          2. `labels.TAP_TO_CONTINUE_TEXTS` 的过场提示（全等，不用包含匹配）。
+
+        为什么不点「确定」：扭蛋/游戏厅的选卡页整页没有「购买」字样，页面上
+        只有「确定」—— 一点就是花零用钱，而且绕过专属 handler 的品质/精力判断。
+        两段式页面（选卡 → 确定）推不动，就让 3 次接管后的停任务兜底。
 
         2026-11-08 事故：接管原本无条件点屏幕中央，而炒股选股页中央就是中间
         那张卡 → 三次接管全白费、一分钟后停任务（`logs/debug/1108-231656_noresp3s`）。
@@ -796,16 +806,12 @@ class TrainingFlowMixin:
                 self.log_warning(
                     f"卡住接管：点「{labels.BUTTONS[key][0]}」推进（不再点中央）")
                 return True
-        for text in STUCK_ADVANCE_TEXTS:
-            if self.click_text((text,), after_sleep=0.35, must=False):
-                self.log_warning(f"卡住接管：点「{text}」推进（不再点中央）")
+        for text in labels.TAP_TO_CONTINUE_TEXTS:
+            target = self.exact_text(texts, (text,))
+            if target is not None:
+                self.click_box(target, after_sleep=0.35)
+                self.log_warning(f"卡住接管：点「{text}」过场提示推进（不再点中央）")
                 return True
-        if self.match_text(texts, labels.STUCK_TAKEOVER_DANGER) is not None:
-            # 购买/删档/花钻石的确认页：不许替用户做主，退回点中央
-            return False
-        if self.click_button("confirm", texts=texts, after_sleep=0.35, must=False):
-            self.log_warning("卡住接管：点「确定」推进（不再点中央）")
-            return True
         return False
 
 

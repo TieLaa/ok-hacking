@@ -268,9 +268,11 @@ WHEEL_BUTTON_POINT = (0.500, 0.923)       # 两页实测按钮中心（比例坐
 #   3) 兜底 `handle_unmarked_cards` 也不许认领（见 QUALITY_CARD_EXCLUDE）。
 STOCK_PICK_TITLE = "请选择你要投资的股票"
 
-# 卡住接管（`flow.stuck_takeover`）时的「不替用户做主」标记：
-# 花钱 / 删档 / 花钻石的确认页只许点屏幕中央（推不动也比误买、误删强）。
-STUCK_TAKEOVER_DANGER = ("购买", "删档", "重置", "钻石")
+# 「点击屏幕继续」类过场提示：整行点一下就能推进（MVP 结算 / 训练评分 / 胜负动画）。
+# 唯一来源 —— `handlers/match.py: handle_tap_to_continue`、`flow._stuck_advance`
+# 都引用这里。**必须全等匹配**：「继续」两个字也出现在「继续训练」「继续匹配」
+# 「继续倾听和泉的问题」这类正文里，包含匹配会点到台词上。
+TAP_TO_CONTINUE_TEXTS = ("点击屏幕继续", "继续")
 
 # 兜底 handler（`handlers/unmarked.py`）**不许**认领的邻页标记。
 #

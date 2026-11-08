@@ -4300,30 +4300,48 @@ class StuckTakeover(unittest.TestCase):
         self.assertTrue(task.stuck_takeover(texts))
         return task
 
-    def test_takeover_clicks_confirm_before_center(self):
-        """两段式页面（选卡 → 确定）：接管必须点「确定」，点中央正好落在中间那张卡。"""
-        task = self._takeover(self.STOCK_PICK)
-        self.assertEqual(task.actions[-1][:2], ("click_box", "确定"))
-        self.assertTrue(any("不再点中央" in str(x) for x in task.logs))
+    def test_takeover_never_clicks_confirm(self):
+        """「选卡 → 确定」两段式页面：接管只点中央，绝不点「确定」。
 
-    def test_takeover_prefers_next_over_confirm(self):
-        """同屏有「下一步」时先点它：它永远只是推进，不会确认任何选择。"""
+        2026-11-09 收紧：扭蛋选卡页（「请选择1个扭蛋」+ 60/80/100 + 确定）和
+        游戏厅选卡页（「请选择一个小游戏」+ 价格 + 确定）整页没有「购买」字样，
+        关键词黑名单挡不住 —— 点「确定」就是替用户花零用钱，还绕过了专属
+        handler 的品质/精力判断。两段式页面推不动就让 3 次接管后停任务兜底。
+        """
+        task = self._takeover(self.STOCK_PICK)
+        self.assertEqual(task.actions[-1], ("click", 960, 540))
+
+    def test_takeover_gacha_pick_page_only_clicks_center(self):
+        """真帧：扭蛋选卡页（请选择1个扭蛋 + 60/80/100 + 确定）→ 只点中央。"""
+        texts = [box(26, 14, "第1周", 113, 40),
+                 box(190, 14, "星期六", 130, 40),
+                 box(700, 120, "请选择1个扭蛋", 300, 45),
+                 box(560, 760, "60", 60, 40),
+                 box(890, 760, "80", 60, 40),
+                 box(1210, 760, "100", 60, 40),
+                 box(1150, 940, "确定", 95, 55)]
+        task = self._takeover(texts)
+        self.assertEqual(task.actions[-1], ("click", 960, 540))
+
+    def test_takeover_prefers_next(self):
+        """同屏有「下一步」时点它：它永远只是推进，不会确认任何选择。"""
         texts = self.STOCK_PICK + [box(900, 900, "下一步", 200, 55)]
         task = self._takeover(texts)
         self.assertEqual(task.actions[-1][:2], ("click_box", "下一步"))
 
-    def test_takeover_never_confirms_purchase(self):
-        """花钱页（购买 + 确定）：退回点中央 —— 宁可多接管一轮，也不替用户买。"""
-        texts = self.STOCK_PICK + [box(700, 600, "购买", 160, 50)]
-        task = self._takeover(texts)
-        self.assertEqual(task.actions[-1], ("click", 960, 540))
-
-    def test_takeover_never_confirms_delete(self):
-        """删档页（删档 + 确定）：同样只点中央。"""
+    def test_takeover_clicks_tap_to_continue(self):
+        """过场提示（「点击屏幕继续」）全等命中就点那行字。"""
         texts = [box(40, 12, "第2周", 120, 40),
                  box(190, 12, "星期二", 130, 40),
-                 box(700, 400, "删档重来", 300, 60),
-                 box(1150, 940, "确定", 95, 55)]
+                 box(600, 780, "点击屏幕继续", 400, 50)]
+        task = self._takeover(texts)
+        self.assertEqual(task.actions[-1][:2], ("click_box", "点击屏幕继续"))
+
+    def test_takeover_does_not_contain_match_continue(self):
+        """包含匹配的坑：「继续倾听和泉的问题」不能被当成「继续」按钮点。"""
+        texts = [box(40, 12, "第2周", 120, 40),
+                 box(190, 12, "星期二", 130, 40),
+                 box(600, 500, "继续倾听和泉的问题", 500, 50)]
         task = self._takeover(texts)
         self.assertEqual(task.actions[-1], ("click", 960, 540))
 
