@@ -26,7 +26,7 @@
 import time
 
 from src.tasks.ui import Defs, labels
-from src.tasks.training.constants import (JPEG_PARAMS, LATE_SHOP_FROM_WEEK,
+from src.tasks.training.constants import (JPEG_PARAMS,
                                           PROJECT_ROOT,  # noqa: F401
                                           SHOP_ENTRY_TRIES,
                                           STYLE_BY_NAME)  # noqa: F401
@@ -182,15 +182,16 @@ class DayCycleMixin:
             return "推进对话", "对话框提到「出行」但还没按钮 → 先推进对话"
         return None, "「出行」按钮认不出来"
 
-    # ---------- 一天的入口 ③：第 7 周以后，商店「新品上市」才进店（2026-11-05） ----------
+    # ---------- 一天的入口 ③：看到「新品上市」才进店（2026-11-08 起不分周数） ----------
 
     def late_shop_step(self, texts):
-        """第 7 周以后：看到「新品上市」提示才进店。返回 True = 这一拍已经点过入口。
+        """看到「新品上市」提示就进店（**不再分周数**）。返回 True = 这一拍已经点过入口。
 
-        用户 2026-11-05 口径（**取代** 2026-11-03 的「每天都进店」）：
-        **不是每天都进店** —— 只有「商店上新」那块提示（实机是橙色的「新品上市」，
-        挂在右上角「商店」按钮**正上方**；2026-11-05 截图：第 3 周 星期一 比赛日
-        主界面）出现时才进店；进去以后按「购买策略」正常顺序买，**不清空**。
+        用户 2026-11-08 口径（**取代** 2026-11-05 的「第 7 周以后才进」）：
+        **只要有「新品上市」的标签就进商店** —— 标签挂在右上角「商店」按钮
+        **正上方**（2026-11-05 截图：第 3 周 星期一 比赛日主界面）。进去以后
+        第 7 周之前只买 0 元商品，第 7 周以后按 红包 → 彩 → 金 → 紫 买
+        （购买口径在 `places/shop.py: pick_shop_item`）。
 
         它和上面「训练/休息」「出行」是**同级的一天入口**，判断就写在这里
         （本模块管「一天」，不要在每个 handler 里各判一次）。调用点在 `flow.run`
@@ -198,8 +199,7 @@ class DayCycleMixin:
         周末首页三种页面，谁也不会先把手里的这一天用掉。
         """
         week, day = self.current_day(texts)
-        if week is None or week < LATE_SHOP_FROM_WEEK:
-            return False                       # 第 7 周之前：这条不生效
+        week_tag = f"第{week}周" if week is not None else "周数未知"
         if self.shop_page(texts):
             return False                       # 已经在店里 → handle_shop 买/关
         if (self.match_text(texts, "星期") is None
@@ -216,14 +216,14 @@ class DayCycleMixin:
         if not (x1 - 0.06 <= cx <= x2 and y1 <= cy <= y2):
             return False
         # 判据：商店按钮**正上方**有「新品上市」提示（`places/shop.py: shop_fresh_badge`）。
-        # 没提示 = 没上新 = 今天不进店（旧版是「每天都进」，2026-11-05 改）。
+        # 没提示 = 没上新 = 今天不进店。
         key = (week, day)
         badge, why = self.shop_fresh_badge(texts, box)
         if badge is None:
             # 一天只打一行 INFO（DEBUG 没人翻；每拍打一条又会把日志刷满）
             if key != getattr(self, "_shop_nobadge_key", None):
                 self._shop_nobadge_key = key
-                self.log_info(f"第{week}周 星期{day or '?'}：商店上方没有「新品上市」提示"
+                self.log_info(f"{week_tag} 星期{day or '?'}：商店上方没有「新品上市」提示"
                               f"（{why}）→ 今天不进店")
             return False
         if key == getattr(self, "_shop_day", None):
@@ -242,8 +242,8 @@ class DayCycleMixin:
         self._shop_try_key, self._shop_try_count = key, tries
         self._shop_at = time.monotonic()
         self.click_box(box, after_sleep=0.9)
-        self.log_info(f"第{week}周：看到「{badge.name.strip()}」→ 进店"
-                      f"（按「{self.config.get('购买策略')}」买｜星期{day or '?'}"
+        self.log_info(f"{week_tag}：看到「{badge.name.strip()}」→ 进店"
+                      f"（按「{self.config.get('商店购买策略')}」买｜星期{day or '?'}"
                       f"｜第 {tries}/{SHOP_ENTRY_TRIES} 次点）")
         return True
 

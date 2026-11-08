@@ -87,9 +87,6 @@ HANDLERS = (
     TrainingHandlers.handle_breath_difficulty,
     TrainingHandlers.handle_subject_select,
     MatchHandlers.handle_event_choice,
-    # 比赛日进店必须排在「赛前准备」之前：比赛日主界面可能直接就是
-    # 「跳过比赛/前往比赛」，否则没机会点商店（2026-10-29 第 5/6 周漏进）
-    TrainingHandlers.handle_pre_match_shop,
     MatchHandlers.handle_prepare,
     # 炒股页（天赋「股神!」，handlers/talent.py）：必须在 handle_dialog_continue 之前。
     # 2026-10-30 事故：股票走势面板右上角有「跳过」（快进图标），

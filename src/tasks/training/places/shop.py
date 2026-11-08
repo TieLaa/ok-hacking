@@ -15,21 +15,27 @@
 所以这里一拍只买**一件**：买完不关店，下一拍重新 OCR 再决定；
 按策略买不动了 / 钱花光了才关店。
 
-2026-10-29 用户口径：**钱够就买金/紫**。旧版这里还有一道
-「零用钱 < 商店进店余额(300) 就不买」的门槛，跟这条直接冲突
-（实跑：120 零用钱、店里有 100 的紫卡，被门槛拦掉），已删除。
+2026-11-05 用户口径：进了店就按「商店购买策略」正常顺序买，**不清空**。
 
-2026-11-05 用户口径：第 7 周以后**看到入口上方的「新品上市」提示才进店**
-（判据 `shop_fresh_badge`），进去按「购买策略」正常顺序买，**不清空**；
-第 7 周以后**不买「精力饮料」**（免费的照样拿），在 `pick_shop_item` 里过滤。
+2026-11-08 用户口径（**取代**之前的四选项策略）：
+- **第 7 周之前只买 0 元商品（红包）**，非 0 一律不买；
+- 第 7 周以后按 **红包 → 彩 → 金 → 紫** 的顺序买；
+- 精力类商品仍按之前的逻辑：**垫底** + 三类门槛（见 `shop_stamina_gate`），
+  只买符合条件的；免费的照样优先拿。
 
-2026-11-07 用户口径：**恢复精力的商品购买优先级最低**——任何周都垫底，
-彩金紫里先挑非恢复的（品质 → 价格），池里只剩恢复的才买它；「买最贵」
-策略下器材手册 > 非恢复 > 恢复。免费的（0 元）不受影响，照样优先拿。
+2026-11-07 用户口径：**恢复精力的商品购买优先级最低**——彩金紫里先挑非恢复的
+（品质 → 价格），池里只剩恢复的才买它；免费的（0 元）不受影响，照样优先拿。
+
+2026-11-08 用户口径：**恢复精力商品过三类门槛**（登记过恢复量的才拦）：
+① 立刻恢复 N：当前+N > 上限 → 溢出拒买；② 全部恢复：上限−当前 ≤100 → 拒；
+③ 接下来几日恢复：当前/上限 ≥ 1/2 → 拒。登记表是
+`constants.SHOP_STAMINA_ITEMS`（列表卡没有效果文本，只能按名字认；
+用户实跑看到就报，会话里加一行；恢复量 None = 只垫底、不拦）。
 """
 
 from src.tasks.ui import labels
-from src.tasks.training.constants import LATE_SHOP_FROM_WEEK
+from src.tasks.training.constants import (LATE_SHOP_FROM_WEEK, SHOP_MUST_TAKE,
+                                          SHOP_NEVER_BUY, SHOP_STAMINA_ITEMS)
 
 # 地点名（地图上的按钮文字 / 状态里的键）
 PLACE = "商店"
@@ -116,82 +122,136 @@ class ShopPlace:
 
     @staticmethod
     def _is_stamina_drink(item):
-        """这件商品是不是恢复精力的（购买优先级垫底）。
+        """这件商品是不是恢复精力的（垫底 + 可能过门槛）。
 
-        2026-11-07 用户口径：**恢复精力的商品优先级最低**——别的都买不动了
-        才轮到它。判据沿用「精力饮料」名字匹配，和第 7 周以后的过滤
-        （2026-11-05 口径）同一个名字范围；商店卡上只有名字 + 价格，
-        没有效果文本可读，要扩名（全能/专属/偶然/怪味饮料…）得先有实据。
+        2026-11-07 用户口径：恢复精力的商品优先级最低（垫底顺序在外层）。
+        2026-11-08 用户口径：登记过恢复量的还要过三类门槛（见 `stamina_gate`）。
+        判据 = `constants.SHOP_STAMINA_ITEMS` 登记表（列表卡只有名字 + 价格，
+        没有效果文本，只能按名字认；用户实跑采集、会话里加行）。
         """
-        return "精力饮料" in item["name"]
+        name = item.get("name") or ""
+        return any(word in name for word in SHOP_STAMINA_ITEMS)
 
-    def pick_shop_item(self, items, money, policy):
+    def shop_stamina_gate(self, item, stamina, stamina_max):
+        """这件恢复精力商品过不过三类门槛？返回拒因字符串，None = 能买。
+
+        2026-11-08 用户口径（商店版，数据来自登记表；扭蛋侧同一套口径在
+        `places/street.py: recover_rejected`，只是数据来源是卡面效果文本）：
+          ① 立刻恢复 N：当前 + N > 上限 → 溢出，拒买
+          ② 全部恢复：上限 − 当前 ≤ 100 → 缺口太小，拒买
+          ③ 接下来几日恢复：当前 / 上限 ≥ 1/2 → 精力还够，拒买
+        登记表里恢复量是 None（还没采集到）→ **不拦，只垫底**；读不到
+        精力/上限 → 不拦（同「周数读不到不过滤」口径，OCR 抖一帧不罢工）。
+        """
+        name = item.get("name") or ""
+        hit = None
+        for word, effect in SHOP_STAMINA_ITEMS.items():
+            if word in name and (hit is None or len(word) > len(hit[0])):
+                hit = (word, effect)
+        if hit is None:
+            return None
+        kind, amount = hit[1]
+        if stamina is None or stamina_max is None or stamina_max <= 0:
+            return None
+        room = max(stamina_max - stamina, 0)
+        if kind == "full":
+            if room <= 100:
+                return f"缺口 {room} ≤ 100"
+            return None
+        if kind == "immediate":
+            if amount is None:
+                return None                    # 恢复量未登记：只垫底，不拦
+            if stamina + amount > stamina_max:
+                return f"立刻 {amount} 会溢出（{stamina}+{amount}>{stamina_max}）"
+            return None
+        if kind == "daily":
+            if stamina / stamina_max >= 0.5:
+                return f"精力 {stamina}/{stamina_max} ≥ 一半"
+            return None
+        return None
+
+    def pick_shop_item(self, items, money, policy, stamina=None, stamina_max=None):
         """选哪件商品？返回 (商品, 原因) 或 (None, 原因)。
 
-        `policy` = 配置项「购买策略」：只买彩金紫 / 只买器材手册+ / 买最贵 / 不买。
-        2026-11-05 用户口径：**任何日子都不清空**（比赛日前一天也不清空），
-        所以这里只有「策略」一条口径，没有「把钱花光」这个分支。
+        `policy` = 配置项「商店购买策略」：红包→彩→金→紫 / 不买。
+        `stamina` / `stamina_max` = 当前精力 / 上限（顶栏读，可能 None）——
+        给恢复精力商品的三类门槛用（2026-11-08 用户口径）。
 
-        2026-11-05 用户口径：第 7 周以后**不买「精力饮料」**——前期随便买，
-        后期精力不缺，买了占商店格子还花钱。免费（0 元）的精力饮料照样拿。
-        周数读不到时**不拦**（顶栏 OCR 抖一下不能让商店整拍罢工）。
+        2026-11-08 用户口径（**取代**之前的「购买策略」四选项）：
+          - **第 7 周之前只买 0 元商品（红包）**，非 0 一律不买；
+          - 第 7 周以后按 **红包 → 彩 → 金 → 紫** 的顺序买；
+          - 精力类商品仍按之前的逻辑：**垫底**（先买非恢复的），并先过三类门槛
+            （溢出 / 缺口 ≤ 100 / 精力过半都拒买，见 `shop_stamina_gate`），
+            **只买符合条件的**；免费的精力商品不受门槛影响。
+          - 周数读不到时按第 7 周以后处理（OCR 抖一帧不能把采购整拍废掉）。
 
-        2026-11-07 用户口径：**恢复精力的商品优先级最低**——任何周都垫底：
-        彩金紫里先买非恢复的，池里只剩恢复的才买它；「买最贵」同理
-        （器材手册 > 非恢复 > 恢复）。免费的（0 元）不受影响，照样优先拿。
+        以下两条口径**不受周数影响**，继续生效：
+          - 「老板的馈赠」必定优先拿（0 元 +50 零用钱，纯赚）——不看余额，
+            OCR 价格读错也照拿；「不买」策略仍是否决开关；
+          - 苦味/怪味饮料系（带负面或随机效果）一律从候选整体剔除（含免费）。
+
+        2026-11-05 用户口径：任何日子都不清空，只按策略买合适的
+        （所以这里没有「把钱花光」分支）。
         """
         week = self.current_day()[0]
-        no_drink = week is not None and week >= LATE_SHOP_FROM_WEEK
-        if no_drink:
-            items = [i for i in items
-                     if i["price"] == 0 or not self._is_stamina_drink(i)]
-        # 免费商品（白神时久：每天多一件 0 元商品）：不花零用钱，
-        # 余额不够、甚至钱读不到时都应该拿。
-        free = [i for i in items if i["price"] == 0]
+        # 2026-11-08 用户口径：苦味/怪味饮料带负面或随机效果（苦味+ = 精力+120、
+        # 随机属性-10；怪味 = 精力+30 或什么都没发生），**一律不买**——
+        # 从候选整体剔除，连免费/0 元也不拿（负面效果不因免费就值得拿）。
+        items = [i for i in items
+                 if not any(w in i["name"] for w in SHOP_NEVER_BUY)]
         if policy == "不买":
             return None, "策略是只逛不买"
 
-        affordable = free + [i for i in items
-                             if i["price"] > 0 and money is not None
-                             and i["price"] <= money]
-        if not affordable:
-            return None, ("没有买得起的商品了"
-                          + ("（零用钱读不到，不盲买）" if money is None else ""))
+        # 2026-11-08 用户口径：「老板的馈赠」必定优先拿（0 元 +50 零用钱，纯赚）。
+        # 放在免费分支之前、且不看余额（OCR 价格读错也照拿）；「不买」仍是开关。
+        must = [i for i in items if any(m in i["name"] for m in SHOP_MUST_TAKE)]
+        if must:
+            pick = max(must, key=lambda i: -i["y"])
+            return pick, "必定优先拿（老板的馈赠：0 元 +50 零用钱）"
 
+        # 0 元商品（红包）：不花零用钱，余额不够、甚至钱读不到时都应该拿。
+        free = [i for i in items if i["price"] == 0]
         if free:
             # 免费优先：0 元不花钱，品质只影响先拿哪张
-            order = {"金": 2, "紫": 1}
+            order = {"彩": 3, "金": 2, "紫": 1}
             pick = max(free, key=lambda i: (order.get(i["quality"], 0), -i["y"]))
-            return pick, "免费商品优先"
-        if policy == "只买彩金紫":
-            # 2026-11-06 用户口径：策略名从「只买金和紫」改过来，白名单补上「彩」
-            # ——全局品质口径是 彩 > 金 > 紫，没有蓝（商店目前没有彩卡，留着缺口，
-            # 解锁后自动生效）。只有蓝/白时必须停手，不是「退而买蓝」。
-            pool = [i for i in affordable if i["quality"] in ("彩", "金", "紫")]
-            if not pool:
-                return None, "没有买得起的彩/金/紫商品"
-            # 2026-11-07 用户口径：恢复精力的垫底——先买非恢复的，
-            # 只剩恢复的（其他彩金紫都买不动了）才轮到它（不是不买）。
-            drink_only = all(self._is_stamina_drink(i) for i in pool)
-            picks = pool if drink_only else [
-                i for i in pool if not self._is_stamina_drink(i)]
-            pick = max(picks, key=lambda i: ({"彩": 2, "金": 1}.get(i["quality"], 0),
-                                            i["price"]))
-            return pick, ("彩金紫只剩恢复精力的商品，垫底购买" if drink_only
-                          else "彩金紫优先")
-        if policy == "只买器材手册+":
-            pool = [i for i in affordable if "器材手册" in i["name"]]
-            if not pool:
-                return None, "没有器材手册"
-            pick = max(pool, key=lambda i: i["price"])
-            return pick, "器材手册优先"
-        # 「买最贵」：器材手册 > 非恢复 > 恢复（2026-11-07 用户口径：
-        # 恢复精力的商品优先级最低，压过「买最贵」的字面意思——
-        # 同样买得起时，贵的饮料也不能压过便宜的其他卡）。
-        normal = [i for i in affordable
-                  if "器材手册" in i["name"] or not self._is_stamina_drink(i)]
-        drink_only = not normal
-        picks = affordable if drink_only else normal
-        pick = max(picks, key=lambda i: (
-            1 if "器材手册" in i["name"] else 0, i["price"]))
-        return pick, ("只剩恢复精力的商品，垫底购买" if drink_only else "买最贵")
+            return pick, "0 元红包优先"
+
+        # 2026-11-08 用户口径：第 7 周之前**只买 0 元商品**（上面没有 free 就关店）。
+        if week is not None and week < LATE_SHOP_FROM_WEEK:
+            return None, "第 7 周之前只买 0 元红包（没有免费商品）"
+
+        # 第 7 周以后：红包 → 彩 → 金 → 紫
+        pool = [i for i in items
+                if i["quality"] in ("彩", "金", "紫")
+                and i["price"] > 0 and money is not None
+                and i["price"] <= money]
+        if not pool:
+            return None, ("没有买得起的商品了（只买彩/金/紫"
+                          + ("；零用钱读不到，不盲买" if money is None else "")
+                          + "）")
+
+        # 2026-11-08 用户口径：恢复精力商品先过三类门槛 —— 拒买的从候选剔除
+        #（免费的不拦：0 元不花钱，照样优先拿）。全被门槛拦掉才关店，
+        # 日志里带上每家被拒的原因，方便复盘时核对登记表数值。
+        kept, rejected = [], []
+        for i in pool:
+            why = self.shop_stamina_gate(i, stamina, stamina_max)
+            if why:
+                i["reject"] = why
+                rejected.append(f"{i['name']}（{why}）")
+            else:
+                kept.append(i)
+        if not kept:
+            return None, ("恢复精力商品不满足门槛，关店："
+                          + "、".join(rejected))
+
+        # 2026-11-07 用户口径：恢复精力的垫底——先买非恢复的，
+        # 只剩恢复的（其他彩金紫都买不动了）才轮到它（不是不买）。
+        drink_only = all(self._is_stamina_drink(i) for i in kept)
+        picks = kept if drink_only else [i for i in kept
+                                         if not self._is_stamina_drink(i)]
+        pick = max(picks, key=lambda i: ({"彩": 3, "金": 2, "紫": 1}[i["quality"]],
+                                         i["price"]))
+        return pick, ("彩金紫只剩恢复精力的商品，垫底购买" if drink_only
+                      else "红包→彩→金→紫")

@@ -74,11 +74,23 @@ WEEKEND = [
     Spec("周末野餐阈值", 60, INT, "周日精力低于这个值才野餐；否则选划船（属性+）"),
     Spec("允许进步行街", True, BOOL, "关掉后周末不去步行街抽扭蛋"),
     Spec("允许进游戏厅", True, BOOL, "关掉后周末不去游戏厅玩小游戏"),
+]
+
+# ---------- 商店 ----------
+# 2026-11-08 用户口径：商店/扭蛋/小游戏**各自独立**配置，不再共用一个「购买策略」。
+# 商店口径：第 7 周之前只拿 0 元商品（红包）；第 7 周以后按
+# 红包 → 彩 → 金 → 紫，精力类商品垫底并先过三类门槛（`places/shop.py`）。
+SHOP = [
+    Spec("商店购买策略", "红包→彩→金→紫", DROP,
+         "只作用于商店：红包（0 元商品）先拿 → 彩 → 金 → 紫；"
+         "恢复精力的商品垫底，并要先过三类门槛（溢出 / 缺口 ≤ 100 / 精力过半都拒买）；"
+         "第 7 周之前一律只买 0 元商品。不买 = 只逛不买",
+         options=["红包→彩→金→紫", "不买"]),
+]
+
+# ---------- 游戏厅（小游戏）----------
+ARCADE = [
     Spec("游戏厅付费", True, BOOL, "游戏厅没有「跳过」时，花钱（≥64 零用钱）买一个「自动」小游戏换属性；关掉就沿用旧逻辑直接退出"),
-    Spec("购买策略", "只买彩金紫", DROP,
-         "只买彩金紫 = 只买彩/金/紫卡（看到品质色判定，彩 > 金 > 紫；蓝/白一律不买，商店暂时没有彩卡，留着以后解锁）；"
-         "只买器材手册+ = 只买涨熟练度的；买最贵 = 旧逻辑；不买 = 只逛不买",
-         options=["只买彩金紫", "只买器材手册+", "买最贵", "不买"]),
 ]
 
 # ---------- 扭蛋（步行街）----------
@@ -147,7 +159,7 @@ QUEUE = [
          "恢复页里「还差 N」的弹窗按 N 补，不看这个值"),
 ]
 
-ALL = TRAINING + WEEKEND + GACHA + MATCH + FLOW + QUEUE
+ALL = TRAINING + WEEKEND + SHOP + GACHA + ARCADE + MATCH + FLOW + QUEUE
 
 
 def build_default_config():
@@ -178,6 +190,18 @@ def build_description():
 LEGACY_KEYS = {
     "休息精力阈值": ("休息专注阈值", "休息体力阈值"),
     "扭蛋清空精力阈值": ("扭蛋清空体力阈值",),
+    # 2026-11-08：商店/扭蛋/小游戏分开配置，旧的通用「购买策略」只服务过商店。
+    "商店购买策略": ("购买策略",),
+}
+
+# 旧选项值 → 新选项值（键必须先出现在 LEGACY_KEYS 里，或本身已是新键）。
+# 2026-11-08：商店改成固定顺序，旧策略一律落到「红包→彩→金→紫」。
+LEGACY_VALUES = {
+    "商店购买策略": {
+        "只买彩金紫": "红包→彩→金→紫",
+        "只买器材手册+": "红包→彩→金→紫",
+        "买最贵": "红包→彩→金→紫",
+    },
 }
 
 
@@ -206,6 +230,10 @@ def migrate_saved_config(name, folder="configs"):
         changed = True
         if new_key not in saved:
             saved[new_key] = values[0]
+    for new_key, mapping in LEGACY_VALUES.items():
+        if saved.get(new_key) in mapping:
+            saved[new_key] = mapping[saved[new_key]]
+            changed = True
     if not changed:
         return False
     try:

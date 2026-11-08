@@ -526,69 +526,6 @@ class TrainingHandlers:
         """
         return self.subjects_from_texts(self._ocr_region()).get(name)
 
-    def handle_pre_match_shop(self, texts):
-        """比赛日主界面：进比赛之前先逛一次商店（只有训练流/商店流）。
-
-        用户 2026-10-29 口径：周一比赛之前还能买一次商品再进比赛；
-        周日首页的「先逛店」逻辑已删除，改成这里。
-
-        判据（2026-10-30）：训练日主界面（有「星期」）+ 右下主按钮区出现「比赛/VS」。
-        **不能按「周一」判断**：训练日也可能是周一，实测训练日 main_action 区域为空。
-        """
-        if self.style not in ("训练流", "商店流"):
-            return False
-        # 2026-10-29：比赛日主界面不一定有「休息」（当天只剩比赛），所以不要求它
-        if self.match_text(texts, "星期") is None:
-            return False
-        # 判据：右下主按钮区出现「比赛」**且**画面上有 VS/跳过比赛。
-        # 只用「比赛」不够：训练日主界面的 main_action 区域也会出现「比赛」
-        # （fixture 2026-10-25-hover-tooltip：比赛 @(0.89,0.86)，但那是训练日）。
-        # 比赛日实测多一个 VS（对话区 @(0.38,0.11)）或「跳过比赛」按钮。
-        main_text = self.match_text(self.texts_in_region(texts, "main_action"),
-                                    ("比赛", "VS")) is not None
-        if not main_text:
-            return False
-        if self.match_text(texts, ("VS", "跳过比赛")) is None:
-            return False
-        if self.match_text(texts, ("点击屏幕继续", "目标达成", "获得奖励")) is not None:
-            return False
-
-        state = self.top_bar()
-        day = state.get("day")
-        shop = self.find_shop_button(texts)
-        key = (state.get("week"), day)
-        if shop is None:
-            # 认成比赛日却找不到商店入口：存一帧，下次复盘直接看这张
-            # （遗留问题就是缺「比赛日主界面」的证据帧）。
-            if key != getattr(self, "_prematch_noshop_key", None):
-                self._prematch_noshop_key = key
-                self.log_warning(
-                    f"比赛日（周{day or '?'}）没找到右上角「商店」按钮 → 已存证")
-                self.dump_debug(texts, f"prematch_noshop_{day or 'x'}")
-            return False
-        if key[1] is not None:
-            if key == getattr(self, "_shop_day", None):
-                return False            # 今天已经真进过店
-            if key == getattr(self, "_shop_try_key", None) and \
-                    getattr(self, "_shop_try_count", 0) >= 2:
-                return False            # 今天点了两次都没打开，别再空点
-        else:
-            # 星期读不到：退化成「至少隔 60 秒再进一次」，不要整天都不进
-            if time.monotonic() - getattr(self, "_shop_at", 0.0) < 60:
-                return False
-        # 这里**不能**直接写 _shop_day：点完不等于进店。2026-10-30 15:04:04 那下
-        # 点在顶栏「新品上市」上、店面没开，但 _shop_day 已经记账 → 当天再也没进店。
-        # 记账改到 handle_shop 确认商店页真的出现之后。
-        self._shop_at = time.monotonic()
-        if key == getattr(self, "_shop_try_key", None):
-            self._shop_try_count = getattr(self, "_shop_try_count", 0) + 1
-        else:
-            self._shop_try_key = key
-            self._shop_try_count = 1
-        self.click_box(shop, after_sleep=0.9)
-        self.log_info(f"比赛日（周{day or '?'}）：{self.style}先进店买一次")
-        return True
-
     def find_shop_button(self, texts):
         """比赛日右上角的商店入口按钮。
 

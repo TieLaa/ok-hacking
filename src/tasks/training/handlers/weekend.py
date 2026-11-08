@@ -189,34 +189,40 @@ class WeekendHandlers:
         return ok
 
     def handle_shop(self, texts):
-        """商店：按「购买策略」买；买得起就多买几件，买不动了才关店。
+        """商店：按「商店购买策略」买；买得起就多买几件，买不动了才关店。
 
         实机界面（2026-10-26）：
         - 左侧商品卡：名称 + 剩余数量 + 价格（100 / 60 / 45），**卡片底色 = 品质色**；
         - 右侧是选中商品的详情和**黄色购买条**（价格就在条上）；
         - 右上角 X 关闭；顶栏金币是专注条右边那个独立数字。
 
-        用户口径（2026-10-26 / 2026-11-05）：
-        - 平时只买金卡和紫卡（蓝/白不买）；
-        - **不清空**：比赛日也不把零用钱花光，只按「购买策略」买合适的。
-        所以这里一拍只买**一件**：买完不关店，下一拍重新 OCR 再决定；
-        按策略买不动了 / 钱花光了才关店，并把这一天标记为「今天逛过了」。
+        用户口径（2026-11-08）：
+        - 第 7 周之前只买 0 元商品（红包）；第 7 周以后按 红包 → 彩 → 金 → 紫；
+        - 精力类商品垫底 + 过三类门槛，只买符合条件的（`pick_shop_item`）；
+        - **不清空**：只按策略买合适的，买不动了才关店。
+        所以这里一拍只买**一件**：买完不关店，下一拍重新 OCR 再决定。
         """
         if not self.shop_page(texts):
             return False
 
-        # 确认真的进到商店页了才记「今天逛过」。比赛日点入口可能点空
-        # （2026-10-30 15:04:04 点在顶栏「新品上市」上），那样当天该允许再试一次。
-        self._shop_day = getattr(self, "_shop_try_key", None)
+        # 确认真的进到商店页了才记「今天逛过」。点空不算（2026-10-30 15:04:04
+        # 点在顶栏「新品上市」上），那样当天该允许再试一次。
+        # 手动在店里起任务时 `_shop_try_key` 还是 None → 用当前日期兜底，
+        # 否则关店后这一页还会再判一次「有标签 → 进店」。
+        self._shop_day = (getattr(self, "_shop_try_key", None)
+                          or self.current_day(texts))
 
-        policy = self.config.get("购买策略")
+        policy = self.config.get("商店购买策略")
         money = self.read_money(texts)
         items = self.shop_items(texts)
+        bar = self.top_bar(texts)
         self.log_info("商店：" + "、".join(
             f"{i['name']}({i['price']}/{i['quality']})" for i in items)
             + f"｜零用钱 {money}｜策略 {policy}")
 
-        pick, reason = self.pick_shop_item(items, money, policy)
+        pick, reason = self.pick_shop_item(
+            items, money, policy, stamina=bar.get("stamina"),
+            stamina_max=bar.get("stamina_max"))
         if pick is None:
             self.log_info(f"商店：{reason}，关店")
             self.finish_shop(texts)
@@ -243,7 +249,7 @@ class WeekendHandlers:
         return True
 
     def finish_shop(self, texts=None):
-        """关店。进店去重由周末首页的 `shop_checked` 负责（一天一次）。"""
+        """关店。一天只真进一次由 `_shop_day`（handle_shop 确认商店页后记账）负责。"""
         self.close_shop(texts)
 
     def close_shop(self, texts=None):
@@ -530,8 +536,9 @@ class WeekendHandlers:
         实机（2026-10-25 周六）：出行页只有「出行」两个字，没有任何地点名，
         所以 handle_weekend 认不出来，必须先点这一下。
 
-        2026-10-29 口径：周末首页**不再进店**（进店挪到「比赛日进比赛前」，
-        见 `training.handle_pre_match_shop`），这里只负责点出行。
+        2026-10-29 口径：周末首页**不再进店**（进店统一由
+        `training/daycycle.py: late_shop_step` 判断：看到「新品上市」标签才进），
+        这里只负责点出行。
 
         **判断在 `training/daycycle.py`**（与训练日那个入口同级）：
         `outing_offer(..., block_if_used=False)` —— 周末出行是**主流程**，

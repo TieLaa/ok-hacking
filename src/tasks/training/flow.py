@@ -305,7 +305,7 @@ class TrainingFlowMixin:
                 self.log_info("注册球员流程完成（已回大厅）→ 本局结束", notify=True)
                 return True
 
-            # ---- 第 7 周以后：商店「新品上市」才进店（用户 2026-11-05）----
+            # ---- 商店：看到「新品上市」标签就进店（2026-11-08 起不分周数）----
             # 放在所有 handler 之前 —— 一处盖住训练日 / 比赛日 / 周末首页三种入口，
             # 否则训练、前往比赛、出行会先把这一天用掉
             # （判据见 daycycle.late_shop_step + places/shop.py: shop_fresh_badge）。
@@ -348,7 +348,6 @@ class TrainingFlowMixin:
         self._shop_day = None
         self._shop_try_key = None
         self._shop_try_count = 0
-        self._prematch_noshop_key = None
         self._shop_seen = False
         self._arcade_wait_since = 0.0
         self._no_change = 0

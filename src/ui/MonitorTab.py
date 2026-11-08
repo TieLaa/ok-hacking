@@ -69,7 +69,7 @@ DEFAULT_LAYOUT = {
                 ["野餐阈值", "精力 < {picnic_threshold}"],
             ]},
             {"id": "shop", "title": "商店", "rows": [
-                ["购买策略", "{buy_strategy}"],
+                ["商店购买策略", "{buy_strategy}"],
                 ["今日已逛", "{shop_today}"],
             ]},
             {"id": "risk", "title": "风险", "rows": [
@@ -394,7 +394,7 @@ class MonitorTab(CustomTab):
             "match_countdown": info.get("match_countdown") or MISSING,
             "weekend_plan": info.get("weekend_plan") or MISSING,
             "picnic_threshold": config.get("周末野餐阈值", MISSING),
-            "buy_strategy": config.get("购买策略", MISSING),
+            "buy_strategy": config.get("商店购买策略", MISSING),
             "shop_today": info.get("shop_today") or "否",
             "fail_rate": info.get("fail_rate") or info.get("当前失败率") or MISSING,
             "captain": (config.get("指定队长") or "").strip(),
