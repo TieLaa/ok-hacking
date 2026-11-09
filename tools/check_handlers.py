@@ -37,34 +37,17 @@ CACHE_DIR = os.path.join(ROOT, "docs", "shots", ".ocr_cache")
 MISS_MARK = "-"
 
 from tools._console import utf8_stdout, write_report  # noqa: E402
+from tools import _ocr  # noqa: E402
 
 
 def run_ocr(frame):
-    from onnxocr.onnx_paddleocr import ONNXPaddleOcr
-
-    ocr = ONNXPaddleOcr(use_angle_cls=False, use_openvino=True, show_log=False)
-    return ocr
+    """拿 OCR 引擎（进程内单例），实现见 `tools/_ocr.py`。"""
+    return _ocr.engine()
 
 
 def ocr_to_boxes(ocr, frame):
-    result = ocr.ocr(frame)
-    items = []
-    if not result:
-        return items
-    page = result[0] if isinstance(result, list) and len(result) == 1 else result
-    for entry in page or []:
-        try:
-            box = entry[0]
-            text, score = entry[1]
-        except Exception:
-            continue
-        if not text or score is None or score < 0.5:
-            continue
-        xs = [int(p[0]) for p in box]
-        ys = [int(p[1]) for p in box]
-        items.append(Box(x=min(xs), y=min(ys), width=max(xs) - min(xs),
-                         height=max(ys) - min(ys), confidence=float(score), name=text))
-    return items
+    """一帧 → `[Box, …]`（外接矩形 + confidence），解析只在 `tools/_ocr.py` 一处。"""
+    return _ocr.boxes(frame, ocr)
 
 
 class _FakeMethod:

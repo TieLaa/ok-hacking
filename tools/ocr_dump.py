@@ -24,6 +24,7 @@ import cv2
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools._console import utf8_stdout  # noqa: E402
+from tools import _ocr
 from tools.wgc_capture import find_hwnd, MockWindow  # noqa: E402
 
 
@@ -46,26 +47,8 @@ def grab_frame():
 
 
 def run_ocr(frame):
-    from onnxocr.onnx_paddleocr import ONNXPaddleOcr
-
-    ocr = ONNXPaddleOcr(use_angle_cls=False, use_openvino=True, show_log=False)
-    result = ocr.ocr(frame)
-    items = []
-    if not result:
-        return items
-    page = result[0] if isinstance(result, list) and len(result) == 1 else result
-    for entry in page or []:
-        try:
-            box = entry[0]
-            text, score = entry[1]
-        except Exception:
-            continue
-        if not text or score is None or score < 0.5:
-            continue
-        xs = [int(p[0]) for p in box]
-        ys = [int(p[1]) for p in box]
-        items.append((text, min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys), float(score)))
-    return items
+    """一帧 → `[(text, x, y, w, h, score), …]`；实现见 `tools/_ocr.py`。"""
+    return _ocr.items(frame)
 
 
 def main():

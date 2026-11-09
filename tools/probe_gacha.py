@@ -19,6 +19,7 @@ from ok.feature.Box import Box  # noqa: E402
 from src.tasks.training.parsers import TrainingParsersMixin  # noqa: E402
 from src.tasks.training.places.street import StreetPlace  # noqa: E402
 from src.tasks.training.scoring import TrainingScoringMixin  # noqa: E402
+from tools import _ocr  # noqa: E402
 
 
 DEFAULT_CONFIG = {
@@ -64,25 +65,8 @@ def grab_frame(path=None):
 
 
 def run_ocr(frame):
-    from onnxocr.onnx_paddleocr import ONNXPaddleOcr
-
-    ocr = ONNXPaddleOcr(use_angle_cls=False, use_openvino=True, show_log=False)
-    result = ocr.ocr(frame)
-    page = result[0] if isinstance(result, list) and len(result) == 1 else result
-    boxes = []
-    for entry in page or []:
-        try:
-            box, (text, score) = entry[0], entry[1]
-        except Exception:
-            continue
-        if not text or score is None or score < 0.5:
-            continue
-        xs = [int(p[0]) for p in box]
-        ys = [int(p[1]) for p in box]
-        boxes.append(Box(x=min(xs), y=min(ys),
-                         width=max(xs) - min(xs), height=max(ys) - min(ys),
-                         name=text))
-    return boxes
+    """一帧 → `[Box, …]`（confidence 保持 None，与本脚本原行为一致）。"""
+    return _ocr.boxes(frame, with_confidence=False)
 
 
 def main():
