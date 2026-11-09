@@ -79,7 +79,7 @@ def run_registered(harness, cls, config_overrides=None):
     """借已注册任务跑一次，返回 (task, run_result)。
 
     - 临时覆盖 config（跑完还原），用于「限制步数/关闭危险开关」这类本次运行参数；
-    - 键名以 `_` 开头 → 设置**任务实例属性**（如 `_queue_spec` 队列参数），
+    - 键名以 `_` 开头 → 设置**任务实例属性**（如 `_launch_queue` 队列参数），
       不进 config、不落盘，跑完还原原值；
     - 业务逻辑全在任务类里，这里不复制任何判据。
     """

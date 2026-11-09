@@ -2262,6 +2262,55 @@ class ConfigSpecRules(unittest.TestCase):
         keys = {s.key for s in config_spec.ALL}
         self.assertNotIn("扭蛋优先属性", keys)
 
+    def test_second_bar_settings_are_persisted(self):
+        """第二栏的勾选框/下拉/目标分都是配置项（落盘、启动装载）。
+
+        2026-11-09 用户口径：指定队长勾选框、队长下拉菜单、刷取目标分勾选框、
+        目标分数框、快速比赛勾选框 —— 全部要重启还在。
+        前四个在 TrainingTask 的 config_spec 里；快速比赛是 TriggerTask 自己
+        落盘（`QuickMatchTask` 的 `_enabled`，见 `test_quick_match_persists`）。
+        """
+        from src.tasks.training import config_spec
+        spec = {s.key: s for s in config_spec.ALL}
+        for key in ("指定队长", "队长下拉选择", "刷到目标分", "目标分"):
+            self.assertIn(key, spec, "第二栏的控件必须是配置项：%s" % key)
+        self.assertFalse(spec["刷到目标分"].default)
+        self.assertEqual(spec["目标分"].default, 0)
+
+    def test_queue_spec_is_derived_from_config(self):
+        """队列串是**派生值**：设置改了重新算；CLI 注入优先。
+
+        用户 2026-11-09 纠正：一次性参数只限 CLI/MCP 启动时传的那个队列，
+        界面上的目标分/队长是设置，必须走 config（落盘）。
+        """
+        task = FakeTask([])
+        task.config["指定队长"] = "希雅·奥黛拉"
+        task.config["刷到目标分"] = False
+        self.assertEqual(task.captain_queue_spec(), "",
+                         "没勾「刷到目标分」→ 单队长模式，不建队列")
+        task.config["刷到目标分"] = True
+        task.config["目标分"] = 8000
+        self.assertEqual(task.captain_queue_spec(), "希雅·奥黛拉:8000")
+        task.config["目标分"] = 0
+        self.assertEqual(task.captain_queue_spec(), "希雅·奥黛拉",
+                         "勾了刷分但没填分 → 只带队长（一直刷到手动停）")
+        task._launch_queue = "望月透:7500"
+        queue = task.init_captain_queue()
+        self.assertIsNotNone(queue)
+        self.assertEqual(queue.captain, "望月透",
+                         "CLI/MCP 注入的启动参数优先级高于配置派生")
+
+    def test_quick_match_switch_persists(self):
+        """快速比赛开关靠框架 `TriggerTask` 落盘（`_enabled` → QuickMatchTask.json）。
+
+        这条只锁住「它走的是框架那条持久化路径」，防止以后有人把它改成
+        普通 BaseTask 或界面自建内存开关 —— 那样重启就丢了。
+        """
+        from ok.task.task import TriggerTask
+        from src.tasks.QuickMatchTask import QuickMatchTask
+        self.assertTrue(issubclass(QuickMatchTask, TriggerTask),
+                        "快速比赛必须是 TriggerTask，才会把 _enabled 落盘")
+
     def test_gacha_clear_threshold_is_configurable(self):
         """「扭蛋清空精力阈值」在 spec 里（以前用户配不到）。"""
         from src.tasks.training import config_spec
@@ -5958,7 +6007,7 @@ class MonitorButtonActions(unittest.TestCase):
         连接 + enable（等于自动点【开始】）；参数为空则只连接。
         """
         tab, task, executor, _ = self._tab(connected=False)
-        task._queue_spec = "望月透:8000"
+        task._launch_queue = "望月透:8000"
         app = self._fake_app()
         tab._connection_start()
         self.assertEqual(len(app.calls), 1)
@@ -5987,16 +6036,17 @@ class MonitorButtonActions(unittest.TestCase):
     def test_switch_captain_keeps_score_stop_state(self):
         """换队长要**保留**「刷到目标分」的勾选和目标分（用户 2026-11-08 口径）。
 
-        「刷到目标分」是界面自己的开关（`_score_stop_on`），队列参数只是它的
-        载体。换队长只把参数换成「新队长:原目标分」，不抹界面状态。
+        2026-11-09 起这两项是**配置键**（落盘），换队长只改 `指定队长`，
+        队列由 `captain_queue_spec()` 下次 run 重新派生 —— 设置不会被抹掉。
         """
+        from src.tasks.training.flow import TrainingFlowMixin
         from src.ui.MonitorTab import MonitorTab
 
         class _FakeTask:
             def __init__(self):
-                self.config = {"指定队长": "望月透"}
-                self._queue_spec = None
-                self._score_stop_on = False
+                self.config = {"指定队长": "望月透", "刷到目标分": False, "目标分": 0,
+                               "队长下拉选择": "望月透"}
+                self._launch_queue = None
                 self._queue = None
 
             def reset_style(self):
@@ -6009,30 +6059,37 @@ class MonitorButtonActions(unittest.TestCase):
         tab._view = None
         tab.set_score_stop(True)        # 勾上（目标分还没填）
         tab.set_score_target(8000)      # 填 8000
-        self.assertTrue(task._score_stop_on)
-        self.assertEqual(task._queue_spec, "望月透:8000")
+        self.assertTrue(task.config["刷到目标分"])
+        self.assertEqual(task.config["目标分"], 8000)
         tab.set_captain("近江奏")        # 换队长
-        self.assertTrue(task._score_stop_on)                 # 勾选保留
-        self.assertEqual(task._queue_spec, "近江奏:8000")     # 参数换新队长、目标分保留
+        self.assertTrue(task.config["刷到目标分"])              # 勾选保留
+        self.assertEqual(task.config["目标分"], 8000)           # 目标分保留
+        self.assertEqual(TrainingFlowMixin.captain_queue_spec(task),
+                         "近江奏:8000")                        # 派生值换成新队长
 
-    def test_clear_queue_state_also_clears_score_stop(self):
-        """第一栏【停止】= 一切归零：勾选也要关掉（否则界面撒谎）。"""
+    def test_clear_queue_state_keeps_persisted_settings(self):
+        """第一栏【停止】只清**本次注入**的参数，不动落盘的设置。
+
+        2026-11-09 用户口径：刷到目标分/目标分要重启还在 —— 停止一次就抹掉
+        等于没落盘，所以 `_clear_queue_state` 不许写 config。
+        """
         from src.ui.MonitorTab import MonitorTab
 
         class _FakeTask:
             def __init__(self):
-                self.config = {"指定队长": "望月透"}
-                self._queue_spec = "望月透:8000"
-                self._score_stop_on = True
-                self._queue = None
+                self.config = {"指定队长": "望月透", "刷到目标分": True, "目标分": 8000}
+                self._launch_queue = "望月透:8000"
+                self._queue = "living-queue"
 
         tab = MonitorTab.__new__(MonitorTab)
         task = _FakeTask()
         tab._task = lambda: task
         tab._update_data = lambda: None
         tab._clear_queue_state()
-        self.assertIsNone(task._queue_spec)
-        self.assertFalse(task._score_stop_on)
+        self.assertIsNone(task._launch_queue)      # 注入参数清掉
+        self.assertIsNone(task._queue)
+        self.assertTrue(task.config["刷到目标分"])  # 设置保留
+        self.assertEqual(task.config["目标分"], 8000)
 
     def test_score_stop_without_captain_tells_the_user(self):
         """没指定队长就勾「刷到目标分」→ **界面上要看得见**，不能只写日志。
@@ -6046,9 +6103,8 @@ class MonitorButtonActions(unittest.TestCase):
 
         class _FakeTask:
             def __init__(self):
-                self.config = {"指定队长": ""}
-                self._queue_spec = None
-                self._score_stop_on = False
+                self.config = {"指定队长": "", "刷到目标分": False, "目标分": 0}
+                self._launch_queue = None
                 self._queue = None
 
         tab = MonitorTab.__new__(MonitorTab)
@@ -6059,8 +6115,8 @@ class MonitorButtonActions(unittest.TestCase):
         with mock.patch("ok.core.notifications.alert_error") as alert_error, \
                 mock.patch("ok.core.notifications.alert_info") as alert_info:
             tab.set_score_stop(True)
-        self.assertFalse(task._score_stop_on)          # 没勾上
-        self.assertIsNone(task._queue_spec)
+        self.assertFalse(task.config["刷到目标分"])     # 没勾上（配置也没脏写）
+        self.assertEqual(task.config["目标分"], 0)
         self.assertEqual(alert_error.call_count, 1)     # 但用户看到了原因
         self.assertIn("队长", alert_error.call_args[0][0])
         alert_info.assert_not_called()
@@ -6238,26 +6294,27 @@ class MonitorQuickMatchSwitch(unittest.TestCase):
         self.assertNotIn("enable", train.calls)
         self.assertFalse(train.enabled)
 
-    def test_disconnect_resets_quick_match_switch(self):
-        """执行器被关掉（第一栏【停止】）→ 快速比赛开关复位成「关」。
+    def test_disconnect_keeps_quick_match_setting(self):
+        """第一栏【停止】**不再**把快速比赛复位成「关」（2026-11-09 用户口径）。
 
-        「拨关」是用户自己关；「断开」是运行基础没了 —— 两种都要 disable，
-        但只有断开时由第一栏**代劳**（见 `MonitorExecutorLifecycle`）。
+        开关状态是落盘的设置（`TriggerTask._enabled`），要重启还在；
+        执行器停着它本来就不跑，下次【启动】自动恢复。
         """
         tab, quick, train, executor = self._tab(connected=True)
         quick.enabled = True
         tab._connection_stop()
-        self.assertIn("disable", quick.calls)
-        self.assertFalse(quick.enabled)
+        self.assertNotIn("disable", quick.calls)
+        self.assertTrue(quick.enabled)
 
 
 class MonitorExecutorLifecycle(unittest.TestCase):
     """执行器（`og.executor`）= 唯一运行基础，只有第一栏能动（用户 2026-11-02 口径）。
 
-    - 【启动】/【停止】= 拉起 / 关掉执行器；**关掉时两个模块开关一起复位**
-      （运行基础没了，挂着「开」就是撒谎）；
+    - 【启动】/【停止】= 拉起 / 关掉执行器；
     - 第二栏【开始/暂停】、快速比赛开关：开的时候**顺手**唤醒执行器
-      （`executor.start()`），关的时候**只 disable 自己**，绝不 pause 执行器。
+      （`executor.start()`），关的时候**只 disable 自己**，绝不 pause 执行器；
+    - **第二栏的控件是落盘的设置**（2026-11-09 用户口径）：【停止】停运行，
+      但不清设置 —— 队长 / 目标分 / 快速比赛开关都留着，下次启动照旧。
     """
 
     def _tab(self, paused=True):
@@ -6316,8 +6373,12 @@ class MonitorExecutorLifecycle(unittest.TestCase):
         tab.executor = executor
         return tab, quick, train, executor
 
-    def test_disconnect_closes_both_module_switches(self):
-        """执行器被关掉 → 【开始/暂停】和【快速比赛】**都要关掉**。"""
+    def test_disconnect_stops_training_but_keeps_settings(self):
+        """执行器被关掉 → 训练任务 disable；**快速比赛开关是设置，保持原样**。
+
+        2026-11-09 用户口径：第二栏的快速比赛勾选框要落盘、启动装载，
+        所以断开不再 disable 它（执行器停着本来就不调度）。
+        """
         tab, quick, train, executor = self._tab(paused=False)
         train.enabled, train.running = True, True
         quick.enabled = True
@@ -6326,8 +6387,8 @@ class MonitorExecutorLifecycle(unittest.TestCase):
         # unpause 清 task.pause 挂起态并联动 executor.start —— 但第一栏
         # 随后的 executor.pause 会把执行器按回暂停，最终 calls 里两个都有）
         self.assertIn("disable", train.calls)
-        self.assertIn("disable", quick.calls)
-        self.assertFalse(quick.enabled)
+        self.assertNotIn("disable", quick.calls)
+        self.assertTrue(quick.enabled)
         self.assertEqual(executor.calls, ["start", "pause"])
 
     def test_pause_auto_training_never_pauses_executor(self):
@@ -6415,8 +6476,10 @@ class MonitorButtons(unittest.TestCase):
             def toggle_auto_training(self):
                 self.log.append("training")
 
-            def set_captain(self, name):
+            def set_captain(self, name, memory=""):
                 self.log.append(("captain", name))
+                if memory:
+                    self.log.append(("captain_memory", memory))
 
         actions = _Actions()
         return MonitorView(layout, actions, captains=caps), actions
@@ -6489,12 +6552,28 @@ class MonitorButtons(unittest.TestCase):
         self.assertFalse(view._captain_check.isChecked())
 
     def test_uncheck_calls_set_captain_empty(self):
-        """取消勾选 → 必须调 set_captain("")（清空变量）。"""
+        """取消勾选 → 必须调 set_captain("")（清空变量），但**记忆留着**。"""
         view, actions = self._view()
         view.update_data(self._data(captain="野上泷"))
         actions.log.clear()
         view._captain_check.setChecked(False)
         self.assertIn(("captain", ""), actions.log)
+        self.assertIn(("captain_memory", "野上泷"), actions.log)
+
+    def test_captain_memory_restored_when_unchecked(self):
+        """没勾选时下拉也要回到 `队长下拉选择`（落盘的界面记忆）。
+
+        否则重启后下拉停在第 0 项「── 训练流 ──」分组标题上，
+        用户一勾就退回列表第一个（2026-11-09 用户口径：下拉菜单要启动装载）。
+        """
+        view, actions = self._view()
+        view.update_data(self._data(captain="", captain_memory="野上泷"))
+        self.assertFalse(view._captain_check.isChecked())
+        self.assertEqual(view._combo_name(), "野上泷")
+        # 重新勾上 → 用的是记忆里那个人，不是第一个
+        actions.log.clear()
+        view._captain_check.setChecked(True)
+        self.assertIn(("captain", "野上泷"), actions.log)
 
     def test_check_uses_current_selection_not_first(self):
         """勾选时用下拉**当前**选中的角色，不是「列表第一个」。"""

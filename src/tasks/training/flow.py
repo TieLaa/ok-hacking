@@ -137,9 +137,10 @@ class TrainingFlowMixin:
     def run(self):
         """一次 run = 把**多角色队列**里的角色依次练到目标分（用户 2026-11-04 口径）。
 
-        队列是外部注入的内存参数（`_queue_spec`，2026-11-07 起不再是配置项）：
-        没注入 → 老行为，按界面「指定队长」跑完一局就结束（`run_one_round`
-        返回 True 即任务完成）。注入了 → 每一局跑完回来记一次分、必要时换队长，
+        队列有两个来源：CLI/MCP 注入的 `_launch_queue`（一次性，不落盘）
+        或由配置派生（`指定队长` + `刷到目标分`/`目标分`，落盘、重启还在）。
+        都没有 → 老行为，按界面「指定队长」跑完一局就结束（`run_one_round`
+        返回 True 即任务完成）。有队列 → 每一局跑完回来记一次分、必要时换队长，
         直到**全部达标提前终止**，或撞上 `最大局数` 兜底。
         """
         try:
@@ -456,26 +457,43 @@ class TrainingFlowMixin:
 
     # ---------- 多角色队列（2026-11-04 用户口径） ----------
 
+    def captain_queue_spec(self) -> str:
+        """从**配置**派生队列参数（唯一入口）：`指定队长` + `刷到目标分`/`目标分`。
+
+        2026-11-09 用户口径：第二栏的勾选框/下拉/目标分都是**设置**，落盘、
+        启动装载；队列串本身不落盘 —— 它是从这三个键算出来的派生值，
+        每次 run 重新算，配置一改自然就换计划。
+
+        返回 `"队长:目标分"`（有目标分）或 `"队长"`（勾了刷分但还没填分），
+        没指定队长 / 没勾「刷到目标分」→ 空串（单队长模式）。
+        """
+        captain = (self.config.get("指定队长") or "").strip()
+        if not captain or not self.config.get("刷到目标分"):
+            return ""
+        target = int(self.config.get("目标分") or 0)
+        return f"{captain}:{target}" if target else captain
+
     def init_captain_queue(self):
-        """定下这一次 run 要练的角色顺序（用户 2026-11-07 口径）。
+        """定下这一次 run 要练的角色顺序。
 
-        队列是**内存参数**（`self._queue_spec`），有两个写入方：
-        1. **界面「刷到目标分」**（`MonitorTab.set_score_stop`）——单人「队长:目标分」；
-        2. **agent 注入**（MCP / `next_captain.json`）——可多人串行。
-        两者都走这个字段，所以这里**必须保留**，不能因为「指定队长有值」就清
-        （2026-11-08 实测 bug：勾「刷到目标分」+ 填分后点开始，任务一 run
-        就把参数清掉 → 界面回填成未勾选、目标分被清空）。
+        两个来源，优先级从高到低：
+        1. **启动参数**（`self._launch_queue`，CLI / MCP 的 `next_captain.json`
+           注入）—— 一次性，不写 configs、进程结束即失效；
+        2. **配置派生**（`captain_queue_spec()`：指定队长 + 刷到目标分/目标分）
+           —— 落盘的设置，重启后照旧生效。
 
-        清空的职责在**界面侧**：`MonitorTab.set_captain` —— 用户改队长时清
-        `_queue_spec`（「指定新队长 → 旧的安排作废」）。任务侧只读不写。
-
+        清空的职责在**界面侧**：`MonitorTab` 的【停止】/【■ 完全停止】清
+        `_launch_queue`（「本次注入的安排作废」）；配置派生值不用清 ——
+        用户改队长/目标分，下一次 run 重新派生即可。
         `多角色队列` 配置键已废弃（保留在 default_config 里只为不炸老存档）。
 
         **暂停→继续不丢进度**：`self._queue` 还挂在任务实例上、游标在内存里。
         这里**先看活着的队列**：还在且指纹没变 → 接着跑，不重建。
         """
         self._run_score = None
-        spec = (getattr(self, "_queue_spec", "") or "").strip()
+        spec = (getattr(self, "_launch_queue", "") or "").strip()
+        if not spec:
+            spec = self.captain_queue_spec()
         living = getattr(self, "_queue", None)
         if not spec:
             # 没队列参数（正常单队长模式，或界面改队长时刚被清掉）
@@ -495,7 +513,7 @@ class TrainingFlowMixin:
         queue = CaptainQueue(spec)
         if queue.empty:
             self.log_warning("队列参数解析为空 → 按单队长跑")
-            self._queue_spec = None
+            self._launch_queue = None
             return None
         self._queue = queue
         self.log_info(f"多角色队列（本次运行参数）：{queue.summary()}")
@@ -1044,9 +1062,9 @@ class TrainingFlowMixin:
         # 旧的 _style_probe_tries / _style_probe_at 随 handle_style_probe 一起删了。
 
     def configured_captain(self):
-        """这次 run 的「指定队长」：队列参数优先，否则界面配置。
+        """这次 run 的「指定队长」：本次队列优先，否则界面配置。
 
-        队列是内存参数（`_queue_spec`），它当前队到的队长**就是**这次的
+        队列（`_launch_queue` 注入或配置派生）当前队到的队长**就是**这次的
         「指定队长」——流派、选人页都按它走；界面配置只在没队列时生效。
         只读，绝不写回 config（用户 2026-11-07 口径）。
         """

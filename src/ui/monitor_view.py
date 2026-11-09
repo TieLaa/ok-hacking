@@ -70,7 +70,7 @@ class MonitorActions:
     def resize_hero(self, path, ratio):
         pass
 
-    def set_captain(self, name):
+    def set_captain(self, name, memory=""):
         pass
 
     def toggle_capture(self):
@@ -823,6 +823,14 @@ class MonitorView(QWidget):
         finally:
             self._syncing_captain = False
 
+    def _combo_name(self) -> str:
+        """下拉框当前指向的真实角色名（分组标题返回空串）。"""
+        combo = self._captain_combo
+        if combo is None:
+            return ""
+        data = combo.itemData(combo.currentIndex())
+        return str(data) if isinstance(data, str) and data != GROUP else ""
+
     def _on_captain_check(self, checked: bool):
         """勾选框：勾上 = 有队长，取消 = 无队长。
 
@@ -834,7 +842,9 @@ class MonitorView(QWidget):
         变量没被清、流派还停在旧的（训练流）。
 
         现在两件事都做了：
-        - 取消勾选 → `set_captain("")`（MonitorTab 里会清 config **和** `_style`）；
+        - 取消勾选 → `set_captain("")`（MonitorTab 里会清 config **和** `_style`），
+          但**记忆留着**（`memory=` 传下拉当前的人）：下拉菜单也要落盘、
+          重启后回到这个人（2026-11-09 用户口径）；
         - 勾选 → 用下拉当前选中的角色（**不是**「第一个角色」），
           否则会默默把流派定成列表里第一个（训练流）的人。
         """
@@ -844,19 +854,13 @@ class MonitorView(QWidget):
         if not checked:
             if combo is not None:
                 combo.setEnabled(False)
-            # 清空变量：名字、流派一起清
-            self._last_captain = ""
-            self.actions.set_captain("")
+            # 名字/流派从「指定队长」里清掉，但下拉记忆保留
+            self.actions.set_captain("", memory=self._last_captain or self._combo_name())
             return
         if combo is not None:
             combo.setEnabled(True)
         # 取下拉**当前**选中的角色；没有就退回上一次选过的，再没有就第一个
-        name = ""
-        if combo is not None:
-            data = combo.itemData(combo.currentIndex())
-            if isinstance(data, str) and data != GROUP:
-                name = data
-        name = name or self._last_captain or self._first_captain()
+        name = self._combo_name() or self._last_captain or self._first_captain()
         if name:
             index = self._index_of(name)
             if index >= 0:
@@ -878,10 +882,13 @@ class MonitorView(QWidget):
             self._last_valid_index = index
             self.actions.set_captain(str(data))
 
-    def _sync_captain(self, name: str):
-        """按配置里的实际队长回填勾选框和下拉。
+    def _sync_captain(self, name: str, memory: str = ""):
+        """按配置回填勾选框和下拉。
 
         勾选状态**只由配置里的队长名决定**（`name` 为空 = 无队长 = 不勾选）。
+        没勾选时下拉显示 `memory`（`队长下拉选择`，上次选过的人）——
+        这是落盘的界面记忆，否则重启后一下拉就是「── 训练流 ──」分组标题
+        （2026-11-09 用户口径：下拉菜单也要启动装载）。
         旧版勾选框默认是勾上的，回填要等第一次 `update_data` 才发生；
         在那之前用户点「启动」，勾选状态会被误当成「有队长」。
         """
@@ -891,19 +898,18 @@ class MonitorView(QWidget):
         if combo.dropMenu is not None and combo.dropMenu.isVisible():
             return          # 用户正在下拉，别抢状态
         checked = bool(name)
+        shown = name or memory
         self._syncing_captain = True
         try:
             if check.isChecked() != checked:
                 check.setChecked(checked)
-            index = self._index_of(name)
+            index = self._index_of(shown)
             if index >= 0:
-                self._last_captain = name
+                self._last_captain = shown
                 self._last_valid_index = index
                 if combo.currentIndex() != index:
                     combo.setCurrentIndex(index)
             elif not checked:
-                # 无队长：把「上一次选过谁」也忘掉，
-                # 下次勾选时不会莫名其妙地选回上次那个人。
                 self._last_captain = ""
             combo.setEnabled(checked)
         finally:
@@ -1006,7 +1012,8 @@ class MonitorView(QWidget):
             self._fill_timeline(data.get("timeline") or [])
 
         if self._captain_check is not None:
-            self._sync_captain(data.get("captain") or "")
+            self._sync_captain(data.get("captain") or "",
+                               data.get("captain_memory") or "")
 
         self._sync_run_button(data)
         self._sync_switches(data)

@@ -57,7 +57,7 @@ class Task(BaseTask):
         # 不写配置）：{"queue": "望月透:8000,野上泷:7500"}。
         # 注意：同时给了 captain 和 queue 时 captain 优先（界面口径 = 指定队长清队列）。
         if wanted.get("queue") and not wanted.get("captain"):
-            overrides["_queue_spec"] = wanted["queue"]
+            overrides["_launch_queue"] = wanted["queue"]
             self.log_info(f"本次队长队列（注入参数）：{wanted['queue']}")
         # 「新一局删档」已从 config_spec 删除：训练确认弹窗只会点「继续训练」。
         # 开训练消耗的专注删档不返还，脚本里不再提供任何删档入口。

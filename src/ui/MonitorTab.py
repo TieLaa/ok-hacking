@@ -112,8 +112,8 @@ class _Actions(MonitorActions):
     def resize_hero(self, path, right_width):
         self.tab.resize_hero(path, right_width)
 
-    def set_captain(self, name):
-        self.tab.set_captain(name)
+    def set_captain(self, name, memory=""):
+        self.tab.set_captain(name, memory)
 
     def toggle_capture(self):
         self.tab.toggle_capture()
@@ -247,9 +247,11 @@ class MonitorTab(CustomTab):
         config = dict(getattr(task, "config", {}) or {}) if task else {}
         # 当前队长要传进去：它的流派就算被 `CAPTAIN_DROPDOWN_STYLES` 隐藏了，
         # 下拉里也得留着这个人，否则回填不到 / 一勾就被换成训练流。
+        # 下拉记忆（`队长下拉选择`）同理：没勾选时显示的是它。
+        captain = (config.get("指定队长") or "").strip()
+        memory = (config.get("队长下拉选择") or "").strip()
         self._view = MonitorView(self._layout_data, _Actions(self), editing=self._editing,
-                                  captains=self._captains(
-                                      (config.get("指定队长") or "").strip()))
+                                  captains=self._captains(captain or memory))
         self.add_widget(self._view)
         self._apply_style()
         self._update_data()
@@ -377,8 +379,6 @@ class MonitorTab(CustomTab):
             score = int(round(total_attr)) + sum(
                 SKILL_WEIGHTS[k] * v for k, v in skills.items())
 
-        stamina = info.get("stamina")
-        stamina_max = info.get("stamina_max")
         pct = 0
         if isinstance(stamina, (int, float)) and isinstance(stamina_max, (int, float)) and stamina_max:
             pct = round(stamina / stamina_max * 100)
@@ -403,6 +403,10 @@ class MonitorTab(CustomTab):
             "shop_today": info.get("shop_today") or "否",
             "fail_rate": info.get("fail_rate") or info.get("当前失败率") or MISSING,
             "captain": (config.get("指定队长") or "").strip(),
+            # 下拉框记忆：勾选框没勾时也要把「上次选过谁」回填到下拉，
+            # 否则重启后一勾就又退回列表第一个（2026-11-09 用户口径：
+            # 队长下拉菜单也要落盘、启动装载）。
+            "captain_memory": (config.get("队长下拉选择") or "").strip(),
             # 第一栏总开关的状态：**会话在跑没有**（截帧通道活着 **且** 执行器
             # 没暂停，见 `_connected()`）。只看 capture_method 会在启动时就为真
             # —— 框架启动时会自动刷新设备并建 WGC 截图会话，按钮一进页面
@@ -430,10 +434,11 @@ class MonitorTab(CustomTab):
                              + gained.get("white", 0)),
             "skill_last": info.get("skill_last") or "",
             "quick_enabled": self._enabled_of(self._task_by_name("QuickMatchTask")),
-            # 第二栏新增控件的状态（用户 2026-11-05）：「刷到目标分」= 队列参数
-            # 在内存里挂着（2026-11-07 起队列不再走配置键）
-            "score_stop": bool(getattr(task, "_score_stop_on", False)) if task else False,
-            "score_target": self._queue_target_text(task, config),
+            # 第二栏的「刷到目标分 / 目标分」是**配置项**（2026-11-09 用户口径：
+            # 落盘、启动装载），不再借 `task._score_stop_on` 这个内存开关。
+            # 队列参数由 `TrainingFlowMixin.captain_queue_spec()` 从这三个键派生。
+            "score_stop": bool(config.get("刷到目标分")),
+            "score_target": str(config.get("目标分") or ""),
             "stamina_allowed": bool(config.get("自动恢复精力")),
             "fail_limit": config.get("失败率上限(%)", MISSING),
             "stuck": info.get("stuck") or (
@@ -443,26 +448,6 @@ class MonitorTab(CustomTab):
             "device_meta": self._device_meta(),
         }
         return data
-
-    @staticmethod
-    def _queue_target_text(task, config: dict) -> str:
-        """取「当前队长」的目标分，给监控页输入框回填。
-
-        2026-11-07 起队列是任务内存里的参数（`task._queue_spec`），
-        配置键已废弃只在任务没起来时兜底读一次旧配置。
-        """
-        spec = (getattr(task, "_queue_spec", None) or "") if task else ""
-        if not spec:
-            spec = config.get("队长队列") or ""
-        try:
-            from src.tasks.training.queue import parse_queue
-            items = parse_queue(spec)
-        except Exception:  # noqa: BLE001
-            return ""
-        for item in items:
-            if item.get("target"):
-                return str(item["target"])
-        return ""
 
     @staticmethod
     def _style_from_config(config: dict) -> str:
@@ -560,48 +545,48 @@ class MonitorTab(CustomTab):
 
     # ---------- 操作 ----------
 
-    def set_captain(self, name):
+    def set_captain(self, name, memory: str = ""):
         """勾选框/下拉改队长：写回 task.config（Config 会自动存盘）。
 
-        **换队长时「刷到目标分」的勾选和目标分保留**（用户 2026-11-08 口径）：
-        「刷到目标分」是界面自己的开关（`task._score_stop_on`），它和
-        agent 注入的队列参数是两回事 —— 换队长只重建队列参数为新队长
-        +原目标分，不能把勾选/分数一起抹掉。
+        2026-11-09 用户口径：第二栏的**勾选框 + 下拉菜单都是设置**，落盘、
+        启动装载，所以这里写两个键：
 
-        **agent 注入的队列参数要清**（用户 2026-11-07 口径）：
+        - `指定队长`：勾着时的队长；取消勾选 = 空串 = 无队长模式（业务只读它）；
+        - `队长下拉选择`：下拉框记忆。勾选框没勾时也记，重启后下拉回到这个人，
+          不会一勾就退回列表第一个。业务不读这个键。
+
+        **换队长时「刷到目标分」的勾选和目标分保留**（用户 2026-11-08 口径）：
+        它们现在是配置键（`刷到目标分` / `目标分`），换队长只改 `指定队长`，
+        队列由 `captain_queue_spec()` 下次 run 重新派生 —— 不需要再手工重建参数。
+
+        **CLI / MCP 注入的队列参数要清**（用户 2026-11-07 口径）：
         「每次指定新队长，旧的安排就清掉，不管单个指定还是传参进来的队列」
-        —— 没勾「刷到目标分」时，换队长就把 `_queue_spec` 清空。
+        —— 界面改队长 = 作废这次注入的 `_launch_queue`（配置派生值不受影响）。
 
         运行期变量 `_style` 也清，流派回到「按队长重新认」。
-        取消勾选（name 为空）时同样清 `_score_stop_on`。
-
-        流派本身存在 `task._style`（运行期变量），config 里只存队长名字。
+        取消勾选（name 为空）时同样关掉 `刷到目标分`（没队长没法刷分）。
         """
         task = self._task()
         if task is None:
             logger.warning("监控页：没有找到训练任务，队长改动未保存")
             return
         value = (name or "").strip()
-        if (task.config.get("指定队长", "") or "") != value:
+        remember = (memory or value).strip()
+        if (task.config.get("指定队长") or "") != value:
             task.config["指定队长"] = value
             if value:
                 logger.info(f"监控页：指定队长 → {value}")
             else:
                 logger.info("监控页：取消指定队长 → 清空变量，流派改回按游戏内队长识别")
-        # 队列参数：勾着「刷到目标分」→ 换成新队长（保留目标分）；
-        # 没勾 → 清掉（可能是 agent 注入的多人队列，界面改队长即作废）。
-        if getattr(task, "_score_stop_on", False) and value:
-            old_target = self._spec_target(getattr(task, "_queue_spec", "") or "")
-            task._queue_spec = f"{value}:{old_target}" if old_target else value
-            logger.info(f"监控页：换队长 → 队列参数重建为「{task._queue_spec}」"
-                        f"（目标分勾选保留）")
-        elif getattr(task, "_queue_spec", None):
-            task._queue_spec = None
-            logger.info("监控页：界面指定队长 → 注入的多角色队列参数已清空")
+        if remember and (task.config.get("队长下拉选择") or "") != remember:
+            task.config["队长下拉选择"] = remember
+        if getattr(task, "_launch_queue", None):
+            task._launch_queue = None
+            logger.info("监控页：界面指定队长 → 本次注入的多角色队列参数已作废")
         if not value:
-            # 取消勾选队长 = 无队长模式，顺带关掉「刷到目标分」
-            if getattr(task, "_score_stop_on", False):
-                task._score_stop_on = False
+            # 取消勾选队长 = 无队长模式，顺带关掉「刷到目标分」（落盘的设置也改掉）
+            if task.config.get("刷到目标分"):
+                task.config["刷到目标分"] = False
                 logger.info("监控页：取消指定队长 → 「刷到目标分」一并关闭")
                 # 勾选框会自己变灰/取消，不解释一句用户会以为「界面把我的设置吃了」
                 self._notify("已取消指定队长：没有队长就没法刷分，「刷到目标分」一并关闭")
@@ -612,19 +597,6 @@ class MonitorTab(CustomTab):
                 except Exception as e:  # noqa: BLE001
                     logger.error(f"重置流派失败: {e}")
         self._update_data()
-
-    @staticmethod
-    def _spec_target(spec: str) -> int:
-        """从队列参数串里取目标分（`"队长:8000"` → 8000；没有返回 0）。"""
-        try:
-            from src.tasks.training.queue import parse_queue
-            items = parse_queue(spec or "")
-        except Exception:  # noqa: BLE001
-            return 0
-        for item in items:
-            if item.get("target"):
-                return int(item["target"])
-        return 0
 
     @staticmethod
     def _captains(captain: str = "") -> dict:
@@ -718,16 +690,18 @@ class MonitorTab(CustomTab):
         - 第二栏【开始/暂停】只负责自动训练脚本；
         - 点第二栏【开始】时如果还没连接，才"顺手点一下【启动】"。
 
-        **唯一的例外：agent 注入的队列参数**（`task._queue_spec`，多角色队列
-        是 agent 的隐藏通道，没有实装到界面）。带参数进来时自动开跑
+        **唯一的例外：CLI / MCP 注入的队列参数**（`task._launch_queue`，多角色
+        队列是 agent 的隐藏通道，没有实装到界面）。带参数进来时自动开跑
         （`start_controller.start(task)` = 连接 + enable，等于自动点【开始】）；
         参数为空则只连接（`start_controller.start()`，不带 task）。
+        注意判据只看**注入参数**，不看配置派生的目标分队列 —— 后者是设置，
+        点【启动】不应该顺手把训练也开起来（那是第二栏【开始】的事）。
 
         先把已在跑的游戏窗口恢复/置前（`_bring_game_to_front`），否则
         "点了启动没反应" —— 框架对已连接的设备不做任何窗口操作。
         """
         task = self._task()
-        spec = (getattr(task, "_queue_spec", None) or "") if task else ""
+        spec = (getattr(task, "_launch_queue", None) or "") if task else ""
         self._bring_game_to_front()
         try:
             if spec:
@@ -741,42 +715,45 @@ class MonitorTab(CustomTab):
         self._update_data()
 
     def _connection_stop(self):
-        """停止 = 全部停干净（对齐框架 TaskCard.stop_clicked：disable + unpause），
-        另加用户 2026-11-07 口径的扩展：
+        """停止 = 断开游戏（对齐框架 TaskCard.stop_clicked：disable + unpause）。
 
         ① 训练脚本停（disable + unpause，**清 task.pause 的挂起态**）；
-        ② 队列参数与进度一并清空；
-        ③ 执行器暂停（不再取帧）；④ 截图会话关闭（断开游戏）；
-        ⑤ 快速比赛开关复位成「关」。
+        ② **本次注入**的队列参数与进度清空（落盘的设置不动 —— 见下）；
+        ③ 执行器暂停（不再取帧）；④ 截图会话关闭（断开游戏）。
+
+        **不复位第二栏的设置**（2026-11-09 用户口径：第二栏这些控件要落盘、
+        启动装载）：`指定队长` / `队长下拉选择` / `刷到目标分` / `目标分` /
+        快速比赛开关都保持原值。执行器停着它们什么也不会做，下次【启动】
+        自动按这些设置继续 —— 若在【停止】时把它们清零，等于关一次程序
+        就把设置抹了，落盘就失去意义。
 
         关截图会话可能等正在取的那一帧（最多 4 秒），放到后台线程做。
         """
-        task = self._task()
-        self._clear_queue_state()              # ② 队列参数/进度清空（先于 disable）
+        self._clear_queue_state()              # ② 只清注入参数/进度（先于 disable）
         self._stop_auto_training(reset_button=True)
-        self._stop_quick_match()
         try:
             if self.executor is not None and not getattr(self.executor, "paused", True):
                 self.executor.pause()
         except Exception as e:  # noqa: BLE001
             logger.error(f"暂停执行器失败: {e}")
         self._close_capture_async()
-        logger.info("监控页：已停止（断开游戏：队列清空、第二栏复位成「开始」、快速比赛复位成「关」）")
+        logger.info("监控页：已断开游戏（训练停、注入队列清空、第二栏回到「开始」；设置保留）")
         self._update_data()
 
     def _clear_queue_state(self):
-        """清掉训练任务上的队列参数 / 内存队列 / 进度文件 / 目标分开关
-        （第一栏【停止】与第二栏【■】共用的那半段逻辑）。任务不存在时静默跳过。
+        """清掉**本次注入**的队列参数 / 内存队列 / 进度文件
+        （第一栏【停止】与第二栏【■】共用）。
 
-        「一切归零」：连界面「刷到目标分」的勾选也一起关掉（`_score_stop_on`），
-        否则参数被清了、勾还亮着，界面在撒谎。
+        只动运行期的东西：`_launch_queue`（CLI/MCP 注入的一次性参数）和
+        `_queue`（游标在内存里）+ 进度文件。**不碰配置**：
+        `刷到目标分` / `目标分` 是落盘的设置，清了就变成「停止一次，设置没了」。
+        任务不存在时静默跳过。
         """
         task = self._task()
         if task is None:
             return
-        task._queue_spec = None
+        task._launch_queue = None
         task._queue = None
-        task._score_stop_on = False
         try:
             from src.tasks.training.queue import QUEUE_PROGRESS
             if os.path.exists(QUEUE_PROGRESS):
@@ -826,42 +803,40 @@ class MonitorTab(CustomTab):
         task.config[name] = max(0, int(value))
         self._update_data()
 
-    # ---------- 目标分停 / 专注药（用户 2026-11-05；2026-11-07 改队列参数化） ----------
+    # ---------- 目标分停 / 专注药（用户 2026-11-05；2026-11-09 改落盘设置） ----------
     #
-    # 「刷到目标分」映射到**内存里的多角色队列参数**（`task._queue_spec`，
-    # 不写任何配置键）：任务下一次 `run()` 的 `init_captain_queue()` 会拿它
-    # 建队列。达标的判定和提前终止由 `handlers/match.handle_training_score`
-    # （训练评分页）和 `flow.advance_queue_after_round`（注册球员页）做，
-    # 任务自己会停，界面这里只负责挂参数。
+    # 「刷到目标分」「目标分」都是**配置键**（落盘、启动装载，2026-11-09 用户
+    # 口径）。任务下一次 `run()` 的 `init_captain_queue()` 用
+    # `captain_queue_spec()` 从这两个键 + `指定队长` 派生队列；界面不再往
+    # `task._queue_spec` 之类内存字段里挂参数（那个通道只留给 CLI/MCP 注入）。
+    # 达标判定和提前终止由 `handlers/match.handle_training_score`（训练评分页）
+    # 和 `flow.advance_queue_after_round`（注册球员页）做。
     # - 「允许吃专注药」= `自动恢复精力`。钻石购买在 `handlers/stamina.py`
     #   是结构性禁止（钻石行没有「使用」按钮 → `forbidden`）。
 
     def set_score_stop(self, enabled: bool):
-        """勾选「刷到目标分」：把当前队长 + 目标分挂成单人多角色队列参数。
+        """勾选「刷到目标分」：写配置键 `刷到目标分`（Config 自动存盘）。
 
         **先勾后填也允许**（2026-11-07 口径，修复「先有鸡还是先有蛋」死锁）：
-        旧版勾上时要求输入框已有目标分，但输入框又只在勾选后才启用 ——
-        两条规则互相锁死，用户永远勾不上（实测确认）。
-        现在勾上只要求**已指定队长**；目标分可以之后填 —— 输入框一填数字
-        （editingFinished）就自动更新队列参数（set_score_target）。
+        勾上只要求**已指定队长**；目标分可以之后填 —— 输入框一填数字
+        （editingFinished）就写 `目标分`（set_score_target）。
 
         - 勾上：队长必填（没有就拒绝 —— 队列空了会静默降级成单队长模式）；
-          目标分暂时为空 → 队列参数挂「队长」（无目标），该角色按未达标
-          一直刷，填入分数后下一局自动按目标判定。
-        - 取消勾选：清掉队列参数，恢复「跑完一局就结束」的老行为。
+          目标分暂时为空 → 派生 `"队长"`（无目标），该角色按未达标一直刷，
+          填入分数后下一次 run 自动按目标判定。
+        - 取消勾选：`刷到目标分=False`，恢复「跑完一局就结束」的老行为。
 
-        **勾选状态存在 `task._score_stop_on`**（界面自己的开关，和 agent 注入
-        的队列参数分开）：换队长时勾选/目标分要保留，只重建队列参数。
+        重启后勾选状态原样回来（用户在 2026-11-09 明确要求落盘）。
+        换队长不动这两个键 —— 队列是派生值，下次 run 自然按新队长重算。
         """
         task = self._task()
         if task is None:
             logger.warning("监控页：没有找到训练任务，「刷到目标分」未保存")
             return
         if not enabled:
-            task._score_stop_on = False
-            if getattr(task, "_queue_spec", None):
-                task._queue_spec = None
-                logger.info("监控页：刷到目标分 → 关（清队列参数，跑完一局就结束）")
+            if task.config.get("刷到目标分"):
+                task.config["刷到目标分"] = False
+                logger.info("监控页：刷到目标分 → 关（跑完一局就结束；设置已保存）")
             self._update_data()
             return
         captain = (task.config.get("指定队长") or "").strip()
@@ -871,10 +846,11 @@ class MonitorTab(CustomTab):
             self._notify("勾选「刷到目标分」失败：请先在左侧指定队长", error=True)
             self.notify_stop_check()
             return
-        task._score_stop_on = True
-        task._queue_spec = f"{captain}:{target}" if target else captain
+        if target and int(task.config.get("目标分") or 0) != target:
+            task.config["目标分"] = target
+        task.config["刷到目标分"] = True
         if target:
-            logger.info(f"监控页：刷到目标分 → 开（{captain} 刷到 {target} 分后停止）")
+            logger.info(f"监控页：刷到目标分 → 开（{captain} 刷到 {target} 分后停止；设置已保存）")
         else:
             logger.warning(f"监控页：刷到目标分 → 开（{captain}，目标分未填 —— "
                            f"填入「目标分」输入框后自动生效）")
@@ -883,20 +859,15 @@ class MonitorTab(CustomTab):
         self._update_data()
 
     def set_score_target(self, target: int):
-        """目标分输入框：填数字就更新队列参数（先勾后填 / 先填后勾都支持）。"""
+        """目标分输入框：写配置键 `目标分`（落盘，重启后回填）。"""
         task = self._task()
         if task is None:
             return
         target = max(0, int(target or 0))
-        if not target:
-            return                          # 清空/乱输入不动参数，等勾选时再校验
-        if not getattr(task, "_score_stop_on", False):
-            return                          # 没勾「刷到目标分」，只是提前记着，不生效
-        captain = (task.config.get("指定队长") or "").strip()
-        if not captain:
+        if int(task.config.get("目标分") or 0) == target:
             return
-        task._queue_spec = f"{captain}:{target}"
-        logger.info(f"监控页：目标分 → {target}（{captain} 刷到 {target} 分后停止）")
+        task.config["目标分"] = target
+        logger.info(f"监控页：目标分 → {target}（设置已保存，下一次 run 生效）")
         self._update_data()
 
     def _read_target(self, task) -> int:
@@ -934,7 +905,7 @@ class MonitorTab(CustomTab):
         if view is not None:
             task = self._task()
             view._syncing_extras = False
-            view._sync_extras({"score_stop": bool(getattr(task, "_score_stop_on", False))
+            view._sync_extras({"score_stop": bool(task.config.get("刷到目标分"))
                                if task else False})
 
     def set_stamina_allowed(self, allowed: bool):
@@ -963,13 +934,16 @@ class MonitorTab(CustomTab):
 
         1. **执行器**（`og.executor`）是唯一的运行基础，**只有第一栏
            【启动/停止】能动它**：启动 = 接入 + `executor.start()`，
-           停止 = 两个开关复位 + `executor.pause()` + 释放截图会话。
+           停止 = `executor.pause()` + 释放截图会话（**不复位本开关**）。
         2. **开**：enable `QuickMatchTask`，执行器还停着就**顺手**
            `executor.start()`（`_wake_executor`，拉游戏 / 连设备仍归【启动】）。
         3. **关**：只 `task.disable()` —— **绝不去 pause 执行器**，
            关执行器不归它管（第二栏【暂停】也一样）。
-        4. **执行器被关掉时**（第一栏【停止】）：本开关跟着复位成「关」
-           （`_stop_quick_match`），运行基础没了就别装作还在跑。
+        4. **开关状态落盘**：`QuickMatchTask` 是框架的 `TriggerTask`，
+           `enable()/disable()` 会把 `_enabled` 写进 `configs/QuickMatchTask.json`，
+           所以重启后开关原样回来（2026-11-09 用户口径：启动就要装载）。
+           第一栏【停止】**不再把它复位成「关」**：执行器停着它本来就不跑，
+           下次【启动】按落盘的状态自动恢复。
 
         分工上两个模块无关：自动训练自己处理养成里的比赛；快速比赛管
         **养成之外**的比赛（全国大赛 / 圣山战 / 竞技场），养成跑着时它自动让位
@@ -1084,25 +1058,6 @@ class MonitorTab(CustomTab):
         controller = getattr(getattr(og, "app", None), "start_controller", None)
         return bool(getattr(controller, "starting", False))
 
-    def _stop_quick_match(self):
-        """执行器被关掉时把「快速比赛」也关掉，开关复位成「关」。
-
-        运行基础（执行器 + 截图会话）没了，挂在上面的模块开关就不能还是「开」：
-        否则界面显示「开」而实际一帧都拿不到 —— 那是断开链路没收尾。
-        同类复位还有第二栏（`_stop_auto_training(reset_button=True)`）。
-
-        **只在断开时做**：快速比赛拨「关」只 disable 它自己，
-        绝不会反过来 pause 执行器（关执行器不是它该管的事）。
-        """
-        task = self._task_by_name("QuickMatchTask")
-        if task is None or not getattr(task, "enabled", False):
-            return
-        try:
-            task.disable()
-            logger.info("监控页：断开游戏 → 快速比赛已关闭（开关复位成「关」）")
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"关闭快速比赛失败: {e}")
-
     def _stop_auto_training(self, reset_button=False):
         """停掉自动训练任务（对齐框架 stop_clicked：disable + unpause）。
 
@@ -1128,12 +1083,15 @@ class MonitorTab(CustomTab):
         """第二栏的【■ 完全停止】（用户 2026-11-07 口径）。
 
         与【暂停】的差别：暂停只是 `task.disable()`，注入的多角色队列参数
-        还挂在任务上，下一次【开始】会接着队列跑；完全停止要**把队列参数
-        和队列进度一起清掉**（`_clear_queue_state`），回到「按界面配置跑
+        还挂在任务上，下一次【开始】会接着队列跑；完全停止要**把注入的队列参数
+        和队列进度一起清掉**（`_clear_queue_state`），回到「按落盘的设置跑
         一局就结束」的干净状态。
 
+        **不碰配置**：`刷到目标分` / `目标分` / 指定队长等是落盘的设置，
+        完全停止只清本次运行的东西（2026-11-09 用户口径：设置要重启还在）。
+
         **不断开游戏连接**：执行器、截图会话、快速比赛都不碰 —— 那是第一栏
-        【停止】的职责（它 additionally 关执行器 + 断连接 + 关快速比赛）。
+        【停止】的职责。
         """
         task = self._task()
         if task is None:
@@ -1143,7 +1101,7 @@ class MonitorTab(CustomTab):
             task.disable()
         except Exception as e:  # noqa: BLE001
             logger.error(f"停止自动训练失败: {e}")
-        had_queue = bool(getattr(task, "_queue_spec", None) or
+        had_queue = bool(getattr(task, "_launch_queue", None) or
                          getattr(task, "_queue", None))
         self._clear_queue_state()
         if had_queue:
