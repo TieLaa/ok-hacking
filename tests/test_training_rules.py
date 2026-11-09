@@ -6013,30 +6013,6 @@ class MonitorButtonActions(unittest.TestCase):
         self.assertEqual(TrainingFlowMixin.captain_queue_spec(task),
                          "近江奏:8000")                        # 派生值换成新队长
 
-    def test_clear_queue_state_keeps_persisted_settings(self):
-        """第一栏【停止】只清**本次注入**的参数，不动落盘的设置。
-
-        2026-11-09 用户口径：刷到目标分/目标分要重启还在 —— 停止一次就抹掉
-        等于没落盘，所以 `_clear_queue_state` 不许写 config。
-        """
-        from src.ui.MonitorTab import MonitorTab
-
-        class _FakeTask:
-            def __init__(self):
-                self.config = {"指定队长": "望月透", "刷到目标分": True, "目标分": 8000}
-                self._launch_queue = "望月透:8000"
-                self._queue = "living-queue"
-
-        tab = MonitorTab.__new__(MonitorTab)
-        task = _FakeTask()
-        tab._task = lambda: task
-        tab._update_data = lambda: None
-        tab._clear_queue_state()
-        self.assertIsNone(task._launch_queue)      # 注入参数清掉
-        self.assertIsNone(task._queue)
-        self.assertTrue(task.config["刷到目标分"])  # 设置保留
-        self.assertEqual(task.config["目标分"], 8000)
-
     def test_score_stop_without_captain_tells_the_user(self):
         """没指定队长就勾「刷到目标分」→ **界面上要看得见**，不能只写日志。
 
@@ -6491,18 +6467,6 @@ class MonitorButtons(unittest.TestCase):
         self.assertTrue(self._same_icon(view._btn_conn, FluentIcon.PAUSE))
         view.update_data(self._data(paused=True))
         self.assertTrue(self._same_icon(view._btn_conn, FluentIcon.PLAY))
-
-    def test_connecting_keeps_hard_stop_idle(self):
-        """接入中第二栏的 ■ 不许变蓝可点 —— 脚本还没跑，轮不到它说话。"""
-        view, _ = self._view()
-        view.update_data(self._data(connected=False, connecting=True))
-        # 用 isHidden（显式隐藏标记），不受 offscreen 下父窗口没 show 的影响
-        self.assertFalse(view._btn_hard_stop_idle.isHidden())
-        self.assertTrue(view._btn_hard_stop_active.isHidden())
-        # 真跑起来才是蓝底可点
-        view.update_data(self._data(connected=True, training_active=True))
-        self.assertTrue(view._btn_hard_stop_idle.isHidden())
-        self.assertFalse(view._btn_hard_stop_active.isHidden())
 
     def test_second_bar_icon_is_pause_not_stop(self):
         """第二栏文案是【暂停】，图标就该是 ‖；用 ■ 语义对不上。"""

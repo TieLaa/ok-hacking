@@ -140,9 +140,6 @@ class _Actions(MonitorActions):
     def toggle_auto_training(self):
         self.tab.toggle_auto_training()
 
-    def hard_stop_training(self):
-        self.tab.hard_stop_training()
-
 
 class MonitorTab(CustomTab):
     """左侧导航的「监控」页。"""
@@ -655,28 +652,6 @@ class MonitorTab(CustomTab):
             og.app.start_controller.start()
 
 
-    def _clear_queue_state(self):
-        """清掉**本次注入**的队列参数 / 内存队列 / 进度文件
-        （第一栏【停止】与第二栏【■】共用）。
-
-        只动运行期的东西：`_launch_queue`（CLI/MCP 注入的一次性参数）和
-        `_queue`（游标在内存里）+ 进度文件。**不碰配置**：
-        `刷到目标分` / `目标分` 是落盘的设置，清了就变成「停止一次，设置没了」。
-        任务不存在时静默跳过。
-        """
-        task = self._task()
-        if task is None:
-            return
-        task._launch_queue = None
-        task._queue = None
-        try:
-            from src.tasks.training.queue import QUEUE_PROGRESS
-            if os.path.exists(QUEUE_PROGRESS):
-                os.remove(QUEUE_PROGRESS)
-        except OSError as e:
-            logger.warning(f"删除队列进度文件失败: {e}")
-
-
     def set_skill(self, key, value):
         """技能品质数量：写回任务配置并立刻重算预计分数。"""
         task = self._task()
@@ -916,72 +891,6 @@ class MonitorTab(CustomTab):
                 og.app.start_controller.start(task)
         except Exception as e:  # noqa: BLE001
             logger.error(f"自动训练开关失败: {e}")
-        self._update_data()
-
-    @staticmethod
-    def _starting() -> bool:
-        """`start_controller.start()` 已发起、还没跑完（框架的 `starting` 标志）。
-
-        现在只服务第二栏【■ 完全停止】的「接入中补一刀」边界：
-        接入要等窗口稳定 + 设备就绪，这期间按钮既不是「启动」也不是「停止」，
-        不显示点什么就又像「没反应」。**2026-11-10 归位**：这个态以前显示在
-        第二栏【开始】上，于是「点第一栏【启动】、第二栏变【启动中…】」，
-        看着像两颗按钮串位 —— 接入是第一栏的职责，谁被点谁给反馈。
-        """
-        controller = getattr(getattr(og, "app", None), "start_controller", None)
-        return bool(getattr(controller, "starting", False))
-
-
-    def hard_stop_training(self):
-        """第二栏的【■ 完全停止】（用户 2026-11-07 口径）。
-
-        与【暂停】的差别：暂停只是 `task.disable()`，注入的多角色队列参数
-        还挂在任务上，下一次【开始】会接着队列跑；完全停止要**把注入的队列参数
-        和队列进度一起清掉**（`_clear_queue_state`），回到「按落盘的设置跑
-        一局就结束」的干净状态。
-
-        **不碰配置**：`刷到目标分` / `目标分` / 指定队长等是落盘的设置，
-        完全停止只清本次运行的东西（2026-11-09 用户口径：设置要重启还在）。
-
-        **不断开游戏连接**：执行器、截图会话、快速比赛都不碰。
-        """
-        task = self._task()
-        if task is None:
-            logger.warning("监控页：没有找到训练任务，完全停止未执行")
-            return
-        try:
-            task.disable()
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"停止自动训练失败: {e}")
-        had_queue = bool(getattr(task, "_launch_queue", None) or
-                         getattr(task, "_queue", None))
-        self._clear_queue_state()
-        if had_queue:
-            logger.info("监控页：完全停止 → 队列参数与进度已清空")
-        else:
-            logger.info("监控页：完全停止 → 脚本已停（没有队列参数）")
-        # 接入中点停止的边界：start_controller 的接入流程走完后会把任务
-        # 重新 enable（_mark_task_enabled），必须再补一刀 disable —— 用
-        # 短延时轮询到「接入结束」为止（框架没有取消接入的接口）。
-        if self._starting():
-            logger.info("监控页：接入仍在进行 → 接入完成后自动补一刀停止")
-
-            def _late_disable(tries=0):
-                controller = getattr(getattr(og, "app", None), "start_controller", None)
-                still = bool(getattr(controller, "starting", False)) if controller else False
-                if still and tries < 120:            # 最多等 60 秒（500ms × 120）
-                    QTimer.singleShot(500, lambda: _late_disable(tries + 1))
-                    return
-                t = self._task()
-                if t is not None and getattr(t, "enabled", False):
-                    try:
-                        t.disable()
-                        self._clear_queue_state()
-                        logger.info("监控页：接入完成后已补停（队列参数同步清空）")
-                    except Exception as e:  # noqa: BLE001
-                        logger.error(f"接入完成后补停失败: {e}")
-
-            QTimer.singleShot(500, _late_disable)
         self._update_data()
 
     def _task_by_name(self, name):

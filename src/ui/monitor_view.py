@@ -28,11 +28,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import (CheckBox, ComboBox, FluentIcon, FluentIconBase,
-                            LineEdit, PrimaryPushButton, PushButton, Theme,
+from qfluentwidgets import (CheckBox, ComboBox, FluentIcon, LineEdit, PrimaryPushButton, PushButton, Theme,
                             SwitchButton)
 
-from ok.ui.qt.common.OKIcon import OKIcon
 from ok.util.file import get_relative_path
 
 PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -100,11 +98,7 @@ class MonitorActions:
         pass
 
     def toggle_auto_training(self):
-        """第二栏的【开始/暂停】：只管自动训练脚本本身的开关，不碰快速比赛。"""
-        pass
-
-    def hard_stop_training(self):
-        """第二栏的【■】：完全停止（停脚本 + 清队列参数，不断开游戏）。"""
+        """第二栏的【开始/继续/暂停】：与框架任务卡同源（start/pause/unpause）。"""
         pass
 
 
@@ -189,42 +183,6 @@ class _HeroSplit(QWidget):
         self._apply()
 
 
-class _AutoStopIcon(FluentIconBase):
-    """OKIcon.STOP 的 AUTO 路径修正版（2026-11-07）。
-
-    ok 框架的 `OKIcon.path()` 把 Theme.AUTO 直接拼成 `:/qss/auto/stop.svg`
-    —— 该路径不存在，普通 `PushButton` 的图标绘制链路（drawIcon →
-    FluentIconBase.render → path(AUTO)）拿到的是空路径 → 按钮空白。
-    第一栏【停止】用 PrimaryPushButton 才看得见（它的 _drawIcon 传具体
-    theme）。这个子类把 AUTO 解析成实际主题（跟随系统/应用），dark/light
-    两套 svg 都存在，任何按钮容器里都能画出来。
-    """
-
-    def path(self, theme=None):
-        from qfluentwidgets import isDarkTheme, qconfig
-        if theme is None or theme not in (Theme.DARK, Theme.LIGHT):
-            t = qconfig.theme
-            theme = t if t in (Theme.DARK, Theme.LIGHT) else (
-                Theme.DARK if isDarkTheme() else Theme.LIGHT)
-        return OKIcon.STOP.path(theme)
-
-
-class _StopButton(PushButton):
-    """方形图标按钮：修正 minimumSizeHint（图标居中 + 防变形）。
-
-    qfw `PushButton.paintEvent` 用 `minimumSizeHint().width()` 计算图标
-    x 坐标（`x = 12 + (width - hint) / 2`）。空文字 + 图标的按钮 hint 是
-    **82px**，30px 宽的按钮里 x = 12 + (30-82)/2 = **-14** —— 图标画到了
-    按钮外面左侧（2026-11-07 像素取证：图标区域 0 白色像素、按钮左边缘
-    一条白色残影）。hint 钉死 40 → x = 7，16px 图标落在 7-23，中心 15
-    ≈ 按钮中心 15 —— 居中且不越界。
-    """
-
-    def minimumSizeHint(self):
-        from PySide6.QtCore import QSize
-        return QSize(40, self.height())
-
-
 class MonitorView(QWidget):
     """按 layout 描述生成卡片树，并在 update(data) 时刷新文本。"""
 
@@ -237,8 +195,6 @@ class MonitorView(QWidget):
         self.editing = editing
         self.captains = captains or {}
         self._captain_check: CheckBox | None = None
-        self._btn_hard_stop_idle: QPushButton | None = None
-        self._btn_hard_stop_active: QPushButton | None = None
         self._captain_combo: ComboBox | None = None
         self._btn_capture: QPushButton | None = None
         self._btn_conn: QPushButton | None = None
@@ -418,15 +374,6 @@ class MonitorView(QWidget):
     @Slot()
     def _slot_train(self):
         self.actions.toggle_auto_training()
-
-    @Slot()
-    def _slot_hard_stop(self):
-        # 未启动（灰底态按钮可见）时点击无效：直接忽略，不调 hard_stop。
-        # 判据 = 哪颗按钮可见（_sync_switches 按启动状态切换显隐）。
-        idle = self._btn_hard_stop_idle
-        if idle is not None and idle.isVisible():
-            return
-        self.actions.hard_stop_training()
 
     # ---------- 目标分 / 专注药 槽（用户 2026-11-05） ----------
 
@@ -700,37 +647,6 @@ class MonitorView(QWidget):
                 "接入进度显示在第一栏【启动】按钮上）")
 
             lay.addWidget(self._btn_train)
-
-            # 【■】完全停止小方钮（用户 2026-11-07 口径，对齐框架 TaskCard）：
-            # 未启动 = 黑底、不可点；启动后 = 蓝底深字、可点（与【暂停】的
-            # Primary 观感一致）。
-            # **两颗按钮常驻 + setVisible 切换**（框架 TaskCard.update_buttons
-            # 的做法）：动态 objectName + unpolish/polish 在 qfw 控件上不
-            # 一定刷新样式（实测启动后仍是灰底）。
-            # 图标 = OKIcon.STOP（⏹ 圆环包方块，框架 TaskCard 同款素材）。
-            # 两个坑都已修：
-            # ① _AutoStopIcon：OKIcon.path(AUTO) 拼出 :/qss/auto/stop.svg
-            #    （不存在 → 图标空）—— 子类解析成实际主题；
-            # ② _StopButton.minimumSizeHint：qfw paintEvent 用 hint 算图标
-            #    x = 12+(width-hint)/2，空文字图标按钮 hint=82 → 30px 按钮
-            #    里 x=-14，图标画到按钮外（变形/看不见的根因）—— 钉死 40
-            #    让 16px 图标居中。
-            self._btn_hard_stop_idle = _StopButton(_AutoStopIcon(), "")
-            self._btn_hard_stop_idle.setFixedSize(30, 30)
-            self._btn_hard_stop_idle.setObjectName("monitorStopIdle")
-            self._btn_hard_stop_idle.setToolTip(
-                "完全停止：停掉脚本并清空多角色队列参数与进度（不断开游戏连接）。"
-                "未启动时不可用 —— 先点【开始】。")
-            self._btn_hard_stop_active = _StopButton(_AutoStopIcon(), "")
-            self._btn_hard_stop_active.setFixedSize(30, 30)
-            self._btn_hard_stop_active.setObjectName("monitorStopPrimary")
-            self._btn_hard_stop_active.setToolTip(
-                "完全停止：停掉脚本并清空多角色队列参数与进度（不断开游戏连接）。")
-            for _b in (self._btn_hard_stop_idle, self._btn_hard_stop_active):
-                _b._click_handler = self._keep(self._slot_hard_stop)
-                _b.installEventFilter(self)
-                lay.addWidget(_b)
-            self._btn_hard_stop_active.setVisible(False)   # 默认未启动 → 只显示灰底态
 
         # ---------- 目标分停 / 专注药（用户 2026-11-05 口径） ----------
         # 「持续刷到评分多少以后停止」复用**多角色队列**的提前终止机制：
@@ -1099,18 +1015,6 @@ class MonitorView(QWidget):
             if self._train_state != state:
                 self._btn_train.setIcon(icon)
                 self._train_state = state
-            # 【■】两态显隐（用户 2026-11-07 口径，对齐框架 TaskCard）：
-            # 未启动/暂停态 = 黑底灰钮可见（点击被拦）；
-            # 真在跑（running）= 蓝底深字钮可见、可点。
-            # **不含 connecting**（2026-11-10）：接入的是第一栏，脚本一帧都还没跑，
-            # ■ 在这儿变蓝可点等于又让第二栏替第一栏说话。
-            # **两颗按钮常驻 + setVisible 切换**（框架 update_buttons 的做法）：
-            # 动态 objectName + unpolish/polish 在 qfw 控件上不一定刷新样式。
-            if self._btn_hard_stop_idle is not None and \
-                    self._btn_hard_stop_active is not None:
-                active = state == "running"
-                self._btn_hard_stop_idle.setVisible(not active)
-                self._btn_hard_stop_active.setVisible(active)
         for key, switch in (("quick_enabled", self._switch_quick),):
             if switch is None or key not in data:
                 continue

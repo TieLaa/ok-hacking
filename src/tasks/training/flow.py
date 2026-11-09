@@ -477,7 +477,7 @@ class TrainingFlowMixin:
         2. **配置派生**（`captain_queue_spec()`：指定队长 + 刷到目标分/目标分）
            —— 落盘的设置，重启后照旧生效。
 
-        清空的职责在**界面侧**：`MonitorTab` 的【停止】/【■ 完全停止】清
+        清空的职责在**界面侧**：`MonitorTab.set_captain()` 在用户改队长时清
         `_launch_queue`（「本次注入的安排作废」）；配置派生值不用清 ——
         用户改队长/目标分，下一次 run 重新派生即可。
         `多角色队列` 配置键已废弃（保留在 default_config 里只为不炸老存档）。
