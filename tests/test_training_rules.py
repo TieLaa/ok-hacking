@@ -1221,17 +1221,26 @@ class RingDetection(unittest.TestCase):
     两个科目同分 4.30，真正的金框科目被挤掉。
     """
 
-    def _frame_with_gold_ring(self, cy):
+    def _frame_with_gold_ring(self, cy, color=(25, 225, 255)):
+        """画一圈**真金框**颜色（不是橙黄按钮体）。
+
+        2026-11-02 `f0deeef` 把判据改成「按 G 通道分色」之后，金框像素额外要求
+        `G >= GOLD_PIX_G_MIN(200)` 且 `hue >= GOLD_PIX_HUE_MIN(18)`
+        —— 因为**橙黄按钮体本身就是 G≈171 / hue≈15**，只用饱和+亮度分不开。
+        这里原来写的 `(30, 140, 255)` 正是那个「橙黄按钮体」色（HSV 15,225,255），
+        新判据下不该算金框，测试因此常年红。真金框实测 G≈221+、hue≈25：
+        `color` 默认 `(25, 225, 255)` → HSV(26,230,255)。
+        `color` 可覆盖，供 `test_orange_button_body_is_not_gold` 反证用。
+        """
         frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
         h, w = frame.shape[:2]
         y1, y2 = int(cy - h * 0.055), int(cy + h * 0.055)
         x1, x2 = int(w * 0.752), int(w * 0.968)
         t = 14
-        orange = (30, 140, 255)                    # BGR
-        frame[y1:y1 + t, x1:x2] = orange
-        frame[y2 - t:y2, x1:x2] = orange
-        frame[y1:y2, x1:x1 + t] = orange
-        frame[y1:y2, x2 - t:x2] = orange
+        frame[y1:y1 + t, x1:x2] = color
+        frame[y2 - t:y2, x1:x2] = color
+        frame[y1:y2, x1:x1 + t] = color
+        frame[y1:y2, x2 - t:x2] = color
         return frame
 
     def test_named_row_only(self):
@@ -1255,6 +1264,20 @@ class RingDetection(unittest.TestCase):
         ]
         task = DryRunTask(frame, texts)
         self.assertFalse(task.has_gold_border(texts, subject="防守"))
+
+    def test_orange_button_body_is_not_gold(self):
+        """橙黄**按钮体**色（G=140 / hue=15）不能算金框。
+
+        `f0deeef` 加 `G >= 200` 就是为了把这种色分出去（度假页整页橙黄按钮）。
+        这条闸要是被谁「顺手放宽」，度假页 6 行会被判成 6 个金框 —— 用测试钉住。
+        """
+        frame = self._frame_with_gold_ring(300, color=(30, 140, 255))   # 橙黄按钮体
+        texts = [
+            box(1500, 270, "投射", 110, 66),
+            box(1500, 670, "体能", 110, 66),
+        ]
+        task = DryRunTask(frame, texts)
+        self.assertFalse(task.has_gold_border(texts, subject="投射"))
 
 
 class CritBorderRules(unittest.TestCase):
@@ -6010,6 +6033,46 @@ class MonitorButtonActions(unittest.TestCase):
         tab._clear_queue_state()
         self.assertIsNone(task._queue_spec)
         self.assertFalse(task._score_stop_on)
+
+    def test_score_stop_without_captain_tells_the_user(self):
+        """没指定队长就勾「刷到目标分」→ **界面上要看得见**，不能只写日志。
+
+        2026-11-08 实测：原来那句是 `logger.warning(..., notify=True)`，
+        而 `ok.Logger` 只收一个 message → TypeError 被 Qt 槽吞掉 →
+        用户看到的只是「勾选框自己弹回去了」，以为界面坏了。
+        """
+        from unittest import mock
+        from src.ui.MonitorTab import MonitorTab
+
+        class _FakeTask:
+            def __init__(self):
+                self.config = {"指定队长": ""}
+                self._queue_spec = None
+                self._score_stop_on = False
+                self._queue = None
+
+        tab = MonitorTab.__new__(MonitorTab)
+        task = _FakeTask()
+        tab._task = lambda: task
+        tab._update_data = lambda: None
+        tab._view = None
+        with mock.patch("ok.core.notifications.alert_error") as alert_error, \
+                mock.patch("ok.core.notifications.alert_info") as alert_info:
+            tab.set_score_stop(True)
+        self.assertFalse(task._score_stop_on)          # 没勾上
+        self.assertIsNone(task._queue_spec)
+        self.assertEqual(alert_error.call_count, 1)     # 但用户看到了原因
+        self.assertIn("队长", alert_error.call_args[0][0])
+        alert_info.assert_not_called()
+
+    def test_notify_never_raises(self):
+        """提示通道炸了也不能连累主流程（比如没 QApplication 的 headless 场景）。"""
+        from unittest import mock
+        from src.ui.MonitorTab import MonitorTab
+
+        with mock.patch("ok.core.notifications.alert_error",
+                        side_effect=RuntimeError("no gui")):
+            MonitorTab._notify("随便一句话", error=True)   # 不抛异常即通过
 
     def test_disconnect_resets_second_bar_state(self):
         """第一栏【停止】（断开游戏）→ 训练任务被 disable、按钮复位成【开始】。

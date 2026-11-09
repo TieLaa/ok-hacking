@@ -603,6 +603,8 @@ class MonitorTab(CustomTab):
             if getattr(task, "_score_stop_on", False):
                 task._score_stop_on = False
                 logger.info("监控页：取消指定队长 → 「刷到目标分」一并关闭")
+                # 勾选框会自己变灰/取消，不解释一句用户会以为「界面把我的设置吃了」
+                self._notify("已取消指定队长：没有队长就没法刷分，「刷到目标分」一并关闭")
             reset = getattr(task, "reset_style", None)
             if callable(reset):
                 try:
@@ -735,6 +737,7 @@ class MonitorTab(CustomTab):
                 og.app.start_controller.start()
         except Exception as e:  # noqa: BLE001
             logger.error(f"启动失败: {e}")
+            self._notify(f"启动失败：{e}", error=True)
         self._update_data()
 
     def _connection_stop(self):
@@ -865,6 +868,7 @@ class MonitorTab(CustomTab):
         target = self._read_target(task)
         if not captain:
             logger.warning("监控页：勾「刷到目标分」失败 —— 请先在左侧指定队长")
+            self._notify("勾选「刷到目标分」失败：请先在左侧指定队长", error=True)
             self.notify_stop_check()
             return
         task._score_stop_on = True
@@ -874,6 +878,8 @@ class MonitorTab(CustomTab):
         else:
             logger.warning(f"监控页：刷到目标分 → 开（{captain}，目标分未填 —— "
                            f"填入「目标分」输入框后自动生效）")
+            self._notify(f"「刷到目标分」已开（{captain}）：请在「目标分」里填分数，"
+                         f"否则会一直刷到手动停止")
         self._update_data()
 
     def set_score_target(self, target: int):
@@ -901,6 +907,26 @@ class MonitorTab(CustomTab):
             return 0
         text = (edit.text() or "").strip()
         return int(text) if text.isdigit() else 0
+
+    @staticmethod
+    def _notify(message: str, error: bool = False):
+        """在界面上弹一条提示（InfoBar + 托盘），失败绝不影响主流程。
+
+        **别用 `logger.warning(..., notify=True)`**：`ok.Logger.info/warning` 只收
+        一个 message，多传 `notify` 就是 `TypeError` —— 而它发生在 Qt 槽里，
+        异常被事件循环吞掉，表现成「提示从来没出现过」（2026-11-08 实测，
+        本文件里 6 处这种调用全都没生效过）。
+
+        合规通道是框架自己的 `ok.core.notifications`：
+        `alert_info / alert_error` → `communicate.notification.emit(...)` →
+        `MainWindow.show_notification`（qfw InfoBar，必要时加托盘/外部通知）。
+        走 signal 发送，跨线程安全（任务线程里调用也不会摸 Qt 控件）。
+        """
+        try:
+            from ok.core.notifications import alert_error, alert_info
+            (alert_error if error else alert_info)(message)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"界面提示发送失败（只写日志）: {e}")
 
     def notify_stop_check(self):
         """校验失败把勾选框弹回去（view 层按 config 回填，这里强制刷一次）。"""
@@ -1011,6 +1037,7 @@ class MonitorTab(CustomTab):
         task = self._task()
         if task is None:
             logger.warning("监控页：没找到训练任务")
+            self._notify("没找到训练任务：可能还在加载，稍后再点一次", error=True)
             return
         enabled = bool(getattr(task, "enabled", False))
         paused = enabled and bool(getattr(task, "paused", False))
