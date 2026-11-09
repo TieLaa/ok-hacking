@@ -56,7 +56,7 @@ DEFAULT_LAYOUT = {
          "fallback": "等待开始",
          "right_ratio": 0.5,
          "stats": [
-             {"label": "专注", "value": "{stamina}", "suffix": "/{stamina_max}",
+             {"label": "精力", "value": "{stamina}", "suffix": "/{stamina_max}",
               "bar": True, "bar_key": "stamina_pct", "bar_width": 150},
              {"label": "零用钱", "value": "{coin}"},
              {"label": "流派", "value": "{style}"},
@@ -164,6 +164,9 @@ class MonitorTab(CustomTab):
         self._qss_mtime = 0.0
         self._view: MonitorView | None = None
         self._editing = False
+        # 监控页「最后一次读到的值」缓存（只用于展示，见 `_sticky`）：
+        # 某一拍 OCR 没抓到 → 保持上一拍，不闪成「—」。
+        self._last_seen: dict = {}
 
         self._build_view()
         self._apply_style()
@@ -361,11 +364,40 @@ class MonitorTab(CustomTab):
         except Exception:  # noqa: BLE001
             return None
 
+    def _sticky(self, key, value):
+        """取「最后一次读到的值」：这一拍为 None 就返回上一拍的值。
+
+        为什么需要（2026-11-09 用户反馈）：监控页第三栏左半边（精力 / 零用钱 /
+        六维 / 分数）每隔几拍就闪一下「—」。`info` 是任务每拍覆盖写的 UI 通道，
+        OCR 漏读一拍、或 `top_bar()` 被局部 texts 调用时就会短暂变 None；
+        直接渲染就是「好值 → — → 好值」。
+
+        只用于**展示**：业务判据读的是 `top_bar()` 的返回值，None 语义不变。
+        新一局 `info` 会被 `info_clear()` 清空，`_collect` 里同时清掉这个缓存，
+        免得新角色开局先显示上一个人的数。
+        """
+        cache = getattr(self, "_last_seen", None)
+        if cache is None:
+            cache = self._last_seen = {}
+        if value is not None:
+            cache[key] = value
+            return value
+        return cache.get(key)
+
     def _collect(self) -> dict:
         task = self._task()
         info = dict(getattr(task, "info", {}) or {}) if task else {}
+        # 新一局/重载：框架 `enable()` 会 info_clear() 把 info 清空 →
+        # 上一局的展示缓存一并丢掉，否则新角色会先显示上一个人的数值。
+        if not info:
+            self._last_seen = {}
         config = dict(getattr(task, "config", {}) or {}) if task else {}
-        attrs = dict(info.get("attrs") or {})
+        attrs = self._sticky("attrs", dict(info.get("attrs") or {}) or None) or {}
+        week = self._sticky("week", info.get("week"))
+        day = self._sticky("day", info.get("day"))
+        stamina = self._sticky("stamina", info.get("stamina"))
+        stamina_max = self._sticky("stamina_max", info.get("stamina_max"))
+        coin = self._sticky("coin", info.get("coin"))
         # 配置里是开局已有的技能数；info["skill_gained"] 是本局三选一拿到的，相加才是当前总数
         gained = info.get("skill_gained") if isinstance(info.get("skill_gained"), dict) else {}
         skills = {k: int(config.get(key, 0) or 0) + int(gained.get(k, 0) or 0)
@@ -385,13 +417,14 @@ class MonitorTab(CustomTab):
 
         data = {
             "state": self._state(task),
-            # 留 None 而不是「—」，这样 hero 标题能命中 fallback（等待开始）
-            "week": info.get("week"),
-            "day": info.get("day"),
+            # 留 None 而不是「—」，这样 hero 标题能命中 fallback（等待开始）。
+            # 这里的 None 已经是 `_sticky` 过滤后的：读不到时沿用上一拍的值。
+            "week": week,
+            "day": day,
             "stamina": stamina if stamina is not None else MISSING,
             "stamina_max": stamina_max if stamina_max is not None else MISSING,
             "stamina_pct": pct,
-            "coin": info.get("coin") if info.get("coin") is not None else MISSING,
+            "coin": coin if coin is not None else MISSING,
             "style": info.get("style") or self._style_from_config(config),
             "action": info.get("action") or "空闲",
             "uptime": _fmt_uptime(task),

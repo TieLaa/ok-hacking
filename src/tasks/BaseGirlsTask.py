@@ -760,15 +760,18 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         # info 是框架给任务用的 UI 数据通道，这里只覆盖 UI 需要的那几个键，
         # 不参与任何业务判据。用 getattr 是给回归桩（tools/check_handlers.py）
         # 留的安全垫：它手工初始化、不调 BaseTask.__init__。
+        #
+        # **只写读到的值，None 不许覆盖**（2026-11-09 用户反馈：监控页第三栏
+        # 时不时闪一下「—」）：`top_bar()` 一拍里会被 20 多个调用点调用，
+        # 有的调用只传了局部区域的 texts —— 那一拍解析不到**不代表**游戏里的
+        # 数字变了。以前这里整批 update（含 None），于是某一拍 OCR 漏读就把
+        # 上一拍好值刷成 None → 界面掉成「—」，下一拍读到了又跳回来。
+        # 业务判据看的是 `state`（本函数返回值），它仍然保留 None 语义。
         info = getattr(self, "info", None)
         if isinstance(info, dict):
-            info.update({
-                "week": state["week"],
-                "day": state["day"],
-                "stamina": state["stamina"],
-                "stamina_max": state["stamina_max"],
-                "coin": state["coin"],
-            })
+            for key in ("week", "day", "stamina", "stamina_max", "coin"):
+                if state[key] is not None:
+                    info[key] = state[key]
             if state["stamina"] is not None and state["stamina_max"]:
                 info["stamina_pct"] = round(state["stamina"] / state["stamina_max"] * 100)
         return state

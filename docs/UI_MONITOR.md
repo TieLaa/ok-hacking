@@ -1,7 +1,7 @@
 # 监控页（布局可调）
 
 启动后默认落在这一页（`MonitorTab._select_on_startup` 等主窗口 showEvent 后切过来）：
-打开就知道第几周、专注多少、现在在做什么、最近点了什么。
+打开就知道第几周、精力多少、现在在做什么、最近点了什么。
 **结构和样式都能直接改**：在页面里点「编辑布局」，或者手改 JSON / QSS，存盘即生效。
 
 想改回启动落在「截图方式」页：把 `src/ui/MonitorTab.py` 顶部 `START_ON_MONITOR` 改成 `False`。
@@ -33,7 +33,7 @@
 |---|---|---|
 | `connection` | 连接状态条 | `height` `title` `meta` `run_text` `stop_text`（图标随状态走：`▶ 启动` / `■ 停止`） |
 | `captain` | 队长选择（勾选框 + 分组下拉）+ 自动训练开关 | `height` `label` `hint` `combo_width` `start_text` `pause_text` |
-| `hero` | 周目 / 专注 / 文案 | `stats` 数组、`title`、`fallback` |
+| `hero` | 周目 / 精力 / 文案 | `stats` 数组、`title`、`fallback` |
 | `cards` | 一行摘要卡 | `items[].title` + `rows`（每行 `["左","右"]`） |
 | `timeline` | 最近动作 | `max_rows` `time_width` `event_width` |
 
@@ -273,7 +273,7 @@ if self.paused or self._exclusive_owner is not None:
   - 其它页面不读六维：校门口 / 地图根本没有这个面板；周末加的是零碎属性
     （属性+10、精力+…），回头累加既对不上面板也没意义
   - 科目页只在选科目时用 `info["attrs"]`（当前值低的科目优先），**不再**承担刷新
-  - 周 / 星期 / 专注 / 零用钱 另外还由 `BaseGirlsTask.top_bar()` 每拍解析
+  - 周 / 星期 / 精力 / 零用钱 另外还由 `BaseGirlsTask.top_bar()` 每拍解析
     （顶栏一直在屏幕上）；零用钱取法复用 `parsers.read_money()`（周末商店/游戏厅本来就在用）
   - **任务停着的时候一个字段都不会动**：这些都是 OCR 读游戏画面得来的，没拍就没数据
 - 读不到六维时显示「—」，分数也显示「—」；`refresh_attr_info` 是合并语义，
@@ -313,7 +313,7 @@ if self.paused or self._exclusive_owner is not None:
 | 字段 | 含义 | 来源 |
 |---|---|---|
 | `{week}` `{day}` | 第几周 / 星期几 | 顶栏 OCR（`top_bar()`） |
-| `{stamina}` `{stamina_max}` `{stamina_pct}` | 专注 / 上限 / 百分比 | 同上 |
+| `{stamina}` `{stamina_max}` `{stamina_pct}` | 精力 / 上限 / 百分比 | 同上 |
 | `{coin}` | 零用钱 | 同上 |
 | `{style}` | 当前流派 | 每拍命中 handler 时同步 |
 | `{action}` | 当前动作（域 · handler） | 同上 |

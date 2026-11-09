@@ -2028,6 +2028,23 @@ class LoungeSnapshot(unittest.TestCase):
         noisy = texts + [box(1226, 32, "-100", 98, 32)]
         self.assertEqual(FakeTask(noisy).top_bar(noisy)["coin"], 80)
 
+    def test_top_bar_miss_keeps_last_visible_values(self):
+        """某一拍 OCR 没读到 → `info` 里的旧值不许被 None 覆盖（监控页不闪「—」）。
+
+        2026-11-09 用户反馈：第三栏左半边时不时闪一下「—」。根因是
+        `top_bar()` 每拍都整批写 `info`（含 None），而它一拍里会被多个
+        调用点用**局部 texts** 调用 —— 解析不到 ≠ 游戏里的数字变了。
+        """
+        task = FakeTask(list(self.TOPBAR))
+        task.top_bar(list(self.TOPBAR))
+        self.assertEqual(task.info["stamina"], 115)
+        self.assertEqual(task.info["coin"], 80)
+        # 下一拍顶栏只读到了周数（斜杠/金币都丢了）→ info 保持上一拍
+        task.top_bar([box(46, 22, "第2周", 108, 42)])
+        self.assertEqual(task.info["stamina"], 115)
+        self.assertEqual(task.info["stamina_max"], 130)
+        self.assertEqual(task.info["coin"], 80)
+
     def test_snapshot_written_once_per_entry(self):
         """决策拍拍一次快照，六维 / 精力 / 零用钱一起进 info；同一页不重复拍。"""
         texts = self.TOPBAR + self.PANEL + self.HUB
@@ -6583,6 +6600,16 @@ class MonitorButtons(unittest.TestCase):
         view._captain_check.setChecked(False)
         view._captain_check.setChecked(True)
         self.assertIn(("captain", "野上泷"), actions.log)
+
+    def test_sticky_keeps_last_value(self):
+        """监控页展示用的「最后一拍好值」缓存：None 不覆盖，好值才更新。"""
+        from src.ui.MonitorTab import MonitorTab
+        tab = MonitorTab.__new__(MonitorTab)
+        self.assertIsNone(tab._sticky("stamina", None))
+        self.assertEqual(tab._sticky("stamina", 115), 115)
+        self.assertEqual(tab._sticky("stamina", None), 115)   # 漏读一拍 → 不闪「—」
+        self.assertEqual(tab._sticky("stamina", 96), 96)      # 真读到了 → 跟新
+        self.assertEqual(tab._sticky("stamina", None), 96)
 
     @staticmethod
     def _same_icon(btn, icon) -> bool:
