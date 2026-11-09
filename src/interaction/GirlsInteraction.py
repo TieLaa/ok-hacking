@@ -94,15 +94,6 @@ class GirlsInteraction(BaseInteraction):
         self._stop_requested = False     # 等待期间收到停止请求 → 下一次点击直接跳过
         self._activity_logged = False    # 钩子状态只打一次日志，别刷屏
 
-    @property
-    def steal_pause(self):
-        """旧名字的兼容别名（配置/外部脚本可能还在用它）。"""
-        return self.user_idle_wait
-
-    @steal_pause.setter
-    def steal_pause(self, value):
-        self.user_idle_wait = value
-
     # ---------- 窗口 ----------
 
     @property
@@ -144,8 +135,6 @@ class GirlsInteraction(BaseInteraction):
         logger.warning(f"游戏未能置前（目标 {hwnd}，当前前台「{fg_name}」），本次操作放弃")
         return False
 
-    def is_foreground(self):
-        return win32gui.GetForegroundWindow() == self.hwnd
 
     # ---------- 用户优先（键鼠操作让路） ----------
 

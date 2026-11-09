@@ -47,7 +47,6 @@ def locate_start_button(ok):
     找不到就返回 None，交给固定候选坐标兜底。
     """
     try:
-        import cv2                      # noqa: PLC0415
         from ok.device.capture_methods.windows_graphics import (  # noqa: PLC0415
             WindowsGraphicsCaptureMethod)
         from onnxocr.onnx_paddleocr import ONNXPaddleOcr  # noqa: PLC0415

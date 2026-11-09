@@ -19,8 +19,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import win32api  # noqa: E402
-import win32con  # noqa: E402
+import win32api  # noqa: E402  # noqa: E402
 import win32gui  # noqa: E402
 
 from tools.abs_mouse import click_screen, ensure_foreground, find_game_hwnd, move_to_screen  # noqa: E402

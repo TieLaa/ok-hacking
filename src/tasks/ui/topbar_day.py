@@ -117,8 +117,3 @@ def read_week(ocr, frame):
     texts = zoom_reread.reread_region(frame, ocr, WEEK_REGION,
                                       scale=ZOOM, min_score=MIN_SCORE)
     return week_from_texts(texts)
-
-
-def _ocr_boxes(ocr, img):
-    """兼容旧调用点：等价于 `zoom_reread.run_ocr`。"""
-    return zoom_reread.run_ocr(ocr, img, min_score=MIN_SCORE)

@@ -44,8 +44,7 @@ DEFAULT_LAYOUT = {
     "sections": [
         {"type": "connection", "height": 54,
          "title": "{device_title}", "meta": "{device_meta}",
-         "show_run": True, "run_text": "开始", "stop_text": "暂停",
-         "starting_text": ""},
+         "show_run": True, "run_text": "开始", "stop_text": "暂停"},
         {"type": "captain", "height": 54,
          "label": "指定队长",
          "hint": "取消勾选 = 不接开局，只跑已有局",

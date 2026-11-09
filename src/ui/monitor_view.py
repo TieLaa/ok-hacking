@@ -27,8 +27,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import (CheckBox, ComboBox, FluentIcon, LineEdit, PrimaryPushButton, PushButton, Theme,
-                            SwitchButton)
+from qfluentwidgets import (CheckBox, ComboBox, FluentIcon, LineEdit, PrimaryPushButton, SwitchButton)
 
 from ok.util.file import get_relative_path
 
@@ -291,8 +290,6 @@ class MonitorView(QWidget):
         self.actions.refresh_connection()
 
     @Slot()
-    def _slot_logs(self):
-        self.actions.open_logs()
 
     def _make_primary(self, text, handler, height=30, icon=None):
         btn = PrimaryPushButton(icon or FluentIcon.PLAY, text)
@@ -301,12 +298,6 @@ class MonitorView(QWidget):
         btn.installEventFilter(self)
         return btn
 
-    def _make_plain(self, text, handler, height=30):
-        btn = PushButton(FluentIcon.PLAY, text)
-        btn.setFixedHeight(height)
-        btn._click_handler = self._keep(lambda h=handler: h())
-        btn.installEventFilter(self)
-        return btn
 
     def _attr_icon(self, name: str, width: int = 18):
         """属性小图标：assets/ui/attrs/<属性>.png；没有就返回 None（只显示文字）.
@@ -327,8 +318,6 @@ class MonitorView(QWidget):
         return label
 
     @Slot(str, int)
-    def _slot_skill(self, key, value):
-        self.actions.set_skill(key, value)
 
     @Slot(bool)
     def _slot_quick(self, checked):
@@ -975,16 +964,6 @@ class MonitorView(QWidget):
                 handler()
                 return True
         return super().eventFilter(obj, event)
-
-
-def _block_name(block: dict) -> str:
-    title = str(block.get("title") or "")
-    # 带 {字段} 的标题是模板，不能当名字用（会变成「第」这种半截文案）
-    if title and "{" not in title:
-        return title
-    mapping = {"connection": "连接状态", "hero": "主状态", "cards": "摘要卡",
-               "timeline": "最近动作"}
-    return block.get("id") or mapping.get(block.get("type"), "区块")
 
 
 def _render(template: str, data: dict) -> tuple[str, bool]:

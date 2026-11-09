@@ -22,7 +22,7 @@ ROOT = __file__.rsplit("\\tools\\", 1)[0]
 sys.path.insert(0, ROOT)
 
 from tools.abs_mouse import find_game_hwnd  # noqa: E402
-from tools.collect_roster import (COL_X, CLICK_DY, cards_in_view, drag_rows,  # noqa: E402
+from tools.collect_roster import (CLICK_DY, cards_in_view,  # noqa: E402
                                   parse_detail, read)
 from tools.collect_ssr import Screen, joined  # noqa: E402
 

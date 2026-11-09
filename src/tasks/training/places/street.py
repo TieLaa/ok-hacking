@@ -298,9 +298,3 @@ class StreetPlace:
     def mark_spent(self):
         """今天买成了（点「确定」成功才算）。"""
         self.street_state()["gacha_spent"] = True
-
-    def tried_today(self):
-        return PLACE in self.street_state().get("gacha_tried", set())
-
-    def spent_today(self):
-        return bool(self.street_state().get("gacha_spent"))

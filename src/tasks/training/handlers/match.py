@@ -190,15 +190,6 @@ class MatchHandlers:
         self.click(int(self.width_of_screen(0.5)), int(self.height_of_screen(0.5)), after_sleep=0.45)
         return True
 
-    def in_registration_page(self, texts):
-        """最终结算的下一页：注册球员 / 签约 —— 这才是**一局的终点**。
-
-        坑（2026-10-26）：这里原来写了「选择器材 / 确认编队」，但那两步是
-        **每局开局的标准流程**（训练 → 启程 → 选队长 → 选择器材 → 确认编队 → 开始训练）。
-        结果新一局刚开局 3 秒就被当成"跑完了"直接退出。
-        所以只认注册/签约这类**一次性**文案，绝不认开局建队的按钮。
-        """
-        return self.match_text(texts, ("注册球员", "球员登录", "签约", "入部申请", "成为注册")) is not None
 
     def init_match_state(self):
         """比赛相关的共享状态：养成任务和「快速比赛」模块都要初始化（两个任务共用）。"""
@@ -683,33 +674,6 @@ class MatchHandlers:
         # 免得带彩色翅膀徽章那种金色面积小的图标（0.074）哪天掉到线下漏判。
         return gold_ratio > 0.03 or gem_ratio > 0.02
 
-    def skill_card_marks(self, cx, cy):
-        """这张技能卡上/角上挂了几个「队友」橙色小头像（只做诊断，不参与打分）。
-
-        2026-10-29 用户两次反馈三选一没选「有队友」的卡，但当时没有帧，
-        无法确定标记位置。这里先只统计 + 保帧，判据等真帧再定。
-        """
-        frame = self.frame
-        if frame is None:
-            return 0
-        h, w = frame.shape[:2]
-        x1, x2 = int(w * (cx - 0.14)), int(w * (cx + 0.14))
-        y1, y2 = int(h * (cy - 0.22)), int(h * (cy + 0.18))
-        roi = frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
-        if roi.size == 0:
-            return 0
-        b = roi[:, :, 0].astype(int)
-        g = roi[:, :, 1].astype(int)
-        r = roi[:, :, 2].astype(int)
-        orange = ((r > 225) & (g > 100) & (g < 190) & (b < 70)).astype(np.uint8)
-        if not orange.any():
-            return 0
-        n, _lab, stats, _cent = cv2.connectedComponentsWithStats(orange, 8)
-        size = 42 * w / 1920.0
-        return sum(1 for i in range(1, n)
-                   if size * 0.5 <= stats[i][2] <= size * 1.8
-                   and size * 0.5 <= stats[i][3] <= size * 1.8
-                   and stats[i][4] >= size * size * 0.25)
 
     def dump_skill_frame(self, texts):
         """三选一限流存帧（每局最多 6 张），用于校准「有队友/有道具」判据。"""

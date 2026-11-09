@@ -195,8 +195,3 @@ class CaptainQueue:
         runs = data.get("runs")
         self.runs = [r for r in runs if isinstance(r, dict)] if isinstance(runs, list) else []
         return True
-
-    def reset_progress(self):
-        """清进度（用户想重新从第一个角色开始练时用）。"""
-        self.cursor, self.runs = 0, []
-        self.save()

@@ -880,12 +880,3 @@ class BaseGirlsTask(AttemptSupport, BaseTask):
         if self.click_text(labels.POPUP_TEXTS, "dialog", after_sleep=0.8, must=False):
             return True
         return False
-
-    def in_weekend_map(self):
-        return bool(self.find_text(labels.WEEKEND_PLACES[:2], "weekend_map"))
-
-    def in_prepare_page(self):
-        return bool(self.find_text(("跳过比赛", "前往比赛"), "result_page"))
-
-    def in_result_page(self):
-        return bool(self.find_text(("比赛胜利", "比赛失败", "获得", "奖励"), "result_page"))
