@@ -13,7 +13,6 @@ from __future__ import annotations
 import os
 import re
 import time
-from functools import partial
 
 from PySide6.QtCore import QEvent, Qt, Signal, Slot
 from PySide6.QtGui import QIntValidator, QPixmap
@@ -48,24 +47,6 @@ class MonitorActions:
         pass
 
     def open_logs(self):
-        pass
-
-    def move_block(self, path, delta):
-        pass
-
-    def hide_block(self, path):
-        pass
-
-    def restore_block(self, path):
-        pass
-
-    def edit_text(self, path, current):
-        pass
-
-    def toggle_editing(self):
-        pass
-
-    def resize_hero(self, path, ratio):
         pass
 
     def set_captain(self, name, memory=""):
@@ -107,23 +88,18 @@ class _SplitHandle(QFrame):
 
     moved = Signal(int)
 
-    def __init__(self, target: QWidget, editing: bool, ratio_mode: bool = False):
+    def __init__(self, target: QWidget, ratio_mode: bool = False):
         super().__init__()
         self.setObjectName("monitorSplitHandle")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setProperty("editing", "true" if editing else "false")
+        self.setProperty("editing", "false")
         self.target = target
         self.min_width = 120 if ratio_mode else 160
         self.max_width = 900 if ratio_mode else 520
         self._dragging = False
         self._start_x = 0
         self._start_w = 0
-        if editing:
-            self.setFixedWidth(7)
-            self.setCursor(Qt.SplitHCursor)
-            self.setToolTip("左右拖动，调整这一栏的宽度（松手自动保存）")
-        else:
-            self.setFixedWidth(1)
+        self.setFixedWidth(1)
 
     def mousePressEvent(self, event):
         if self.width() <= 1:
@@ -187,12 +163,11 @@ class MonitorView(QWidget):
     """按 layout 描述生成卡片树，并在 update(data) 时刷新文本。"""
 
     def __init__(self, layout: dict, actions: MonitorActions | None = None,
-                 editing: bool = False, captains: dict | None = None,
+                 captains: dict | None = None,
                  parent: QWidget | None = None):
         super().__init__(parent)
         self.layout_spec = layout or {}
         self.actions = actions or MonitorActions()
-        self.editing = editing
         self.captains = captains or {}
         self._captain_check: CheckBox | None = None
         self._captain_combo: ComboBox | None = None
@@ -257,8 +232,6 @@ class MonitorView(QWidget):
                 self._build_captain(section, path)
             elif kind == "timeline":
                 self._build_timeline(section, path)
-        if self.editing:
-            self._build_hidden_bar()
 
     def _card(self, height: int | None = None) -> QFrame:
         frame = QFrame()
@@ -268,16 +241,10 @@ class MonitorView(QWidget):
             frame.setFixedHeight(int(height))
         return frame
 
-    def _label(self, text: str = "", role: str = "", edit_path=None) -> QLabel:
+    def _label(self, text: str = "", role: str = "") -> QLabel:
         lb = QLabel(text)
         if role:
             lb.setProperty("mRole", role)
-        if edit_path is not None and self.editing:
-            lb.setProperty("mEditable", "true")
-            lb.setCursor(Qt.IBeamCursor)
-            lb.setAttribute(Qt.WA_Hover, True)
-            lb.installEventFilter(self)
-            lb._edit_path = edit_path
         return lb
 
     def _bind(self, label: QLabel, template: str, fallback: str | None = None):
@@ -326,10 +293,6 @@ class MonitorView(QWidget):
     @Slot()
     def _slot_logs(self):
         self.actions.open_logs()
-
-    @Slot()
-    def _slot_edit(self):
-        self.actions.toggle_editing()
 
     def _make_primary(self, text, handler, height=30, icon=None):
         btn = PrimaryPushButton(icon or FluentIcon.PLAY, text)
@@ -398,46 +361,6 @@ class MonitorView(QWidget):
             return
         self.actions.set_stamina_allowed(checked)
 
-    def _slot_move(self, path, delta):
-        self.actions.move_block(path, delta)
-
-    def _slot_hide(self, path):
-        self.actions.hide_block(path)
-
-    def _slot_restore(self, path):
-        self.actions.restore_block(path)
-
-    def _slot_resize(self, path, split, width):
-        self.actions.resize_hero(path, width / max(1, split.avail()))
-
-    def _block_wrapper(self, card: QWidget, path, can_hide: bool = True) -> QWidget:
-        """编辑态给区块套一层工具条；非编辑态原样返回。"""
-        if not self.editing:
-            return card
-        wrapper = QWidget()
-        wrapper.setObjectName("monitorBlock")
-        lay = QVBoxLayout(wrapper)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
-
-        bar = QWidget()
-        bar_lay = QHBoxLayout(bar)
-        bar_lay.setContentsMargins(0, 0, 0, 0)
-        bar_lay.setSpacing(4)
-        bar_lay.addStretch(1)
-        buttons = [("↑", "上移", partial(self._slot_move, path, -1)),
-                   ("↓", "下移", partial(self._slot_move, path, 1))]
-        if can_hide:
-            buttons.append(("✕", "隐藏", partial(self._slot_hide, path)))
-        for glyph, tip, fn in buttons:
-            btn = self._button(glyph, fn, height=22, object_name="monitorEditBtn", tooltip=tip)
-            btn.setFixedSize(22, 22)
-            btn.setCursor(Qt.PointingHandCursor)
-            bar_lay.addWidget(btn)
-        lay.addWidget(bar)
-        lay.addWidget(card)
-        return wrapper
-
     def _build_connection(self, spec: dict, path):
         card = self._card(spec.get("height", 54))
         lay = QHBoxLayout(card)
@@ -457,9 +380,9 @@ class MonitorView(QWidget):
         halo_lay.addWidget(dot, 0, 0)
         lay.addWidget(halo)
 
-        name = self._label("", "connName", path + ("title",))
+        name = self._label("", "connName")
         lay.addWidget(self._bind(name, spec.get("title", "{device_title}")))
-        meta = self._label("", "connMeta", path + ("meta",))
+        meta = self._label("", "connMeta")
         lay.addWidget(self._bind(meta, spec.get("meta", "{device_meta}")))
 
         lay.addStretch(1)
@@ -486,13 +409,7 @@ class MonitorView(QWidget):
         for text, slot in (("重新检测", self._slot_refresh),):
             lay.addWidget(self._button(text, slot))
 
-        # 布局编辑入口放第一栏最右（用户 2026-11-05）：第二栏留给任务开关。
-        edit_entry = self._button("✎", self._slot_edit, object_name="monitorEditEntry",
-                                  tooltip="编辑布局：上下移动、隐藏卡片、双击改文字")
-        edit_entry.setFixedSize(28, 28)
-        lay.addWidget(edit_entry)
-
-        self.vBox.addWidget(self._block_wrapper(card, path, can_hide=False))
+        self.vBox.addWidget(card)
 
     def _build_hero(self, spec: dict, path):
         card = self._card(spec.get("height", 176))
@@ -505,10 +422,9 @@ class MonitorView(QWidget):
 
         head_row = QHBoxLayout()
         head_row.setSpacing(10)
-        head_row.addWidget(self._label(spec.get("kicker", "当前进度"), "kicker",
-                                       path + ("kicker",)))
+        head_row.addWidget(self._label(spec.get("kicker", "当前进度"), "kicker"))
         head_row.addWidget(self._bind(
-            self._label("", "heroText", path + ("title",)),
+            self._label("", "heroText"),
             spec.get("title", "第 {week} 周 {day}"), spec.get("fallback")))
         head_row.addStretch(1)
         left.addLayout(head_row)
@@ -519,14 +435,14 @@ class MonitorView(QWidget):
             base = path + ("stats", sidx)
             box = QVBoxLayout()
             box.setSpacing(3)
-            box.addWidget(self._label(stat.get("label", ""), "statKey", base + ("label",)))
+            box.addWidget(self._label(stat.get("label", ""), "statKey"))
 
             value_row = QHBoxLayout()
             value_row.setSpacing(2)
-            value = self._label("", "statValue", base + ("value",))
+            value = self._label("", "statValue")
             value_row.addWidget(self._bind(value, stat.get("value", "")))
             if stat.get("suffix"):
-                suffix = self._label("", "statSuffix", base + ("suffix",))
+                suffix = self._label("", "statSuffix")
                 value_row.addWidget(self._bind(suffix, stat["suffix"]), 0, Qt.AlignBottom)
             box.addLayout(value_row)
 
@@ -595,13 +511,12 @@ class MonitorView(QWidget):
         right_box.setLayout(right)
         right_box.setFixedWidth(int(spec.get("right_width", 232)))
 
-        handle = _SplitHandle(right_box, self.editing, ratio_mode=True)
+        handle = _SplitHandle(right_box, ratio_mode=True)
         split = _HeroSplit(left_box, handle, right_box,
                            float(spec.get("right_ratio", 0.5) or 0.5))
-        handle.moved.connect(self._keep(partial(self._slot_resize, path, split)))
         lay.addWidget(split, 1)
 
-        self.vBox.addWidget(self._block_wrapper(card, path))
+        self.vBox.addWidget(card)
 
     def _build_captain(self, spec: dict, path):
         """队长选择：勾选框 + 按流派分组的下拉。取消勾选 = 无队长。"""
@@ -703,7 +618,7 @@ class MonitorView(QWidget):
             combo.setEnabled(False)
             self._captain_check.setEnabled(False)
 
-        self.vBox.addWidget(self._block_wrapper(card, path, can_hide=False))
+        self.vBox.addWidget(card)
 
     # ---------- 队长控件 ----------
 
@@ -845,8 +760,7 @@ class MonitorView(QWidget):
             lay = QVBoxLayout(card)
             lay.setContentsMargins(16, 14, 16, 10)
             lay.setSpacing(0)
-            lay.addWidget(self._label(item.get("title", ""), "cardTitle",
-                                      base + ("title",)))
+            lay.addWidget(self._label(item.get("title", ""), "cardTitle"))
             lay.addSpacing(4)
             for kdx, row_spec in enumerate(item.get("rows", [])):
                 row_frame = QFrame()
@@ -854,16 +768,15 @@ class MonitorView(QWidget):
                 row_lay = QHBoxLayout(row_frame)
                 row_lay.setContentsMargins(0, 5, 0, 5)
                 row_lay.setSpacing(8)
-                row_lay.addWidget(self._label(row_spec[0], "rowLeft",
-                                              base + ("rows", kdx, 0)))
+                row_lay.addWidget(self._label(row_spec[0], "rowLeft"))
                 row_lay.addStretch(1)
-                right = self._label("", "rowRight", base + ("rows", kdx, 1))
+                right = self._label("", "rowRight")
                 if len(row_spec) > 1:
                     row_lay.addWidget(self._bind(right, row_spec[1]))
                 else:
                     row_lay.addWidget(right)
                 lay.addWidget(row_frame)
-            row.addWidget(self._block_wrapper(card, base), 1)
+            row.addWidget(card, 1)
         self.vBox.addLayout(row)
 
     def _build_timeline(self, spec: dict, path):
@@ -872,8 +785,7 @@ class MonitorView(QWidget):
         lay = QVBoxLayout(card)
         lay.setContentsMargins(16, 14, 16, 12)
         lay.setSpacing(0)
-        lay.addWidget(self._label(spec.get("title", "最近动作"), "cardTitle",
-                                  path + ("title",)))
+        lay.addWidget(self._label(spec.get("title", "最近动作"), "cardTitle"))
         lay.addSpacing(6)
         box = QVBoxLayout()
         box.setSpacing(7)
@@ -881,31 +793,7 @@ class MonitorView(QWidget):
         lay.addStretch(1)
         self._timeline_box = box
         self._timeline_spec = spec
-        self.vBox.addWidget(self._block_wrapper(card, path), 1)
-
-    def _build_hidden_bar(self):
-        sections = self.layout_spec.get("sections", [])
-        hidden = []
-        for idx, section in enumerate(sections):
-            if section.get("_hidden"):
-                hidden.append((("sections", idx), _block_name(section)))
-            for jdx, item in enumerate(section.get("items", []) or []):
-                if item.get("_hidden"):
-                    hidden.append((("sections", idx, "items", jdx), _block_name(item)))
-        if not hidden:
-            return
-        bar = QWidget()
-        lay = QHBoxLayout(bar)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(8)
-        lay.addWidget(self._label("已隐藏：", "hiddenHint"))
-        for path, name in hidden:
-            btn = self._button(f"＋ {name}", partial(self._slot_restore, path),
-                               height=24, object_name="monitorRestore")
-            btn.setCursor(Qt.PointingHandCursor)
-            lay.addWidget(btn)
-        lay.addStretch(1)
-        self.vBox.addWidget(bar)
+        self.vBox.addWidget(card, 1)
 
     # ---------- 刷新 ----------
 
@@ -1085,11 +973,6 @@ class MonitorView(QWidget):
             handler = getattr(obj, "_click_handler", None)
             if handler is not None and event.button() == Qt.LeftButton:
                 handler()
-                return True
-        if event.type() == QEvent.MouseButtonDblClick and self.editing:
-            path = getattr(obj, "_edit_path", None)
-            if path is not None:
-                self.actions.edit_text(path, obj.text())
                 return True
         return super().eventFilter(obj, event)
 

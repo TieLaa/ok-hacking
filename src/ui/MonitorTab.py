@@ -95,24 +95,6 @@ class _Actions(MonitorActions):
     def open_logs(self):
         self.tab.open_logs()
 
-    def move_block(self, path, delta):
-        self.tab.move_block(path, delta)
-
-    def hide_block(self, path):
-        self.tab.hide_block(path)
-
-    def restore_block(self, path):
-        self.tab.restore_block(path)
-
-    def edit_text(self, path, current):
-        self.tab.edit_text(path, current)
-
-    def toggle_editing(self):
-        self.tab.toggle_editing()
-
-    def resize_hero(self, path, right_width):
-        self.tab.resize_hero(path, right_width)
-
     def set_captain(self, name, memory=""):
         self.tab.set_captain(name, memory)
 
@@ -161,7 +143,6 @@ class MonitorTab(CustomTab):
         self._layout_mtime = self._mtime(self._layout_path())
         self._qss_mtime = 0.0
         self._view: MonitorView | None = None
-        self._editing = False
         # 监控页「最后一次读到的值」缓存（只用于展示，见 `_sticky`）：
         # 某一拍 OCR 没抓到 → 保持上一拍，不闪成「—」。
         self._last_seen: dict = {}
@@ -251,72 +232,11 @@ class MonitorTab(CustomTab):
         # 下拉记忆（`队长下拉选择`）同理：没勾选时显示的是它。
         captain = (config.get("指定队长") or "").strip()
         memory = (config.get("队长下拉选择") or "").strip()
-        self._view = MonitorView(self._layout_data, _Actions(self), editing=self._editing,
+        self._view = MonitorView(self._layout_data, _Actions(self),
                                   captains=self._captains(captain or memory))
         self.add_widget(self._view)
         self._apply_style()
         self._update_data()
-
-    # ---------- 布局编辑 ----------
-
-    def toggle_editing(self):
-        self._editing = not self._editing
-        self._build_view()
-        logger.info(f"监控页编辑模式：{'开' if self._editing else '关'}")
-
-    def move_block(self, path, delta):
-        parent = _locate(self._layout_data, path[:-1])
-        index = path[-1]
-        target = index + delta
-        if isinstance(parent, list) and 0 <= target < len(parent):
-            parent[index], parent[target] = parent[target], parent[index]
-            self._persist()
-
-    def hide_block(self, path):
-        block = _locate(self._layout_data, path)
-        if isinstance(block, dict):
-            block["_hidden"] = True
-            self._persist()
-
-    def restore_block(self, path):
-        block = _locate(self._layout_data, path)
-        if isinstance(block, dict):
-            block.pop("_hidden", None)
-            self._persist()
-
-    def resize_hero(self, path, ratio):
-        """hero 分割线拖动后写回左右比例（0.2~0.8）。"""
-        block = _locate(self._layout_data, path)
-        if not isinstance(block, dict):
-            return
-        value = max(0.2, min(0.8, round(float(ratio), 3)))
-        if abs(float(block.get("right_ratio", 0.5) or 0.5) - value) > 0.004:
-            block["right_ratio"] = value
-            block.pop("right_width", None)
-            self._persist()
-
-    def edit_text(self, path, current):
-        from PySide6.QtWidgets import QInputDialog
-        text, ok = QInputDialog.getText(self, "编辑文字", "内容（可用 {字段} 占位）：",
-                                        text=str(current))
-        if not ok or text == current:
-            return
-        parent = _locate(self._layout_data, path[:-1])
-        if isinstance(parent, (list, dict)):
-            parent[path[-1]] = text
-            self._persist()
-
-    def _persist(self):
-        path = self._layout_path()
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(self._layout_data, f, ensure_ascii=False, indent=2)
-            # 先记账再重建，避免自己的写入被 mtime 监听当成外部修改
-            self._layout_mtime = self._mtime(path)
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"保存布局失败 {path}: {e}")
-            return
-        self._build_view()
 
     def _apply_style(self):
         path = self._qss_path(isDarkTheme())
@@ -936,14 +856,6 @@ class MonitorTab(CustomTab):
             open_explorer_folder(get_relative_path("logs"))
         except Exception as e:  # noqa: BLE001
             logger.error(f"打开日志目录失败: {e}")
-
-
-def _locate(root, path):
-    """按 path 取节点：("sections", 2, "items", 1, "rows", 0, 1)。"""
-    node = root
-    for step in path:
-        node = node[step]
-    return node
 
 
 def _fmt_uptime(task) -> str:
