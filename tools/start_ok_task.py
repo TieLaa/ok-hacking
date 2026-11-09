@@ -1,4 +1,4 @@
-"""一键启动 ok-script 的「养成-训练循环」任务。
+"""一键启动 ok-script 的「自动训练」任务。
 
 为什么要这个脚本：
 - ok-script GUI 会自己乱飘（每次 ShowWindow/geometry 事件都可能换位置），

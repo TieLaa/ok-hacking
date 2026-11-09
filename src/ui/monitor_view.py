@@ -77,7 +77,7 @@ class MonitorActions:
         pass
 
     def toggle_connection(self):
-        """第一栏的【启动/停止】：总开关（接入 / 断开游戏）。"""
+        """第一栏的【开始 / 暂停】：执行器总开关（等价起始页的【开始(F9)】）。"""
         pass
 
     def set_skill(self, key, value):
@@ -524,7 +524,7 @@ class MonitorView(QWidget):
             lay.addWidget(self._btn_capture)
 
         if spec.get("show_run", True):
-            # 第一栏右边是**总开关**：启动 = 接入游戏并开跑，停止 = 断开游戏。
+            # 第一栏右边是执行器总开关：开始 = pause 与否 / 暂停，等价起始页【开始(F9)】。
             # （旧的「开始/暂停」按的是 executor.pause()，会把第二栏的自动训练
             #  一起按住，逻辑正好反了 —— 见 MonitorTab.toggle_connection。）
             self._conn_text = (spec.get("run_text", "启动"),
@@ -1040,7 +1040,7 @@ class MonitorView(QWidget):
                 f"本局三选一拿到的技能数；上一次：{data.get('skill_last') or '—'}")
 
     def _sync_run_button(self, data: dict):
-        """第一栏总开关：接入中 → 【启动中…】；接上了 → 【停止】；否则 → 【启动】。
+        """第一栏：执行器暂停 → 【开始】▶；非暂停 → 【暂停】‖（与框架 StartCard 一致）。
 
         判据是**会话在跑**（`connected`）—— 截帧通道活着 **且** 执行器没
         暂停（2026-11-02 修正，详见 MonitorTab._connected）。只看截帧通道

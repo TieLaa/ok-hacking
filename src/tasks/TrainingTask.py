@@ -58,7 +58,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.name = "养成-训练循环"
+        self.name = "自动训练"
         self.description = "自动跑完一局养成：训练 / 周末活动 / 比赛日跳过，循环到赛季结束"
         self.default_config.update(config_spec.build_default_config())
         self.config_type.update(config_spec.build_config_type())

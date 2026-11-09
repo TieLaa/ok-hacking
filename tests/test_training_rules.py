@@ -5903,8 +5903,6 @@ class MonitorButtonActions(unittest.TestCase):
         tab._task = lambda: task
         tab.executor = executor
         tab._update_data = lambda: None
-        tab._connected = lambda: (device_manager.capture_method is not None
-                                  and device_manager.capture_method.connected())
         import ok
         old = getattr(ok.og, "device_manager", None)
         ok.og.device_manager = device_manager
@@ -5980,35 +5978,6 @@ class MonitorButtonActions(unittest.TestCase):
         self.assertIs(app.calls[0][1], task)
         self.assertNotIn("enable", task.calls)
         self.assertFalse(task.enabled)
-
-    def test_start_auto_training_ignores_repeat_click_while_starting(self):
-        """接入进行中再点【开始】不重复发起 —— 否则队列里堆好几个 `do_start`。"""
-        tab, task, executor, capture = self._tab(connected=False)
-        capture.close()
-        app = self._fake_app(starting=True)
-        tab.toggle_auto_training()
-        tab.toggle_auto_training()
-        self.assertEqual(app.calls, [])
-
-    def test_start_when_connected_only_enables_task(self):
-        """已连接时点【开始】→ 只 `task.enable()`，不碰连接（用户口径）。
-
-        第一栏【启动/停止】管连接，第二栏【开始/暂停】管脚本 —— 已连接时
-        点【开始】不该再走 start_controller（那是第一栏的活）。
-        """
-        tab, task, executor, _ = self._tab(connected=True)
-        app = self._fake_app()
-        tab.toggle_auto_training()
-        self.assertEqual(app.calls, [])
-        self.assertIn("enable", task.calls)
-
-    def test_start_auto_training_enables_when_connected(self):
-        """接上游戏时点第二栏【开始】→ 只 enable 训练任务。"""
-        tab, task, executor, _ = self._tab(connected=True)
-        app = self._fake_app()
-        tab.toggle_auto_training()
-        self.assertEqual(app.calls, [])
-        self.assertTrue(task.enabled)
 
     def test_switch_captain_keeps_score_stop_state(self):
         """换队长要**保留**「刷到目标分」的勾选和目标分（用户 2026-11-08 口径）。
@@ -6204,7 +6173,6 @@ class MonitorQuickMatchSwitch(unittest.TestCase):
         executor = _FakeExecutor(paused=not connected)
         tab._task = lambda: train
         tab._task_by_name = lambda name: quick if name == "QuickMatchTask" else None
-        tab._connected = lambda: not executor.paused
         tab._update_data = lambda: None
         tab.executor = executor
         return tab, quick, train, executor
@@ -6317,7 +6285,6 @@ class MonitorExecutorLifecycle(unittest.TestCase):
         quick, train = _FakeTask("快速比赛"), _FakeTask("自动训练")
         tab._task = lambda: train
         tab._task_by_name = lambda name: quick if name == "QuickMatchTask" else None
-        tab._connected = lambda: not executor.paused
         tab._update_data = lambda: None
         tab.executor = executor
         return tab, quick, train, executor
@@ -6354,7 +6321,6 @@ class MonitorExecutorLifecycle(unittest.TestCase):
         unpause 实体含 executor.start()，执行器会被唤醒 —— 这是框架口径。
         """
         tab, quick, train, executor = self._tab(paused=True)
-        tab._connected = lambda: True
         train.enabled = True
         train.paused = True
         tab.toggle_auto_training()
@@ -6548,59 +6514,6 @@ class MonitorButtons(unittest.TestCase):
         view.update_data(self._data(training_active=True))
         self.assertTrue(self._same_icon(view._btn_train, FluentIcon.PAUSE))
 
-
-class MonitorConnectedCriterion(unittest.TestCase):
-    """第一栏的判据：**截帧通道活着 且 执行器没暂停**（用户 2026-11-02 口径）。
-
-    根因：框架启动时会自动刷新设备并建好 WGC 截图会话，所以 app 一打开
-    `capture_method` 就有对象 —— 旧判据只看它，第一栏一进页面就显示【停止】，
-    用户看到的是「默认已经开始了」。
-    """
-
-    def _patch(self, capture, paused):
-        import ok
-        from src.ui.MonitorTab import MonitorTab
-
-        class _Cap:
-            def __init__(self, alive):
-                self.alive = alive
-
-            def connected(self):
-                return self.alive
-
-        class _DM:
-            capture_method = None
-
-        class _Ex:
-            pass
-
-        dm = _DM()
-        dm.capture_method = capture
-        ex = _Ex()
-        ex.paused = paused
-        old_dm = getattr(ok.og, "device_manager", None)
-        old_ex = getattr(ok.og, "executor", None)
-        ok.og.device_manager = dm
-        ok.og.executor = ex
-        self.addCleanup(lambda: setattr(ok.og, "device_manager", old_dm))
-        self.addCleanup(lambda: setattr(ok.og, "executor", old_ex))
-        return MonitorTab, dm, ex
-
-    def test_capture_without_executor_is_not_started(self):
-        """启动态：截图会话已建好，但执行器还 paused → 显示【启动】。"""
-        cap = type("Cap", (), {"connected": lambda self: True})()
-        tab, dm, ex = self._patch(cap, paused=True)
-        self.assertFalse(tab._connected())
-        ex.paused = False
-        self.assertTrue(tab._connected())
-
-    def test_closed_capture_is_not_started(self):
-        """执行器在跑但截图会话没了（断开游戏）→ 显示【启动】。"""
-        cap = type("Cap", (), {"connected": lambda self: False})()
-        tab, dm, ex = self._patch(cap, paused=False)
-        self.assertFalse(tab._connected())
-        dm.capture_method = None
-        self.assertFalse(tab._connected())
 
 
 class ThemeSelect(unittest.TestCase):

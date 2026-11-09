@@ -15,7 +15,7 @@
 
 1. 到 [Releases](https://github.com/TieLaa/ok-hacking/releases) 下载安装包，或以管理员身份从源码启动；
 2. 确认「截图方式」页能抓到游戏画面；
-3. 「任务」页展开「养成-训练循环」改配置，点开始；
+3. 「任务」页展开「自动训练」改配置，点开始；
 4. 「监控」页看进度；卡住时先读 `logs/debug/<时间>_<tag>/ocr.txt`。
 
 安装与运行细节见 [README](https://github.com/TieLaa/ok-hacking#readme)。

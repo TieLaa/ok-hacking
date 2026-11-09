@@ -429,7 +429,7 @@ class MonitorTab(CustomTab):
             "style": info.get("style") or self._style_from_config(config),
             "action": info.get("action") or "空闲",
             "uptime": _fmt_uptime(task),
-            "task_hint": info.get("task_hint") or "养成-训练循环",
+            "task_hint": info.get("task_hint") or "自动训练",
             "match_countdown": info.get("match_countdown") or MISSING,
             "weekend_plan": info.get("weekend_plan") or MISSING,
             "picnic_threshold": config.get("周末野餐阈值", MISSING),
@@ -441,11 +441,6 @@ class MonitorTab(CustomTab):
             # 否则重启后一勾就又退回列表第一个（2026-11-09 用户口径：
             # 队长下拉菜单也要落盘、启动装载）。
             "captain_memory": (config.get("队长下拉选择") or "").strip(),
-            # 第一栏总开关的状态：**会话在跑没有**（截帧通道活着 **且** 执行器
-            # 没暂停，见 `_connected()`）。只看 capture_method 会在启动时就为真
-            # —— 框架启动时会自动刷新设备并建 WGC 截图会话，按钮一进页面
-            # 就显示【停止】，看着像「默认已经开始了」。
-            "connected": self._connected(),
             # 第一栏按钮的**唯一**判据（2026-11-09 改成对齐框架 StartCard）：
             # 执行器是否暂停。A（起始页 F9）就只看这一条。
             "paused": self._executor_paused(),
@@ -520,43 +515,6 @@ class MonitorTab(CustomTab):
         executor = getattr(og, "executor", None)
         return True if executor is None else bool(getattr(executor, "paused", True))
 
-    @staticmethod
-    def _connected() -> bool:
-        """游戏会话在跑没有 —— 第一栏【启动/停止】和第二栏【开始】的唯一判据。
-
-        **两个条件都要**（2026-11-02 第二次修正，用户口径「进去的时候默认就
-        开始了」）：
-
-        1. 截帧通道活着：`device_manager.capture_method` 在且 `connected()` 为真；
-        2. 执行器没被暂停：`executor.paused` 为假。
-
-        只满足第 1 条不够：框架**启动时就会自动刷新设备**
-        （日志里能看到 `RefreshAdb ... windows_graphics:start_or_stop start WGC
-        capture`），app 一打开 `capture_method` 就已经有对象了 —— 旧版只看它，
-        于是第一栏一进页面就显示【停止】，看起来像「已经开始了」。
-        执行器启动时是 `paused=True`，加上第 2 条才能把「截着图」和
-        「真在跑」分开。
-
-        **仍然不看任务状态**（第二栏）：第二栏点【暂停】只 `task.disable()`，
-        不碰执行器，所以不会把第一栏顶回去（旧版的坑是 `task.unpause()` →
-        `executor.start()`，那个调用已经删了）。
-        """
-        try:
-            device_manager = getattr(og, "device_manager", None)
-            if device_manager is None:
-                return False
-            capture = getattr(device_manager, "capture_method", None)
-            if capture is None:
-                return False
-            connected = getattr(capture, "connected", None)
-            if callable(connected) and not connected():
-                return False
-            executor = getattr(og, "executor", None)
-            if executor is None:
-                return False
-            return not bool(getattr(executor, "paused", True))
-        except Exception:  # noqa: BLE001
-            return False
 
     @staticmethod
     def _active_of(task) -> bool:
@@ -695,55 +653,6 @@ class MonitorTab(CustomTab):
             og.executor.pause()
         else:
             og.app.start_controller.start()
-
-    def _bring_game_to_front(self):
-        """把**已经在跑**的游戏窗口恢复并置前（最小化/被别的窗口挡住时）。
-
-        为什么需要（2026-11-08 用户实测）：游戏进程一直在跑，但窗口在后台
-        或最小化了。框架 `start_controller.start_device()` 只在
-        `device['connected']` 为假时才执行 exe / 等窗口；已连接时只
-        `do_refresh` —— 窗口不会被恢复，用户看到的就是"点了启动却什么都没
-        发生"（而且 WGC 对最小化窗口零帧，脚本也跑不动）。
-
-        走 `GirlsInteraction.ensure_foreground()`（项目唯一的置前实现：
-        IsIconic → SW_RESTORE、Alt 注入、AttachThreadInput、TopMost 三重保险，
-        并且**先等用户空闲**才抢，不打断正在操作的人）。进程没起时它返回
-        False，拉起 exe 仍归 `start_controller`。
-        """
-        try:
-            interaction = getattr(self.executor, "interaction", None)
-            ensure = getattr(interaction, "ensure_foreground", None)
-            if callable(ensure):
-                ok = ensure()
-                logger.info(f"监控页：游戏窗口置前 → {'成功' if ok else '未成功（窗口可能不存在）'}")
-        except Exception as e:  # noqa: BLE001
-            logger.debug(f"置前游戏窗口失败（不影响启动）: {e}")
-
-    def _bring_game_to_front_async(self):
-        """后台线程里做 `_bring_game_to_front()` —— **绝不能在 UI 线程同步调用**。
-
-        为什么必须异步（2026-11-09 用户实测：点第一栏【启动】界面卡 5~10 秒，
-        而起始页 F9 不卡）：
-        `ensure_foreground()` 里有两处会阻塞 ——
-
-        1. `wait_for_user_idle()`：等你**停手满 `user_idle_wait` 秒**（默认 3）。
-           而"点启动"这一次真实点击本身就被 `user_activity` 记成"用户在操作"，
-           所以它必然要等满；
-        2. 抢前台三重保险最多 `tries=4` 轮，每轮还带 0.15s 等待。
-
-        两段叠起来 5~10 秒，同步跑就等于把整个界面冻住。放到后台线程后，
-        界面立刻变成【启动中…】，抢前台在背后慢慢做（抢不到也不影响启动：
-        `GirlsInteraction` 在每次真实点击前还会自己再抢一次）。
-        """
-        import threading
-
-        def worker():
-            try:
-                self._bring_game_to_front()
-            except Exception as e:  # noqa: BLE001
-                logger.debug(f"后台置前游戏窗口失败（不影响启动）: {e}")
-
-        threading.Thread(target=worker, name="monitor-foreground", daemon=True).start()
 
 
     def _clear_queue_state(self):
@@ -967,24 +876,14 @@ class MonitorTab(CustomTab):
         return False
 
     def toggle_auto_training(self):
-        """第二栏按钮：【开始 / 暂停】—— **只管自动训练脚本**（用户口径）。
+        """第二栏【开始 / 继续 / 暂停】—— 与框架 `TaskCard` 同源（2026-11-09 用户口径）。
 
-        分工（从始至终未变）：
-        - 第一栏【启动/停止】只负责连接/断开游戏；
-        - 第二栏【开始/暂停】只负责自动训练脚本；
-        - 点【开始】时**如果还没连接游戏**，顺手替你点一下第一栏【启动】。
+        - `enabled and paused`（挂起态）→ `task.unpause()`（框架那颗按钮此时显示 Resume）
+        - 在跑（enabled 且 running）→ `task.pause()`
+        - 其余（未启用 / 未连接 / 刚停）→ `start_controller.start(task)`：
+          框架同一句，自己刷设备、必要时拉起游戏，连上后 enable 这个任务。
 
-        三态：
-        - 在跑 → `task.pause()` 挂起，按钮回【开始】（可恢复）；
-        - 已暂停 → `task.unpause()` 恢复；
-        - 未启动：
-          - 已连接 → `task.enable()` 开跑；
-          - 未连接 → `start_controller.start(task)`（**这次带 task**：
-            顺手连接 + 连接完成后 enable，等于"点了【启动】再点【开始】"）。
-
-        **接入进度不在这里显示**（2026-11-10）：顺手接入的这几秒到几十秒里，
-        本按钮保持【开始】不动，【启动中…】显示在**第一栏**【启动】上 ——
-        用户点的是第二栏，但接入是执行器的事，进度归总开关。
+        没有 `_connected()` 判断，也不在这里抢前台 —— B（任务卡的【开始】）本来就不判断这些。
         """
         task = self._task()
         if task is None:
@@ -1006,23 +905,15 @@ class MonitorTab(CustomTab):
                     task._paused = True
                 logger.info("监控页：自动训练 → 暂停（task.pause，可无损恢复）")
             elif paused:
-                # 已暂停 → 恢复（框架 start_clicked 第一分支）
+                # 已暂停 → 恢复（框架 start_clicked 第一分支；框架按钮显示 Resume）
                 task.unpause()
                 logger.info("监控页：自动训练 → 继续（task.unpause）")
-            elif self._connected():
-                # 已连接：只开跑自动训练（不碰连接，那是第一栏的事）
-                task.enable()
-                logger.info("监控页：自动训练 → 开始（已连接，仅 enable 任务）")
             else:
-                # 未连接：顺手点一下【启动】—— 连接 + 连接完成后 enable。
-                # 接入是异步的，期间重复点击不重复发起（否则队列里堆 do_start）。
-                if self._starting():
-                    logger.info("监控页：正在接入游戏，稍候…（不重复发起）")
-                else:
-                    logger.info("监控页：还没连接游戏 → 顺手启动（连接并开跑）")
-                    # 置前同样放后台：同步跑会等用户空闲 + 抢前台，界面会冻住
-                    self._bring_game_to_front_async()
-                    og.app.start_controller.start(task)
+                # 未启用 / 未连接 / 刚停：与框架 TaskCard.start_clicked 同款 ——
+                # `start_controller.start(task)` 自己会刷设备、必要时拉起游戏，
+                # 连上之后 enable 这个任务。这里不需要 `_connected()` 判断。
+                logger.info("监控页：自动训练 → 开始（start_controller.start(task)）")
+                og.app.start_controller.start(task)
         except Exception as e:  # noqa: BLE001
             logger.error(f"自动训练开关失败: {e}")
         self._update_data()
@@ -1031,7 +922,7 @@ class MonitorTab(CustomTab):
     def _starting() -> bool:
         """`start_controller.start()` 已发起、还没跑完（框架的 `starting` 标志）。
 
-        界面靠它把**第一栏**【启动】显示成【启动中…】（`connecting` 数据键）：
+        现在只服务第二栏【■ 完全停止】的「接入中补一刀」边界：
         接入要等窗口稳定 + 设备就绪，这期间按钮既不是「启动」也不是「停止」，
         不显示点什么就又像「没反应」。**2026-11-10 归位**：这个态以前显示在
         第二栏【开始】上，于是「点第一栏【启动】、第二栏变【启动中…】」，
@@ -1052,8 +943,7 @@ class MonitorTab(CustomTab):
         **不碰配置**：`刷到目标分` / `目标分` / 指定队长等是落盘的设置，
         完全停止只清本次运行的东西（2026-11-09 用户口径：设置要重启还在）。
 
-        **不断开游戏连接**：执行器、截图会话、快速比赛都不碰 —— 那是第一栏
-        【停止】的职责。
+        **不断开游戏连接**：执行器、截图会话、快速比赛都不碰。
         """
         task = self._task()
         if task is None:

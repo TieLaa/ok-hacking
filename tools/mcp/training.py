@@ -1,4 +1,4 @@
-"""MCP 入口：养成-训练循环（TrainingTask，跑完整一整轮）。
+"""MCP 入口：自动训练（TrainingTask，跑完整一整轮）。
 
 用法（MCP 的 run_task 提交本文件绝对路径）：
 

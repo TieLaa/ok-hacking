@@ -15,7 +15,7 @@ An automation program that plays the career loop: it recognizes the game UI, dec
 
 1. Download an installer from [Releases](https://github.com/TieLaa/ok-hacking/releases), or run from source as administrator;
 2. Confirm the capture page can grab the game window;
-3. On the task page expand “养成-训练循环”, adjust options, press start;
+3. On the task page expand “自动训练”, adjust options, press start;
 4. Watch the monitor page. When stuck, read `logs/debug/<time>_<tag>/ocr.txt` first.
 
 See the [README](https://github.com/TieLaa/ok-hacking/blob/main/README_en.md) for install and run details.
