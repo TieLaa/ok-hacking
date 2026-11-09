@@ -724,6 +724,32 @@ class MonitorTab(CustomTab):
         except Exception as e:  # noqa: BLE001
             logger.debug(f"置前游戏窗口失败（不影响启动）: {e}")
 
+    def _bring_game_to_front_async(self):
+        """后台线程里做 `_bring_game_to_front()` —— **绝不能在 UI 线程同步调用**。
+
+        为什么必须异步（2026-11-09 用户实测：点第一栏【启动】界面卡 5~10 秒，
+        而起始页 F9 不卡）：
+        `ensure_foreground()` 里有两处会阻塞 ——
+
+        1. `wait_for_user_idle()`：等你**停手满 `user_idle_wait` 秒**（默认 3）。
+           而"点启动"这一次真实点击本身就被 `user_activity` 记成"用户在操作"，
+           所以它必然要等满；
+        2. 抢前台三重保险最多 `tries=4` 轮，每轮还带 0.15s 等待。
+
+        两段叠起来 5~10 秒，同步跑就等于把整个界面冻住。放到后台线程后，
+        界面立刻变成【启动中…】，抢前台在背后慢慢做（抢不到也不影响启动：
+        `GirlsInteraction` 在每次真实点击前还会自己再抢一次）。
+        """
+        import threading
+
+        def worker():
+            try:
+                self._bring_game_to_front()
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"后台置前游戏窗口失败（不影响启动）: {e}")
+
+        threading.Thread(target=worker, name="monitor-foreground", daemon=True).start()
+
     def _connection_start(self):
         """启动 = 连接游戏（用户口径，从始至终未变）。
 
@@ -744,7 +770,8 @@ class MonitorTab(CustomTab):
         """
         task = self._task()
         spec = (getattr(task, "_launch_queue", None) or "") if task else ""
-        self._bring_game_to_front()
+        # 置前放后台：它内部会等用户空闲 + 抢前台，同步跑会冻住界面 5~10 秒
+        self._bring_game_to_front_async()
         try:
             if spec:
                 logger.info(f"监控页：注入队列参数 → 启动即自动开跑（{spec}）")
@@ -1122,7 +1149,8 @@ class MonitorTab(CustomTab):
                     logger.info("监控页：正在接入游戏，稍候…（不重复发起）")
                 else:
                     logger.info("监控页：还没连接游戏 → 顺手启动（连接并开跑）")
-                    self._bring_game_to_front()
+                    # 置前同样放后台：同步跑会等用户空闲 + 抢前台，界面会冻住
+                    self._bring_game_to_front_async()
                     og.app.start_controller.start(task)
         except Exception as e:  # noqa: BLE001
             logger.error(f"自动训练开关失败: {e}")
