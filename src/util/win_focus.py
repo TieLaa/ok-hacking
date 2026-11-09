@@ -45,9 +45,9 @@ def force_foreground(hwnd, tries=4, wait=FOREGROUND_WAIT, log=None, on_alt_injec
         tries: 每轮三种手段都试一遍，最多几轮。
         wait: 每轮末尾等多久再看一次前台（秒）。
         log: 日志对象，默认本模块 logger（调用方通常传 ok 的 Logger）。
-        on_alt_injected: 注入过 Alt 时回调一次。GirlsInteraction 用它给
-            `user_activity` 记账 —— 注入的 Alt 也是系统输入事件，不记账的话
-            下一次动作会把它当成「真人还在操作」，白等 `user_idle_wait` 秒。
+        on_alt_injected: 注入过 Alt 时回调一次。GirlsInteraction 用它给「让路」
+            记账（`mark_script_input`）—— 注入的 Alt 也是系统输入事件，不记账的话
+            下一次动作会把它当成「用户还在操作」，白等 `user_idle_wait` 秒。
 
     Returns:
         bool：True = 已经是前台；False = 放弃（调用方应报错或等用户点一下游戏）。
