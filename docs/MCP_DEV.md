@@ -96,7 +96,6 @@ ESC → 放弃并存证 `recover_failed`。遇到比赛/小游戏标记（`VS`/`
 | `tools/mcp/input_test.py` | InputTestTask | 点一次并断言界面变化 |
 | `tools/mcp/my_onetime.py` | MyOneTimeTask | 配置演示，冒烟用 |
 | `tools/mcp/probe.py` | — | 回大厅 + 报顶栏/OCR，改代码后的第一只探针 |
-| `tools/mcp/postmessage_probe.py` | — | PostMessage 有效性探测（默认不动真实鼠标） |
 | `tools/mcp/summarize_run.py` | — | 把一次 run 的 `run.log` 数成表（写运行记录用，只读；`-o` 写 UTF-8） |
 
 `_harness.borrow()` 借出已注册实例并临时设置 `_enabled / running / current_task /
@@ -132,11 +131,8 @@ artifact_directory`；`run_registered()` 额外支持本次运行的 config 覆�
 所以**不是坐标问题**，是 Unity 侧不消费投递的鼠标消息。结论保持不变：
 `src/config.py` 的 `windows.interaction` 只留 `GirlsInteraction`。
 
-探测工具：`tools/mcp/postmessage_probe.py`，两个开关：
-
-- `OK_PM_NO_RESET=1`：只读模式，**全程不动真实鼠标**，不在大厅就直接判失败退出；
-- `OK_PM_CONTROL=1`：对照实验（同一坐标再用真实鼠标点一次）。会抢前台、夺走光标，
-  只在你确认电脑空闲时打开。
+当时的对照脚本 `tools/mcp/postmessage_probe.py` 已在 2026-11-09 随一次性实验脚本一起删除；
+要复现这组对照，按上表两个坐标手动各点一次即可，判据只看「玩法目录」有没有出现。
 
 ## 改了 helper 怎么换新 runtime（2026-11-02 实测）
 
@@ -150,7 +146,6 @@ artifact_directory`；`run_registered()` 额外支持本次运行的 config 覆�
 |---|---|---|
 | `client.py --exit` | runtime 空闲时 | 有时只是排队，进程不真退（2026-11-02 连发两次都没退） |
 | 管理员 shell 里 `restart_mcp_runtime.ps1` | 你的 shell 是管理员 | 最干净 |
-| `client.py tools/mcp/kill_self.py` | 任何情况 | runtime **自己** `os.kill(pid, 9)`，进程立刻消失；客户端会报连接错误，属预期 |
 
 **先确认游戏是不是管理员进程**（今天就不一定是）：
 
@@ -168,8 +163,6 @@ Start-Process -FilePath .venv\Scripts\python.exe `
   -RedirectStandardOutput logs\mcp\runtime_stdout.log `
   -RedirectStandardError  logs\mcp\runtime_stderr.log
 ```
-
-`tools/mcp/whoami_probe.py` 会报 runtime 的 `is_admin` / `session`，起完先跑它确认。
 
 ⚠️ 派生子进程那条路走不通：从 runtime 里 `subprocess.Popen(powershell, DETACHED_PROCESS)`
 起的进程**根本不执行**（2026-11-02 用标记文件验过），所以别写成「自己排程重启自己」。
