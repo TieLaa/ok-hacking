@@ -43,12 +43,13 @@ DEFAULT_LAYOUT = {
     "sections": [
         {"type": "connection", "height": 54,
          "title": "{device_title}", "meta": "{device_meta}",
-         "show_run": True, "run_text": "启动", "stop_text": "停止"},
+         "show_run": True, "run_text": "启动", "stop_text": "停止",
+         "starting_text": "启动中…"},
         {"type": "captain", "height": 54,
          "label": "指定队长",
          "hint": "取消勾选 = 不接开局，只跑已有局",
          "show_quick_match": True, "show_auto_training": True,
-         "start_text": "开始", "pause_text": "暂停", "starting_text": "启动中…"},
+         "start_text": "开始", "pause_text": "暂停"},
         {"type": "hero", "height": 204,
          "kicker": "当前进度",
          "title": "第 {week} 周 {day}",
@@ -454,8 +455,9 @@ class MonitorTab(CustomTab):
             # 对齐框架 TaskCard.update_buttons 的「enabled+paused → Start(Resume)」。
             "training_paused": (bool(getattr(task, "enabled", False))
                                 and bool(getattr(task, "paused", False))) if task else False,
-            # 正在接入游戏（第二栏【开始】触发的自动启动，或第一栏【启动】）：
-            # 接入期间按钮显示【启动中…】，免得用户以为点了没反应。
+            # 正在接入游戏（第一栏【启动】，或第二栏【开始】触发的顺手接入）：
+            # 接入期间**第一栏**【启动】按钮显示【启动中…】，免得用户以为点了没反应。
+            # 这个态 2026-11-10 从第二栏归位到第一栏 —— 接入本来就是第一栏的职责。
             "connecting": self._starting(),
             "attrs": attrs,
             "score": score,
@@ -685,7 +687,14 @@ class MonitorTab(CustomTab):
 
         判据是「游戏接上了没有」（`_connected()`），不是执行器的 paused：
         后者是执行器的运行态，会被第二栏的动作带动（见 `_connected()` 注释）。
+
+        **接入中再点一次不重复发起**（2026-11-10）：按钮这时显示【启动中…】，
+        但用户仍可能连点；`start_controller.starting` 为真就只打一条日志，
+        否则 handler 队列里会堆好几个 `do_start`、重复拉游戏窗口。
         """
+        if self._starting():
+            logger.info("监控页：正在接入游戏，稍候…（不重复发起）")
+            return
         if self._connected():
             self._connection_stop()
         else:
@@ -1039,6 +1048,10 @@ class MonitorTab(CustomTab):
           - 已连接 → `task.enable()` 开跑；
           - 未连接 → `start_controller.start(task)`（**这次带 task**：
             顺手连接 + 连接完成后 enable，等于"点了【启动】再点【开始】"）。
+
+        **接入进度不在这里显示**（2026-11-10）：顺手接入的这几秒到几十秒里，
+        本按钮保持【开始】不动，【启动中…】显示在**第一栏**【启动】上 ——
+        用户点的是第二栏，但接入是执行器的事，进度归总开关。
         """
         task = self._task()
         if task is None:
@@ -1084,8 +1097,11 @@ class MonitorTab(CustomTab):
     def _starting() -> bool:
         """`start_controller.start()` 已发起、还没跑完（框架的 `starting` 标志）。
 
-        界面靠它把第二栏显示成【启动中…】：接入要等窗口稳定 + 设备就绪，
-        这期间按钮既不是「开始」也不是「暂停」，不显示点什么就又像「没反应」。
+        界面靠它把**第一栏**【启动】显示成【启动中…】（`connecting` 数据键）：
+        接入要等窗口稳定 + 设备就绪，这期间按钮既不是「启动」也不是「停止」，
+        不显示点什么就又像「没反应」。**2026-11-10 归位**：这个态以前显示在
+        第二栏【开始】上，于是「点第一栏【启动】、第二栏变【启动中…】」，
+        看着像两颗按钮串位 —— 接入是第一栏的职责，谁被点谁给反馈。
         """
         controller = getattr(getattr(og, "app", None), "start_controller", None)
         return bool(getattr(controller, "starting", False))

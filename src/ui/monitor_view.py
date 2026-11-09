@@ -243,9 +243,14 @@ class MonitorView(QWidget):
         self._btn_capture: QPushButton | None = None
         self._btn_conn: QPushButton | None = None
         self._conn_text: tuple[str, str] = ("启动", "停止")
-        # 按钮图标当前是「跑」还是「停」—— 用来只在状态翻转时 setIcon，
+        # 正在接入游戏时的文案（接入要等窗口稳定 + 设备就绪，几秒到几十秒）。
+        # 2026-11-10 归位：这个态原来挂在**第二栏**【开始】上，但「接入游戏」
+        # 从 2026-11-01 起就是第一栏的职责 —— 谁被点谁给反馈，第二栏保持
+        # 【开始】不动（漏网之鱼见 docs/UI_MONITOR.md「启动中…归第一栏」）。
+        self._conn_starting_text: str = "启动中…"
+        # 按钮当前处在哪一态：running / connecting / idle —— 只在翻转时 setIcon，
         # 不拿 `icon()` 和枚举比（PySide 每次返回新 QIcon，比出来永远不相等）。
-        self._conn_running: bool | None = None
+        self._conn_state: str | None = None
         self._switch_quick: SwitchButton | None = None
         self._btn_train: QPushButton | None = None
         # 「刷到目标分」勾选框 + 目标分输入框（用户 2026-11-05）
@@ -256,9 +261,7 @@ class MonitorView(QWidget):
         # 防止 update_data 回填时把用户正在输的值/刚点的勾抢回去
         self._syncing_extras = False
         self._train_text: tuple[str, str] = ("开始", "暂停")
-        # 正在接入游戏时的文案（接入要等窗口稳定，几秒到几十秒）
-        self._train_connecting_text: str = "启动中…"
-        # 按钮当前处在哪一态：running / connecting / idle —— 只在翻转时 setIcon
+        # 按钮当前处在哪一态：running / paused / idle —— 只在翻转时 setIcon
         self._train_state: str | None = None
         self._score_value: QLabel | None = None
         self._skill_labels: dict = {}
@@ -527,10 +530,12 @@ class MonitorView(QWidget):
             #  一起按住，逻辑正好反了 —— 见 MonitorTab.toggle_connection。）
             self._conn_text = (spec.get("run_text", "启动"),
                                spec.get("stop_text", "停止"))
+            self._conn_starting_text = spec.get("starting_text") or "启动中…"
             self._btn_conn = self._make_primary(
                 self._conn_text[0], self._slot_run,
                 icon=FluentIcon.PLAY)
-            self._btn_conn.setToolTip("总开关：启动 = 接入游戏并开始跑；停止 = 断开游戏")
+            self._btn_conn.setToolTip(
+                "总开关：启动 = 接入游戏并开始跑（接入期间显示【启动中…】）；停止 = 断开游戏")
             lay.addWidget(self._btn_conn)
 
         for text, slot in (("重新检测", self._slot_refresh),):
@@ -689,12 +694,12 @@ class MonitorView(QWidget):
             # 一个实例、两种文案：跑着的时候显示「暂停」，没跑显示「开始」。
             self._train_text = (spec.get("start_text", "开始"),
                                spec.get("pause_text", "暂停"))
-            self._train_connecting_text = spec.get("starting_text") or "启动中…"
             self._btn_train = self._make_primary(
                 self._train_text[0], self._slot_train,
                 icon=FluentIcon.PLAY)
             self._btn_train.setToolTip(
-                "自动训练脚本开关：开始 / 暂停（没接上游戏时按【开始】会自动接入）")
+                "自动训练脚本开关：开始 / 暂停（没接上游戏时按【开始】会自动接入，"
+                "接入进度显示在第一栏【启动】按钮上）")
 
             lay.addWidget(self._btn_train)
 
@@ -1037,7 +1042,7 @@ class MonitorView(QWidget):
                 f"本局三选一拿到的技能数；上一次：{data.get('skill_last') or '—'}")
 
     def _sync_run_button(self, data: dict):
-        """第一栏总开关：接上游戏显示【停止】，没接上显示【启动】。
+        """第一栏总开关：接入中 → 【启动中…】；接上了 → 【停止】；否则 → 【启动】。
 
         判据是**会话在跑**（`connected`）—— 截帧通道活着 **且** 执行器没
         暂停（2026-11-02 修正，详见 MonitorTab._connected）。只看截帧通道
@@ -1046,28 +1051,38 @@ class MonitorView(QWidget):
 
         图标必须跟着文案走：跑着 = ■（停止），没跑 = ▶（播放）。
         用户 2026-11-02 口径：「开始了以后，按钮应该是 ■停止，而不是 ▶停止」。
+
+        **接入中（`connecting`）显示在这里**（2026-11-10 归位）：
+        `start_controller.starting` 期间既不是「已连接」也不是「没点过」，
+        按钮得给点反馈（几秒到几十秒）。这个态以前挂在**第二栏**【开始】上，
+        于是「点第一栏【启动】、第二栏却变成【启动中…】」—— 看着像两颗按钮
+        串位了。谁被点谁给反馈，第二栏保持【开始】不动。
         """
         if self._btn_conn is None:
             return
-        running = bool(data.get("connected"))
-        text = self._conn_text[1] if running else self._conn_text[0]
+        if data.get("connecting") and not data.get("connected"):
+            state, text, icon = "connecting", self._conn_starting_text, FluentIcon.SYNC
+        elif data.get("connected"):
+            state, text, icon = "running", self._conn_text[1], OKIcon.STOP
+        else:
+            state, text, icon = "idle", self._conn_text[0], FluentIcon.PLAY
         if self._btn_conn.text() != text:
             self._btn_conn.setText(text)
-        if self._conn_running != running:
-            self._btn_conn.setIcon(OKIcon.STOP if running else FluentIcon.PLAY)
-            self._conn_running = running
+        if self._conn_state != state:
+            self._btn_conn.setIcon(icon)
+            self._conn_state = state
 
     def _sync_switches(self, data: dict):
-        """第二栏按钮：自动训练**真在跑** → 【暂停】；接入中 → 【启动中…】；
-        否则 → 【开始】。
+        """第二栏按钮：自动训练**真在跑** → 【暂停】；否则 → 【开始】。
 
         2026-11-02 修正：旧判据是 `running or enabled`（enabled 含「在队列里
         等」），于是点完【开始】按钮立刻变【暂停】，但其实一帧都还没跑。
         现在只认 `training_active`（= enabled 且 running）。
 
-        **没接上游戏时点【开始】**（同日口径）：按钮会去主动接入游戏，
-        期间显示【启动中…】—— 接入要等窗口稳定，几秒到几十秒，
-        这段时间界面必须有点变化，否则用户又会觉得「点了没反应」。
+        **接入中的【启动中…】不在这里**（2026-11-10 归位）：没接上游戏时点
+        【开始】仍然会去主动接入（用户 2026-11-02 口径），但进度显示在
+        **第一栏**【启动】按钮上（`_sync_run_button`）—— 接入是第一栏的职责，
+        第二栏只管脚本自己，保持【开始】不动。
 
         **断开游戏时**（第一栏点【停止】）第二栏要回到未启动状态：
         训练任务已被 disable，`enabled` 立刻为假 → `training_active` 为假
@@ -1080,9 +1095,6 @@ class MonitorView(QWidget):
                 state, text, icon = "paused", self._train_text[0], FluentIcon.PLAY
             elif data.get("training_active"):
                 state, text, icon = "running", self._train_text[1], FluentIcon.PAUSE
-            elif data.get("connecting"):
-                # 接入中：既没在跑、也不该让用户再点一次「开始」
-                state, text, icon = "connecting", self._train_connecting_text, FluentIcon.SYNC
             else:
                 state, text, icon = "idle", self._train_text[0], FluentIcon.PLAY
             if self._btn_train.text() != text:
@@ -1092,12 +1104,14 @@ class MonitorView(QWidget):
                 self._train_state = state
             # 【■】两态显隐（用户 2026-11-07 口径，对齐框架 TaskCard）：
             # 未启动/暂停态 = 黑底灰钮可见（点击被拦）；
-            # 真在跑（running）或接入中 = 蓝底深字钮可见、可点。
+            # 真在跑（running）= 蓝底深字钮可见、可点。
+            # **不含 connecting**（2026-11-10）：接入的是第一栏，脚本一帧都还没跑，
+            # ■ 在这儿变蓝可点等于又让第二栏替第一栏说话。
             # **两颗按钮常驻 + setVisible 切换**（框架 update_buttons 的做法）：
             # 动态 objectName + unpolish/polish 在 qfw 控件上不一定刷新样式。
             if self._btn_hard_stop_idle is not None and \
                     self._btn_hard_stop_active is not None:
-                active = state in ("running", "connecting")
+                active = state == "running"
                 self._btn_hard_stop_idle.setVisible(not active)
                 self._btn_hard_stop_active.setVisible(active)
         for key, switch in (("quick_enabled", self._switch_quick),):

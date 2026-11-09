@@ -6030,6 +6030,19 @@ class MonitorButtonActions(unittest.TestCase):
         self.assertEqual(len(app.calls), 1)
         self.assertIs(app.calls[0][1], task)     # 带 task = 自动开跑
 
+    def test_connection_start_ignores_repeat_click_while_starting(self):
+        """接入中再点第一栏【启动】不重复发起（按钮这时显示【启动中…】）。
+
+        接入是异步的（`start_controller.start()` 只是 post 到 handler 线程），
+        用户看到【启动中…】多半还会再点两下 —— 重复发起会往队列里堆
+        `do_start`、重复拉游戏窗口。
+        """
+        tab, task, executor, _ = self._tab(connected=False)
+        app = self._fake_app(starting=True)
+        tab.toggle_connection()
+        tab.toggle_connection()
+        self.assertEqual(app.calls, [])
+
     def test_start_when_connected_only_enables_task(self):
         """已连接时点【开始】→ 只 `task.enable()`，不碰连接（用户口径）。
 
@@ -6632,28 +6645,44 @@ class MonitorButtons(unittest.TestCase):
         view.update_data(self._data(connected=False))
         self.assertTrue(self._same_icon(view._btn_conn, FluentIcon.PLAY))
 
-    def test_second_bar_shows_connecting_while_starting(self):
-        """接入游戏期间第二栏显示【启动中…】。
+    def test_first_bar_shows_connecting_while_starting(self):
+        """接入游戏期间**第一栏**显示【启动中…】，第二栏保持【开始】。
 
-        用户 2026-11-02 口径：「第二栏按下开始的时候，如果没有连上游戏，
-        就主动启动」。接入要等窗口稳定 + 设备就绪（几秒到几十秒），
-        这段时间按钮既不是【开始】也不是【暂停】，得显示点什么，
-        否则又变成「点了没反应」。
+        「点了没反应」的诉求（用户 2026-11-02 口径）没变，但进度得显示在
+        被点的那颗按钮上：接入是执行器/连接的事，归第一栏；第二栏只管脚本。
+        这个态曾经挂在第二栏（`063001c` 夹在「进休息室拍六维」里顺带改的），
+        于是「点第一栏【启动】、第二栏却变成【启动中…】」—— 看着像串位。
         """
         from qfluentwidgets import FluentIcon
 
         view, _ = self._view()
-        view.update_data(self._data(training_active=False, connecting=True))
-        self.assertEqual(view._btn_train.text(), "启动中…")
-        self.assertTrue(self._same_icon(view._btn_train, FluentIcon.SYNC))
-        # 接上并跑起来 → 【暂停】
-        view.update_data(self._data(training_active=True, connecting=True))
-        self.assertEqual(view._btn_train.text(), "暂停")
-        self.assertTrue(self._same_icon(view._btn_train, FluentIcon.PAUSE))
-        # 接入失败/取消 → 回到【开始】
-        view.update_data(self._data(training_active=False, connecting=False))
+        view.update_data(self._data(connected=False, connecting=True))
+        self.assertEqual(view._btn_conn.text(), "启动中…")
+        self.assertTrue(self._same_icon(view._btn_conn, FluentIcon.SYNC))
+        # 第二栏一帧都没跑，文案/图标都不许动
         self.assertEqual(view._btn_train.text(), "开始")
         self.assertTrue(self._same_icon(view._btn_train, FluentIcon.PLAY))
+        # 接上 → 第一栏【停止】■，第二栏才开始跟训练态走
+        view.update_data(self._data(connected=True, connecting=False,
+                                    training_active=True))
+        self.assertEqual(view._btn_conn.text(), "停止")
+        self.assertEqual(view._btn_train.text(), "暂停")
+        # 接入失败/取消 → 第一栏回到【启动】
+        view.update_data(self._data(connected=False, connecting=False))
+        self.assertEqual(view._btn_conn.text(), "启动")
+        self.assertTrue(self._same_icon(view._btn_conn, FluentIcon.PLAY))
+
+    def test_connecting_keeps_hard_stop_idle(self):
+        """接入中第二栏的 ■ 不许变蓝可点 —— 脚本还没跑，轮不到它说话。"""
+        view, _ = self._view()
+        view.update_data(self._data(connected=False, connecting=True))
+        # 用 isHidden（显式隐藏标记），不受 offscreen 下父窗口没 show 的影响
+        self.assertFalse(view._btn_hard_stop_idle.isHidden())
+        self.assertTrue(view._btn_hard_stop_active.isHidden())
+        # 真跑起来才是蓝底可点
+        view.update_data(self._data(connected=True, training_active=True))
+        self.assertTrue(view._btn_hard_stop_idle.isHidden())
+        self.assertFalse(view._btn_hard_stop_active.isHidden())
 
     def test_second_bar_icon_is_pause_not_stop(self):
         """第二栏文案是【暂停】，图标就该是 ‖；用 ■ 语义对不上。"""
