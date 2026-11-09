@@ -5905,8 +5905,6 @@ class MonitorButtonActions(unittest.TestCase):
         tab._update_data = lambda: None
         tab._connected = lambda: (device_manager.capture_method is not None
                                   and device_manager.capture_method.connected())
-        tab._close_capture_async = lambda: MonitorTab._close_capture_async()
-        # 让 _close_capture_async 里的 `og.device_manager` 指到我们的假设备
         import ok
         old = getattr(ok.og, "device_manager", None)
         ok.og.device_manager = device_manager
@@ -5938,44 +5936,6 @@ class MonitorButtonActions(unittest.TestCase):
         tab.toggle_auto_training()
         self.assertFalse(executor.paused)
         self.assertEqual(executor.calls, [])
-
-    def test_disconnect_clears_connection_immediately(self):
-        """断开后连接态要**立刻**为假（不等后台线程）。
-
-        旧版把 `capture_method = None` 也放在后台线程里，于是断开后的
-        几秒内 `_connected()` 仍为真 —— 第一栏还显示【停止】、
-        第二栏也以为还能开始。置 None 只是属性赋值，先做掉它。
-        """
-        tab, task, executor, capture = self._tab()
-        self.assertTrue(tab._connected())
-        tab.toggle_connection()          # 断开
-        self.assertFalse(tab._connected())
-
-    def test_stop_does_not_toast_paused(self):
-        """第一栏【停止】**不许**弹框架那条「已暂停」（用户 2026-11-10 实锤）。
-
-        机制：`executor.pause()` → `communicate.executor_paused.emit(True)` →
-        `MainWindow.executor_paused()` → `tr('Pause Success.')` = 「已暂停」。
-        用户点的是【停止】，弹「已暂停」等于把两颗按钮的老语义（第一栏原本
-        就是执行器的 开始/暂停）又漏了一遍。现在那条通用提示被压掉，
-        改由我们自己回「已停止：已断开游戏…」。
-        """
-        from ok.core.events import communicate
-
-        tab, task, executor, _ = self._tab()
-        executor.paused = False          # 真在跑，才走得到暂停这一步
-        paused_events = []
-        toasts = []
-        off1 = communicate.executor_paused.connect(paused_events.append)
-        off2 = communicate.notification.connect(lambda *a, **k: toasts.append(a[0] if a else ""))
-        self.addCleanup(lambda: (communicate.executor_paused.disconnect(off1),
-                                 communicate.notification.disconnect(off2)))
-        tab.toggle_connection()          # 断开
-        self.assertIn("executor.pause()", executor.calls)
-        self.assertTrue(executor.paused)
-        self.assertEqual(paused_events, [])                    # 框架那条被压掉
-        self.assertTrue(any("已停止" in str(t) for t in toasts), toasts)
-        self.assertFalse(any("已暂停" in str(t) for t in toasts), toasts)
 
     def _fake_app(self, starting=False):
         """给 `og.app.start_controller` 换成一个只记账的假货。"""
@@ -6028,45 +5988,6 @@ class MonitorButtonActions(unittest.TestCase):
         app = self._fake_app(starting=True)
         tab.toggle_auto_training()
         tab.toggle_auto_training()
-        self.assertEqual(app.calls, [])
-
-    def test_connection_start_without_queue_param_only_connects(self):
-        """第一栏【启动】不带 task = 只连接，不自动开跑（用户口径）。
-
-        参数为空（普通界面操作）→ start_controller.start() 无 task，
-        训练任务保持未启用，第二栏显示【开始】。
-        """
-        tab, task, executor, _ = self._tab(connected=False)
-        app = self._fake_app()
-        tab._connection_start()
-        self.assertEqual(len(app.calls), 1)
-        self.assertIsNone(app.calls[0][1])       # 不带 task
-        self.assertNotIn("enable", task.calls)
-
-    def test_connection_start_with_queue_param_auto_starts(self):
-        """第一栏【启动】带注入队列参数 → 自动开跑（agent 隐藏通道）。
-
-        多角色队列是 agent 的参数通道（没有实装到界面）：传了参数就
-        连接 + enable（等于自动点【开始】）；参数为空则只连接。
-        """
-        tab, task, executor, _ = self._tab(connected=False)
-        task._launch_queue = "望月透:8000"
-        app = self._fake_app()
-        tab._connection_start()
-        self.assertEqual(len(app.calls), 1)
-        self.assertIs(app.calls[0][1], task)     # 带 task = 自动开跑
-
-    def test_connection_start_ignores_repeat_click_while_starting(self):
-        """接入中再点第一栏【启动】不重复发起（按钮这时显示【启动中…】）。
-
-        接入是异步的（`start_controller.start()` 只是 post 到 handler 线程），
-        用户看到【启动中…】多半还会再点两下 —— 重复发起会往队列里堆
-        `do_start`、重复拉游戏窗口。
-        """
-        tab, task, executor, _ = self._tab(connected=False)
-        app = self._fake_app(starting=True)
-        tab.toggle_connection()
-        tab.toggle_connection()
         self.assertEqual(app.calls, [])
 
     def test_start_when_connected_only_enables_task(self):
@@ -6186,19 +6107,6 @@ class MonitorButtonActions(unittest.TestCase):
                         side_effect=RuntimeError("no gui")):
             MonitorTab._notify("随便一句话", error=True)   # 不抛异常即通过
 
-    def test_disconnect_resets_second_bar_state(self):
-        """第一栏【停止】（断开游戏）→ 训练任务被 disable、按钮复位成【开始】。
-
-        用户 2026-11-02 口径：断开连接的链路要收尾干净。
-        """
-        tab, task, executor, _ = self._tab()
-        task.enabled = True
-        task.running = True
-        tab.toggle_connection()       # 已连接 → 走 _connection_stop
-        self.assertIn("disable", task.calls)
-        self.assertFalse(task.enabled)
-        self.assertFalse(task.running)
-
     def test_disconnect_second_bar_text_resets_immediately(self):
         """断开后第二栏**立刻**回到【开始】，不等任务线程收尾。
 
@@ -6298,7 +6206,6 @@ class MonitorQuickMatchSwitch(unittest.TestCase):
         tab._task_by_name = lambda name: quick if name == "QuickMatchTask" else None
         tab._connected = lambda: not executor.paused
         tab._update_data = lambda: None
-        tab._close_capture_async = lambda: None
         tab.executor = executor
         return tab, quick, train, executor
 
@@ -6350,27 +6257,14 @@ class MonitorQuickMatchSwitch(unittest.TestCase):
         self.assertNotIn("enable", train.calls)
         self.assertFalse(train.enabled)
 
-    def test_disconnect_keeps_quick_match_setting(self):
-        """第一栏【停止】**不再**把快速比赛复位成「关」（2026-11-09 用户口径）。
-
-        开关状态是落盘的设置（`TriggerTask._enabled`），要重启还在；
-        执行器停着它本来就不跑，下次【启动】自动恢复。
-        """
-        tab, quick, train, executor = self._tab(connected=True)
-        quick.enabled = True
-        tab._connection_stop()
-        self.assertNotIn("disable", quick.calls)
-        self.assertTrue(quick.enabled)
-
 
 class MonitorExecutorLifecycle(unittest.TestCase):
     """执行器（`og.executor`）= 唯一运行基础，只有第一栏能动（用户 2026-11-02 口径）。
 
-    - 【启动】/【停止】= 拉起 / 关掉执行器；
+    - 第一栏【开始/暂停】= `executor.paused` ? pause() : start_controller.start()
+      —— 2026-11-09 起与起始页【开始(F9)】完全一致，不再管连接/截图会话/任务；
     - 第二栏【开始/暂停】、快速比赛开关：开的时候**顺手**唤醒执行器
-      （`executor.start()`），关的时候**只 disable 自己**，绝不 pause 执行器；
-    - **第二栏的控件是落盘的设置**（2026-11-09 用户口径）：【停止】停运行，
-      但不清设置 —— 队长 / 目标分 / 快速比赛开关都留着，下次启动照旧。
+      （`executor.start()`），关的时候**只 disable 自己**，绝不 pause 执行器。
     """
 
     def _tab(self, paused=True):
@@ -6425,27 +6319,8 @@ class MonitorExecutorLifecycle(unittest.TestCase):
         tab._task_by_name = lambda name: quick if name == "QuickMatchTask" else None
         tab._connected = lambda: not executor.paused
         tab._update_data = lambda: None
-        tab._close_capture_async = lambda: None
         tab.executor = executor
         return tab, quick, train, executor
-
-    def test_disconnect_stops_training_but_keeps_settings(self):
-        """执行器被关掉 → 训练任务 disable；**快速比赛开关是设置，保持原样**。
-
-        2026-11-09 用户口径：第二栏的快速比赛勾选框要落盘、启动装载，
-        所以断开不再 disable 它（执行器停着本来就不调度）。
-        """
-        tab, quick, train, executor = self._tab(paused=False)
-        train.enabled, train.running = True, True
-        quick.enabled = True
-        tab._connection_stop()
-        # _stop_auto_training = disable + unpause（框架 stop_clicked 同款，
-        # unpause 清 task.pause 挂起态并联动 executor.start —— 但第一栏
-        # 随后的 executor.pause 会把执行器按回暂停，最终 calls 里两个都有）
-        self.assertIn("disable", train.calls)
-        self.assertNotIn("disable", quick.calls)
-        self.assertTrue(quick.enabled)
-        self.assertEqual(executor.calls, ["start", "pause"])
 
     def test_pause_auto_training_never_pauses_executor(self):
         """第二栏【暂停】= task.pause()，执行器不被暂停（关执行器归第一栏）。"""
@@ -6488,19 +6363,12 @@ class MonitorExecutorLifecycle(unittest.TestCase):
 
 
 class MonitorButtons(unittest.TestCase):
-    """监控页两栏按钮的职责（用户 2026-11-01/02 口径）。
+    """监控页两栏按钮的职责（2026-11-09 用户口径）。
 
-    - 第一栏 = 总开关【启动 / 停止】：启动 = 接入游戏；停止 = 断开游戏
-      **并且把第二栏复位成「开始」**；
-    - 第二栏 = 【开始 / 暂停】：只管自动训练脚本自己，不碰「接入游戏」；
-    - **两者互不带动**：点第二栏不能改第一栏的文案，反之亦然。
-
-    2026-11-02 修正的两处根因（回归测的就是这两条）：
-    1. 第一栏旧判据是 `not executor.paused`（执行器运行态），第二栏点【暂停】
-       里的 `task.unpause()` → `executor.start()` 会把它顶回去 = 第二栏带动第一栏。
-       现在第一栏判据是**连接态**（`connected`）。
-    2. 第二栏旧判据是 `running or enabled`（enabled 含「在队列里等」），
-       点完【开始】立刻变【暂停】但其实一帧没跑。现在只认 `training_active`。
+    - 第一栏 = 起始页【开始(F9)】的同款：`executor.paused` ? pause() : start_controller.start()
+      —— 判据只有 `og.executor.paused`，不切页、不管连接/截图会话/任务；
+    - 第二栏 = 任务卡【开始/停止】的同款：只管这个任务的 enable/disable；
+    - **两者互不带动**：第一栏只看执行器状态，第二栏只看任务状态。
     """
 
     def _view(self):
@@ -6543,16 +6411,23 @@ class MonitorButtons(unittest.TestCase):
     @staticmethod
     def _data(**over):
         """一份最小可用数据（键名 = MonitorTab._collect 的键）。"""
-        data = {"captain": "", "connected": False,
+        data = {"captain": "", "connected": False, "paused": True,
                 "training_running": False, "training_active": False}
         data.update(over)
         return data
 
-    def test_first_bar_is_start_stop(self):
+    def test_first_bar_is_start_pause(self):
+        """第一栏 = 框架 `StartCard` 同款：执行器暂停 → 【开始】，非暂停 → 【暂停】。
+
+        2026-11-09 用户口径：第一栏就是起始页那颗【开始(F9)】，
+        判据只有 `og.executor.paused`，不再掺截图通道状态、也不切页。
+        """
         view, _ = self._view()
-        self.assertEqual(view._btn_conn.text(), "启动")
-        view.update_data(self._data(connected=True))
-        self.assertEqual(view._btn_conn.text(), "停止")
+        self.assertEqual(view._btn_conn.text(), "开始")
+        view.update_data(self._data(paused=False))
+        self.assertEqual(view._btn_conn.text(), "暂停")
+        view.update_data(self._data(paused=True))
+        self.assertEqual(view._btn_conn.text(), "开始")
 
     def test_second_bar_is_start_pause(self):
         view, _ = self._view()
@@ -6573,34 +6448,16 @@ class MonitorButtons(unittest.TestCase):
     def test_second_bar_does_not_move_first_bar(self):
         """**第二栏点完，第一栏文案不变**（互不带动）。
 
-        这是用户 2026-11-01 反馈的核心诉求，当时没修好：
-        第一栏判据是 `not executor.paused`，第二栏的 `task.unpause()`
-        会调 `executor.start()` 把 paused 置回 False → 第一栏自己跳回「停止」。
+        第一栏只看 `executor.paused`；第二栏只 enable/disable 任务，
+        不碰执行器，所以第一栏不会跟着跳。
         """
         view, _ = self._view()
-        view.update_data(self._data(connected=False))
-        self.assertEqual(view._btn_conn.text(), "启动")
-        # 第二栏在跑（点了【暂停】之后 training_active 变假）
-        view.update_data(self._data(connected=False, training_active=True))
-        self.assertEqual(view._btn_conn.text(), "启动")
-        view.update_data(self._data(connected=False, training_active=False))
-        self.assertEqual(view._btn_conn.text(), "启动")
-
-    def test_disconnect_resets_second_bar_to_start(self):
-        """第一栏【停止】（断开游戏）后，第二栏回到未启动状态 = 【开始】。
-
-        用户 2026-11-02 口径：断开连接的链路要收尾干净，
-        否则用户会看到一个「暂停」按钮，但游戏已经断开、点了也没用。
-        """
-        view, _ = self._view()
-        # 断开前：连着游戏、训练在跑
-        view.update_data(self._data(connected=True, training_active=True))
-        self.assertEqual(view._btn_conn.text(), "停止")
-        self.assertEqual(view._btn_train.text(), "暂停")
-        # 断开后：连接态为假、训练任务已 disable（training_active 变假）
-        view.update_data(self._data(connected=False, training_active=False))
-        self.assertEqual(view._btn_conn.text(), "启动")
-        self.assertEqual(view._btn_train.text(), "开始")
+        view.update_data(self._data(paused=True))
+        self.assertEqual(view._btn_conn.text(), "开始")
+        view.update_data(self._data(paused=True, training_active=True))
+        self.assertEqual(view._btn_conn.text(), "开始")
+        view.update_data(self._data(paused=True, training_active=False))
+        self.assertEqual(view._btn_conn.text(), "开始")
 
     def test_checkbox_starts_unchecked(self):
         """默认不勾 —— 旧版默认勾上，用户没动过就等于指定了第一个训练流角色。"""
@@ -6657,45 +6514,16 @@ class MonitorButtons(unittest.TestCase):
         b = icon.icon().pixmap(16, 16).toImage()
         return a == b
 
-    def test_first_bar_icon_flips_to_stop(self):
-        """第一栏跑了以后图标必须是 ■，不能还是 ▶（用户 2026-11-02 口径）。"""
-        from ok.ui.qt.common.OKIcon import OKIcon
+    def test_first_bar_icon_follows_paused(self):
+        """第一栏图标：暂停 → ▶(PLAY)，非暂停 → ‖(PAUSE)，与框架一致。"""
         from qfluentwidgets import FluentIcon
 
         view, _ = self._view()
-        view.update_data(self._data(connected=False))
+        view.update_data(self._data(paused=True))
         self.assertTrue(self._same_icon(view._btn_conn, FluentIcon.PLAY))
-        view.update_data(self._data(connected=True))
-        self.assertTrue(self._same_icon(view._btn_conn, OKIcon.STOP))
-        # 再断开：图标要回到 ▶
-        view.update_data(self._data(connected=False))
-        self.assertTrue(self._same_icon(view._btn_conn, FluentIcon.PLAY))
-
-    def test_first_bar_shows_connecting_while_starting(self):
-        """接入游戏期间**第一栏**显示【启动中…】，第二栏保持【开始】。
-
-        「点了没反应」的诉求（用户 2026-11-02 口径）没变，但进度得显示在
-        被点的那颗按钮上：接入是执行器/连接的事，归第一栏；第二栏只管脚本。
-        这个态曾经挂在第二栏（`063001c` 夹在「进休息室拍六维」里顺带改的），
-        于是「点第一栏【启动】、第二栏却变成【启动中…】」—— 看着像串位。
-        """
-        from qfluentwidgets import FluentIcon
-
-        view, _ = self._view()
-        view.update_data(self._data(connected=False, connecting=True))
-        self.assertEqual(view._btn_conn.text(), "启动中…")
-        self.assertTrue(self._same_icon(view._btn_conn, FluentIcon.SYNC))
-        # 第二栏一帧都没跑，文案/图标都不许动
-        self.assertEqual(view._btn_train.text(), "开始")
-        self.assertTrue(self._same_icon(view._btn_train, FluentIcon.PLAY))
-        # 接上 → 第一栏【停止】■，第二栏才开始跟训练态走
-        view.update_data(self._data(connected=True, connecting=False,
-                                    training_active=True))
-        self.assertEqual(view._btn_conn.text(), "停止")
-        self.assertEqual(view._btn_train.text(), "暂停")
-        # 接入失败/取消 → 第一栏回到【启动】
-        view.update_data(self._data(connected=False, connecting=False))
-        self.assertEqual(view._btn_conn.text(), "启动")
+        view.update_data(self._data(paused=False))
+        self.assertTrue(self._same_icon(view._btn_conn, FluentIcon.PAUSE))
+        view.update_data(self._data(paused=True))
         self.assertTrue(self._same_icon(view._btn_conn, FluentIcon.PLAY))
 
     def test_connecting_keeps_hard_stop_idle(self):

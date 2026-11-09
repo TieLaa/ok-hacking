@@ -44,8 +44,8 @@ DEFAULT_LAYOUT = {
     "sections": [
         {"type": "connection", "height": 54,
          "title": "{device_title}", "meta": "{device_meta}",
-         "show_run": True, "run_text": "启动", "stop_text": "停止",
-         "starting_text": "启动中…"},
+         "show_run": True, "run_text": "开始", "stop_text": "暂停",
+         "starting_text": ""},
         {"type": "captain", "height": 54,
          "label": "指定队长",
          "hint": "取消勾选 = 不接开局，只跑已有局",
@@ -446,6 +446,9 @@ class MonitorTab(CustomTab):
             # —— 框架启动时会自动刷新设备并建 WGC 截图会话，按钮一进页面
             # 就显示【停止】，看着像「默认已经开始了」。
             "connected": self._connected(),
+            # 第一栏按钮的**唯一**判据（2026-11-09 改成对齐框架 StartCard）：
+            # 执行器是否暂停。A（起始页 F9）就只看这一条。
+            "paused": self._executor_paused(),
             # 第二栏按钮的状态：自动训练任务在跑 / 在队列里等
             "training_running": self._running_of(task),
             # 第二栏按钮文案要区分「真在跑」和「只是排上队了」：
@@ -456,10 +459,6 @@ class MonitorTab(CustomTab):
             # 对齐框架 TaskCard.update_buttons 的「enabled+paused → Start(Resume)」。
             "training_paused": (bool(getattr(task, "enabled", False))
                                 and bool(getattr(task, "paused", False))) if task else False,
-            # 正在接入游戏（第一栏【启动】，或第二栏【开始】触发的顺手接入）：
-            # 接入期间**第一栏**【启动】按钮显示【启动中…】，免得用户以为点了没反应。
-            # 这个态 2026-11-10 从第二栏归位到第一栏 —— 接入本来就是第一栏的职责。
-            "connecting": self._starting(),
             "attrs": attrs,
             "score": score,
             "skill_color": skills["color"],
@@ -510,6 +509,16 @@ class MonitorTab(CustomTab):
         if getattr(task, "enabled", False):
             return "paused" if getattr(task, "paused", False) else "queued"
         return "idle"
+
+    @staticmethod
+    def _executor_paused() -> bool:
+        """执行器是否暂停 —— 第一栏按钮的唯一判据（对齐框架 `StartCard.update_status`）。
+
+        A（起始页【开始(F9)】）就只看 `og.executor.paused` 这一个布尔：
+        暂停 → 显示【开始】，非暂停 → 显示【暂停】。不再掺截图通道状态。
+        """
+        executor = getattr(og, "executor", None)
+        return True if executor is None else bool(getattr(executor, "paused", True))
 
     @staticmethod
     def _connected() -> bool:
@@ -678,28 +687,14 @@ class MonitorTab(CustomTab):
         self._update_data()
 
     def toggle_connection(self):
-        """第一栏总开关：【启动 / 停止】（用户 2026-11-01/02 口径）。
+        """第一栏【开始 / 暂停】—— 与框架 `StartCard.clicked` 完全一致。
 
-        现在的口径：
-        - **启动**：接入游戏（连设备、开跑）。交给 `start_controller.start()`，
-          它会自己刷新设备、必要时启动游戏 exe。
-        - **停止**：断开游戏 —— 停掉自动训练任务、暂停执行器、释放截图会话，
-          **并把第二栏复位成【开始】**（未启动状态）。
-
-        判据是「游戏接上了没有」（`_connected()`），不是执行器的 paused：
-        后者是执行器的运行态，会被第二栏的动作带动（见 `_connected()` 注释）。
-
-        **接入中再点一次不重复发起**（2026-11-10）：按钮这时显示【启动中…】，
-        但用户仍可能连点；`start_controller.starting` 为真就只打一条日志，
-        否则 handler 队列里会堆好几个 `do_start`、重复拉游戏窗口。
+        在跑 → 暂停；没跑 → 连接并启动执行器。没有其它判断、不切页。
         """
-        if self._starting():
-            logger.info("监控页：正在接入游戏，稍候…（不重复发起）")
-            return
-        if self._connected():
-            self._connection_stop()
+        if not og.executor.paused:
+            og.executor.pause()
         else:
-            self._connection_start()
+            og.app.start_controller.start()
 
     def _bring_game_to_front(self):
         """把**已经在跑**的游戏窗口恢复并置前（最小化/被别的窗口挡住时）。
@@ -750,98 +745,6 @@ class MonitorTab(CustomTab):
 
         threading.Thread(target=worker, name="monitor-foreground", daemon=True).start()
 
-    def _connection_start(self):
-        """启动 = 连接游戏（用户口径，从始至终未变）。
-
-        分工：
-        - 第一栏【启动/停止】只负责连接/断开游戏；
-        - 第二栏【开始/暂停】只负责自动训练脚本；
-        - 点第二栏【开始】时如果还没连接，才"顺手点一下【启动】"。
-
-        **唯一的例外：CLI / MCP 注入的队列参数**（`task._launch_queue`，多角色
-        队列是 agent 的隐藏通道，没有实装到界面）。带参数进来时自动开跑
-        （`start_controller.start(task)` = 连接 + enable，等于自动点【开始】）；
-        参数为空则只连接（`start_controller.start()`，不带 task）。
-        注意判据只看**注入参数**，不看配置派生的目标分队列 —— 后者是设置，
-        点【启动】不应该顺手把训练也开起来（那是第二栏【开始】的事）。
-
-        先把已在跑的游戏窗口恢复/置前（`_bring_game_to_front`），否则
-        "点了启动没反应" —— 框架对已连接的设备不做任何窗口操作。
-        """
-        task = self._task()
-        spec = (getattr(task, "_launch_queue", None) or "") if task else ""
-        # 置前放后台：它内部会等用户空闲 + 抢前台，同步跑会冻住界面 5~10 秒
-        self._bring_game_to_front_async()
-        try:
-            if spec:
-                logger.info(f"监控页：注入队列参数 → 启动即自动开跑（{spec}）")
-                og.app.start_controller.start(task)
-            else:
-                og.app.start_controller.start()
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"启动失败: {e}")
-            self._notify(f"启动失败：{e}", error=True)
-        self._update_data()
-
-    def _connection_stop(self):
-        """停止 = 断开游戏（对齐框架 TaskCard.stop_clicked：disable + unpause）。
-
-        ① 训练脚本停（disable + unpause，**清 task.pause 的挂起态**）；
-        ② **本次注入**的队列参数与进度清空（落盘的设置不动 —— 见下）；
-        ③ 执行器暂停（不再取帧）；④ 截图会话关闭（断开游戏）。
-
-        **不复位第二栏的设置**（2026-11-09 用户口径：第二栏这些控件要落盘、
-        启动装载）：`指定队长` / `队长下拉选择` / `刷到目标分` / `目标分` /
-        快速比赛开关都保持原值。执行器停着它们什么也不会做，下次【启动】
-        自动按这些设置继续 —— 若在【停止】时把它们清零，等于关一次程序
-        就把设置抹了，落盘就失去意义。
-
-        关截图会话可能等正在取的那一帧（最多 4 秒），放到后台线程做。
-
-        **提示文案得自己说**（2026-11-10 用户实锤）：框架的 `executor.pause()`
-        会 `emit(executor_paused=True)`，`MainWindow` 收到就弹一条
-        `tr('Pause Success.')` = 「已暂停」—— 用户点的是【停止】，弹「已暂停」
-        等于把两颗按钮的老语义（第一栏原本就是执行器的 开始/暂停）又漏了出来。
-        这里把那条通用提示压掉（`_pause_executor_quietly`），改由我们回
-        「已停止：已断开游戏」。
-        """
-        self._clear_queue_state()              # ② 只清注入参数/进度（先于 disable）
-        self._stop_auto_training(reset_button=True)
-        paused = self._pause_executor_quietly()
-        self._close_capture_async()
-        logger.info("监控页：已断开游戏（训练停、注入队列清空、第二栏回到「开始」；设置保留）")
-        if paused:
-            self._notify("已停止：已断开游戏（训练已停、截图会话已释放；设置都留着）")
-        self._update_data()
-
-    def _pause_executor_quietly(self) -> bool:
-        """暂停执行器，但**压掉框架那条「已暂停」提示**（用户点的是【停止】）。
-
-        为什么能压：`communicate.executor_paused` 是 `ok.core.events.EventSignal`
-        （自带订阅列表的普通对象，不是 Qt 信号，没有 `blockSignals`）。它在这条
-        链路上只有一个用途 —— 让 `MainWindow.executor_paused()` 弹
-        `tr('Pause Success.')`（中文「已暂停」）并在恢复时切回任务页。
-        我们这次是「断开游戏」，文案必须自己说，所以只在这一小段临时换掉
-        `emit`，**finally 一定还原**（别把后面真正的恢复提示也压了）。
-
-        返回是否真的动过执行器（已经是暂停态就直接跳过，不发提示）。
-        """
-        executor = getattr(self, "executor", None)
-        if executor is None or getattr(executor, "paused", True):
-            return False
-        signal = getattr(communicate, "executor_paused", None)
-        original = getattr(signal, "emit", None)
-        try:
-            if signal is not None and original is not None:
-                signal.emit = lambda *args, **kwargs: None
-            executor.pause()
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"暂停执行器失败: {e}")
-            return False
-        finally:
-            if signal is not None and original is not None:
-                signal.emit = original
-        return True
 
     def _clear_queue_state(self):
         """清掉**本次注入**的队列参数 / 内存队列 / 进度文件
@@ -864,38 +767,6 @@ class MonitorTab(CustomTab):
         except OSError as e:
             logger.warning(f"删除队列进度文件失败: {e}")
 
-    @staticmethod
-    def _close_capture_async():
-        """后台关掉截图会话（等价于「断开游戏」）。
-
-        **先同步置 None，再后台 close**（2026-11-02 修正）：
-        旧版把 `capture_method = None` 也放在后台线程里，于是断开后的
-        几秒内 `_connected()` 仍返回 True —— 第一栏还显示【停止】、
-        第二栏也以为还能开始。置 None 只是一次属性赋值（不阻塞），
-        先做掉它，界面立刻进入「已断开」状态；真正耗时的 `close()`
-        （要等正在取的那一帧，最多 4 秒）留到后台。
-        """
-        import threading
-
-        device_manager = getattr(og, "device_manager", None)
-        capture = getattr(device_manager, "capture_method", None) if device_manager else None
-        if capture is None:
-            return
-        # 先同步断开连接态（属性赋值，不阻塞 UI）
-        try:
-            device_manager.capture_method = None
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"断开截图（置空）失败: {e}")
-            return
-
-        def worker():
-            try:
-                if hasattr(capture, "close"):
-                    capture.close()
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"断开截图失败: {e}")
-
-        threading.Thread(target=worker, name="MonitorDisconnect", daemon=True).start()
 
     def set_skill(self, key, value):
         """技能品质数量：写回任务配置并立刻重算预计分数。"""
@@ -1169,26 +1040,6 @@ class MonitorTab(CustomTab):
         controller = getattr(getattr(og, "app", None), "start_controller", None)
         return bool(getattr(controller, "starting", False))
 
-    def _stop_auto_training(self, reset_button=False):
-        """停掉自动训练任务（对齐框架 stop_clicked：disable + unpause）。
-
-        框架 TaskCard.stop_clicked = `task.disable(); task.unpause()` ——
-        unpause 清掉 task.pause() 的挂起态（我们第二栏现在用框架的
-        task.pause() 暂停，停止时必须解除，否则下次【开始】会走 resume）。
-        这在第一栏【停止】（要全部停干净）是正确语义。
-
-        `reset_button=True` 时把第二栏按钮复位成「开始」（未启动状态）——
-        第一栏点【停止】后要连带复位，用户再点一次就能直接重新开始。
-        """
-        task = self._task()
-        if task is not None:
-            try:
-                task.disable()
-                task.unpause()          # 框架 stop_clicked 同款：清 pause 挂起态
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"停止自动训练失败: {e}")
-        if reset_button:
-            logger.info("监控页：自动训练 → 已停止（按钮复位为「开始」）")
 
     def hard_stop_training(self):
         """第二栏的【■ 完全停止】（用户 2026-11-07 口径）。

@@ -242,13 +242,12 @@ class MonitorView(QWidget):
         self._captain_combo: ComboBox | None = None
         self._btn_capture: QPushButton | None = None
         self._btn_conn: QPushButton | None = None
-        self._conn_text: tuple[str, str] = ("启动", "停止")
+        self._conn_text: tuple[str, str] = ("开始", "暂停")
         # 正在接入游戏时的文案（接入要等窗口稳定 + 设备就绪，几秒到几十秒）。
         # 2026-11-10 归位：这个态原来挂在**第二栏**【开始】上，但「接入游戏」
         # 从 2026-11-01 起就是第一栏的职责 —— 谁被点谁给反馈，第二栏保持
         # 【开始】不动（漏网之鱼见 docs/UI_MONITOR.md「启动中…归第一栏」）。
-        self._conn_starting_text: str = "启动中…"
-        # 按钮当前处在哪一态：running / connecting / idle —— 只在翻转时 setIcon，
+        # 按钮当前处在哪一态：running / idle —— 只在翻转时 setIcon，
         # 不拿 `icon()` 和枚举比（PySide 每次返回新 QIcon，比出来永远不相等）。
         self._conn_state: str | None = None
         self._switch_quick: SwitchButton | None = None
@@ -530,12 +529,11 @@ class MonitorView(QWidget):
             #  一起按住，逻辑正好反了 —— 见 MonitorTab.toggle_connection。）
             self._conn_text = (spec.get("run_text", "启动"),
                                spec.get("stop_text", "停止"))
-            self._conn_starting_text = spec.get("starting_text") or "启动中…"
             self._btn_conn = self._make_primary(
                 self._conn_text[0], self._slot_run,
                 icon=FluentIcon.PLAY)
             self._btn_conn.setToolTip(
-                "总开关：启动 = 接入游戏并开始跑（接入期间显示【启动中…】）；停止 = 断开游戏")
+                "执行器总开关（等价起始页的【开始(F9)】）：开始 = 连接并启动执行器；暂停 = 暂停执行器")
             lay.addWidget(self._btn_conn)
 
         for text, slot in (("重新检测", self._slot_refresh),):
@@ -1060,12 +1058,11 @@ class MonitorView(QWidget):
         """
         if self._btn_conn is None:
             return
-        if data.get("connecting") and not data.get("connected"):
-            state, text, icon = "connecting", self._conn_starting_text, FluentIcon.SYNC
-        elif data.get("connected"):
-            state, text, icon = "running", self._conn_text[1], OKIcon.STOP
-        else:
+        # 与框架 StartCard.update_status 同款：只看执行器是否暂停，没有第三个态。
+        if data.get("paused"):
             state, text, icon = "idle", self._conn_text[0], FluentIcon.PLAY
+        else:
+            state, text, icon = "running", self._conn_text[1], FluentIcon.PAUSE
         if self._btn_conn.text() != text:
             self._btn_conn.setText(text)
         if self._conn_state != state:
