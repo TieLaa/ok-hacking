@@ -1,7 +1,6 @@
 """MCP 入口：坐标与拖动诊断（管理员运行时才能正确读窗口）。"""
 
 import os
-import time
 
 import cv2
 import numpy as np

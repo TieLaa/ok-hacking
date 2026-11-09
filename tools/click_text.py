@@ -9,9 +9,7 @@
 （实测「返回」图标目测 1650 实际 1819）。文字框坐标是 OCR 直接给的，最可靠。
 """
 import sys
-import time
 
-import cv2
 import win32gui
 
 sys.path.insert(0, __file__.rsplit("tools", 1)[0].rstrip("\\/"))
