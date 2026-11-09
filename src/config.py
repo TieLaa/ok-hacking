@@ -4,6 +4,13 @@ import numpy as np
 from ok import ConfigOption
 
 from src.interaction.GirlsInteraction import GirlsInteraction
+from src.util.log_noise import install_quiet_filters
+
+# ok 的 TaskExecutor 每个调度拍都打一行 `get_task_by_class ...`（整个任务列表的
+# repr），debug 模式下会把控制台刷满。过滤器只丢这一行，见 src/util/log_noise.py。
+# 落点放在这里：三个入口脚本和 `python -m ok ... --config src.config:config`
+# 都会 import 本模块，是唯一能覆盖全部启动路径的单点（细节见该模块 docstring）。
+install_quiet_filters()
 
 version = "dev"
 #不需要修改version, Github Action打包会自动修改
