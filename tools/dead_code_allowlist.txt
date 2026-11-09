@@ -1,0 +1,9 @@
+# 死代码门禁的豁免清单（tools/check_dead_code.py）
+# 一行一条：<类别> <文件|*> <名字>
+# 类别：import / func / qss / layout
+
+# 「模拟一次按键（测试 / 外部兜底用）」的公开小 API，留给 MCP/工具调用
+func src/util/emergency_stop.py request
+
+# logging.Filter 的契约方法（由标准库在 logger.handle 里按名字调用，不是死代码）
+func src/util/log_noise.py filter

@@ -117,17 +117,6 @@ def find_ok_window():
     return found[0] if found else None
 
 
-def find_game_window():
-    found = []
-
-    def cb(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd) and "篮球少女：飞跃巅峰" == win32gui.GetWindowText(hwnd):
-            found.append(hwnd)
-
-    win32gui.EnumWindows(cb, None)
-    return found[0] if found else None
-
-
 def real_click(x, y):
     # 绝对坐标一步到位（与 GirlsInteraction 相同），不再滑行 / SetCursorPos
     click_screen(x, y)

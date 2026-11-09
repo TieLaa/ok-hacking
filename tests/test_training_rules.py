@@ -2699,7 +2699,6 @@ class PlaceModulesRules(unittest.TestCase):
         那些应该在 places/ 的模块里。
         """
         import os
-        import re
         path = os.path.join("src", "tasks", "training", "handlers", "weekend.py")
         src = open(path, encoding="utf-8").read()
         # 这些判断逻辑应该已经搬进 places/

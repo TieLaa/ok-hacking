@@ -91,10 +91,6 @@ class MockWindow:
         self.window_width = self.width
         self.window_height = self.height
 
-    @property
-    def capture_target_signature(self):
-        return (self.hwnd, self.top_hwnd, self.width, self.height, self.client_width, self.client_height)
-
     def get_top_window_cords(self, x, y):
         return x, y
 

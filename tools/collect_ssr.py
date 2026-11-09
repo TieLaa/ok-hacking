@@ -143,19 +143,6 @@ def joined(boxes):
     return "".join(b["text"] for b in boxes)
 
 
-def find(boxes, *keys, region=None, w=None, h=None):
-    """按子串找框，可按比例区域过滤。(rx0, ry0, rx1, ry1)"""
-    for b in boxes:
-        if not any(k in b["text"] for k in keys):
-            continue
-        if region and w and h:
-            cx, cy = (b["x"] + b["w"] / 2) / w, (b["y"] + b["h"] / 2) / h
-            if not (region[0] <= cx <= region[2] and region[1] <= cy <= region[3]):
-                continue
-        return b
-    return None
-
-
 def style_of(frame, w, h, name_box):
     """名字右侧的圆形风格图标：蓝=速度 / 绿=技巧 / 红=力量。"""
     if name_box is None:

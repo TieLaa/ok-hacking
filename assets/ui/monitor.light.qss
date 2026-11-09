@@ -10,10 +10,6 @@ QFrame#monitorCard {
     border-radius: 8px;
 }
 
-QFrame#monitorDivider {
-    background: #e8e8e8;
-}
-
 QFrame#monitorSplitHandle {
     background: #e8e8e8;
     border-radius: 1px;
@@ -144,21 +140,6 @@ QProgressBar#monitorBar::chunk {
                                 stop:0 #2ea06e, stop:1 #6fd3a8);
 }
 
-QPushButton#monitorPrimary {
-    background: #0f6cbd;
-    color: #ffffff;
-    border: 1px solid #0f6cbd;
-    border-radius: 6px;
-    padding: 0 20px;
-    font-size: 12.5px;
-    font-weight: 600;
-}
-
-QPushButton#monitorPrimary:hover { background: #1a7fd4; }
-
-/* 【■】完全停止小方钮（2026-11-07）：未启动=黑底白方块不可点；
-   启动后=蓝底白方块可点（对齐框架 TaskCard 的 Stop 观感）。 */
-
 QPushButton#monitorGhost {
     background: transparent;
     color: #333333;
@@ -205,10 +186,6 @@ QLabel[mRole="skillValue"] {
     color: #111111;
     font-size: 15px;
     font-weight: 600;
-}
-
-QPushButton#monitorToggle:hover {
-    background: #f0f0f0;
 }
 
 QLabel[mRole="skillGain"] { color: #1c7a53; font-size: 11.5px; }
