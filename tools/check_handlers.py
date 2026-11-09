@@ -539,7 +539,7 @@ def check_config():
     """配置项的单一来源门禁（**只管 TrainingTask 的配置**）。
 
     范围：`src/tasks/training/` 下读 `self.config` 的地方。
-    别的任务（QuickMatchTask / AutoBattleTask / InputTestTask）有各自的
+    别的任务（QuickMatchTask / InputTestTask）有各自的
     `default_config`，不在这个 spec 的范围内 —— 它们自己声明，不归这里管。
 
     返回问题列表（空 = 通过）。

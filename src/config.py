@@ -125,11 +125,9 @@ config = {
     'onetime_tasks': [  # 用户点击触发的任务
         ["src.tasks.TrainingTask", "TrainingTask"],
         ["src.tasks.InputTestTask", "InputTestTask"],
-        ["src.tasks.MyOneTimeTask", "MyOneTimeTask"],
         ["ok", "DiagnosisTask"],
     ],
     'trigger_tasks': [  # 后台常驻、按间隔自动触发的任务
         ["src.tasks.QuickMatchTask", "QuickMatchTask"],
-        ["src.tasks.AutoBattleTask", "AutoBattleTask"],
     ],
 }
