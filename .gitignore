@@ -18,11 +18,11 @@ ok_tasks/
 *$py.class
 configs/
 paddle_model/
-ok/
+# 打包时 inline_ok_requirements 会把 ok-script 源码复制成根目录的 ok/，
+# 只忽略根目录那一份（写成裸 ok 会连任意层级的 ok 目录一起吞掉）
+/ok/
 *.dat
-ok
 md5.txt
-update.bat
 click_screenshots/
 test_scripts/
 screenshots/
@@ -72,6 +72,9 @@ docs/shots/.ocr_cache/
 
 # 游戏/工具运行时数据
 _game_data_/
+
+# OpenVINO / OCR 模型缓存：运行时自动重建，别进版本库（实测 20 MB 级）
+/cache/
 
 # agent / 临时对比目录（.cache/ok304 之类）
 .cache/

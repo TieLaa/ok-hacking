@@ -10,6 +10,5 @@ main_gui_mcp.py
 icons
 requirements.txt
 README.md
-i18n
 assets
 pyappify.yml
