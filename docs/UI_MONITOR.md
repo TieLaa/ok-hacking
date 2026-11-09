@@ -231,7 +231,7 @@ RefreshAdb windows_graphics:start_or_stop start WGC capture
 
 | 控件 | 开 | 关 |
 |---|---|---|
-| 第一栏【启动/停止】 | **接入**（刷设备 / 必要时拉游戏 exe）+ `executor.start()` + enable 自动训练 | 停训练任务（`disable`）+ `executor.pause()` + 释放截图会话；**落盘的设置/开关状态保留** |
+| 第一栏【启动/停止】 | **接入**（刷设备 / 必要时拉游戏 exe）+ `executor.start()` + enable 自动训练 | 停训练任务（`disable`）+ `executor.pause()`（**静默**，见下）+ 释放截图会话；**落盘的设置/开关状态保留** |
 | 第二栏【开始/暂停】 | enable 训练任务 + **顺手** `executor.start()`（没接上则走接入链路） | 只 `task.disable()` —— **不碰执行器** |
 | 快速比赛 开关 | enable `QuickMatchTask` + **顺手** `executor.start()` | 只 `task.disable()` —— **不碰执行器** |
 
@@ -242,6 +242,13 @@ RefreshAdb windows_graphics:start_or_stop start WGC capture
   游戏没开着时唤醒也拿不到帧，用户还是得按【启动】。
 - **没人能动 `executor.pause()`，只有第一栏【停止】能**。第二栏【暂停】和快速比赛
   拨「关」只 disable 自己的任务 —— 这正是「两个模块无关」在代码里的落点。
+- **提示文案得自己说**（2026-11-10 用户实锤）：`executor.pause()` 会
+  `emit(executor_paused=True)`，`MainWindow.executor_paused()` 收到就弹
+  `tr('Pause Success.')` = **「已暂停」**。于是点【停止】弹「已暂停」，
+  等于把老语义（第一栏原本就是执行器的 开始/暂停）又漏了一遍。
+  现在 `_pause_executor_quietly()` 只在这一小段临时换掉那个 signal 的 `emit`
+  （`EventSignal` 是普通对象，没有 `blockSignals`，`finally` 必还原），
+  改由我们 `_notify("已停止：已断开游戏…")` 回话。
 - **运行基础关了，任务线程要停**：`_connection_stop()` 先
   `_stop_auto_training(reset_button=True)` 再 `executor.pause()`，顺序不能反
   （任务线程下一拍才退出，先 pause 会多跑一拍）。

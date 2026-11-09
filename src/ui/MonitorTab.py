@@ -17,6 +17,7 @@ from PySide6.QtCore import QTimer
 from qfluentwidgets import FluentIcon, isDarkTheme
 
 from ok import Logger, og
+from ok.core.events import communicate
 from ok.ui.qt.widget.CustomTab import CustomTab
 from ok.util.file import get_relative_path
 
@@ -769,17 +770,51 @@ class MonitorTab(CustomTab):
         就把设置抹了，落盘就失去意义。
 
         关截图会话可能等正在取的那一帧（最多 4 秒），放到后台线程做。
+
+        **提示文案得自己说**（2026-11-10 用户实锤）：框架的 `executor.pause()`
+        会 `emit(executor_paused=True)`，`MainWindow` 收到就弹一条
+        `tr('Pause Success.')` = 「已暂停」—— 用户点的是【停止】，弹「已暂停」
+        等于把两颗按钮的老语义（第一栏原本就是执行器的 开始/暂停）又漏了出来。
+        这里把那条通用提示压掉（`_pause_executor_quietly`），改由我们回
+        「已停止：已断开游戏」。
         """
         self._clear_queue_state()              # ② 只清注入参数/进度（先于 disable）
         self._stop_auto_training(reset_button=True)
-        try:
-            if self.executor is not None and not getattr(self.executor, "paused", True):
-                self.executor.pause()
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"暂停执行器失败: {e}")
+        paused = self._pause_executor_quietly()
         self._close_capture_async()
         logger.info("监控页：已断开游戏（训练停、注入队列清空、第二栏回到「开始」；设置保留）")
+        if paused:
+            self._notify("已停止：已断开游戏（训练已停、截图会话已释放；设置都留着）")
         self._update_data()
+
+    def _pause_executor_quietly(self) -> bool:
+        """暂停执行器，但**压掉框架那条「已暂停」提示**（用户点的是【停止】）。
+
+        为什么能压：`communicate.executor_paused` 是 `ok.core.events.EventSignal`
+        （自带订阅列表的普通对象，不是 Qt 信号，没有 `blockSignals`）。它在这条
+        链路上只有一个用途 —— 让 `MainWindow.executor_paused()` 弹
+        `tr('Pause Success.')`（中文「已暂停」）并在恢复时切回任务页。
+        我们这次是「断开游戏」，文案必须自己说，所以只在这一小段临时换掉
+        `emit`，**finally 一定还原**（别把后面真正的恢复提示也压了）。
+
+        返回是否真的动过执行器（已经是暂停态就直接跳过，不发提示）。
+        """
+        executor = getattr(self, "executor", None)
+        if executor is None or getattr(executor, "paused", True):
+            return False
+        signal = getattr(communicate, "executor_paused", None)
+        original = getattr(signal, "emit", None)
+        try:
+            if signal is not None and original is not None:
+                signal.emit = lambda *args, **kwargs: None
+            executor.pause()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"暂停执行器失败: {e}")
+            return False
+        finally:
+            if signal is not None and original is not None:
+                signal.emit = original
+        return True
 
     def _clear_queue_state(self):
         """清掉**本次注入**的队列参数 / 内存队列 / 进度文件

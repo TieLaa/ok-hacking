@@ -5951,6 +5951,32 @@ class MonitorButtonActions(unittest.TestCase):
         tab.toggle_connection()          # 断开
         self.assertFalse(tab._connected())
 
+    def test_stop_does_not_toast_paused(self):
+        """第一栏【停止】**不许**弹框架那条「已暂停」（用户 2026-11-10 实锤）。
+
+        机制：`executor.pause()` → `communicate.executor_paused.emit(True)` →
+        `MainWindow.executor_paused()` → `tr('Pause Success.')` = 「已暂停」。
+        用户点的是【停止】，弹「已暂停」等于把两颗按钮的老语义（第一栏原本
+        就是执行器的 开始/暂停）又漏了一遍。现在那条通用提示被压掉，
+        改由我们自己回「已停止：已断开游戏…」。
+        """
+        from ok.core.events import communicate
+
+        tab, task, executor, _ = self._tab()
+        executor.paused = False          # 真在跑，才走得到暂停这一步
+        paused_events = []
+        toasts = []
+        off1 = communicate.executor_paused.connect(paused_events.append)
+        off2 = communicate.notification.connect(lambda *a, **k: toasts.append(a[0] if a else ""))
+        self.addCleanup(lambda: (communicate.executor_paused.disconnect(off1),
+                                 communicate.notification.disconnect(off2)))
+        tab.toggle_connection()          # 断开
+        self.assertIn("executor.pause()", executor.calls)
+        self.assertTrue(executor.paused)
+        self.assertEqual(paused_events, [])                    # 框架那条被压掉
+        self.assertTrue(any("已停止" in str(t) for t in toasts), toasts)
+        self.assertFalse(any("已暂停" in str(t) for t in toasts), toasts)
+
     def _fake_app(self, starting=False):
         """给 `og.app.start_controller` 换成一个只记账的假货。"""
         import ok
