@@ -29,13 +29,13 @@ import time
 import win32api
 import win32con
 import win32gui
-import win32process
 
 from ok.device.interaction_methods.base import BaseInteraction
 from ok.device.interaction_methods.keys import vk_key_dict
 from ok.util.logger import Logger
 
 from src.interaction.user_activity import USER_ACTIVITY
+from src.util.win_focus import force_foreground, restore_if_minimized
 
 logger = Logger.get_logger(__name__)
 
@@ -112,17 +112,10 @@ class GirlsInteraction(BaseInteraction):
     def ensure_foreground(self, tries=4):
         """把游戏窗口真正置前。**抢不到就返回 False，调用方不能硬点。**
 
-        Windows 默认禁止后台进程抢前台：`SetForegroundWindow` 会**静默失败**（返回成功但
-        窗口没上来），于是鼠标/键盘事件全打到别的窗口。2026-10-25 实测：ok-script GUI
-        自己弹到前台时，点「开始」变成点 GUI，游戏界面毫发无伤 —— 表现就是"点在没反应的地方"。
-
-        三重保险，逐个加码：
-        1. 模拟按一下 Alt —— 让系统认为"用户有输入意图"；
-        2. `AttachThreadInput` 把当前线程挂到前台窗口的输入队列，绕过前台锁；
-        3. `SetWindowPos(... HWND_TOPMOST)` 后再撤回，强行上浮。
-
-        **抢之前先等用户空闲**（2026-10-29）：Alt 注入本身就是"拿走用户焦点"，
-        用户还在敲键盘/动鼠标时绝不能做。等他停手满 `user_idle_wait` 秒再抢。
+        这一层只管**策略**：什么时候允许抢（等用户停手、检查暂停/停止）、
+        抢之前要不要先恢复最小化；真正的抢法（Alt 注入 → AttachThreadInput →
+        置顶再撤回）在 `src.util.win_focus.force_foreground` —— tools 里的独立
+        脚本用的是同一份实现，别在这里再写一遍。
         """
         hwnd = self.hwnd
         if not hwnd:
@@ -132,9 +125,7 @@ class GirlsInteraction(BaseInteraction):
         if not self.foreground:
             return False
 
-        if win32gui.IsIconic(hwnd):
-            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-            time.sleep(0.2)
+        restore_if_minimized(hwnd)
 
         # 用户还在用电脑 → 一声不响地等，绝不抢焦点
         self.wait_for_user_idle()
@@ -143,69 +134,15 @@ class GirlsInteraction(BaseInteraction):
             logger.info("收到停止/暂停请求 → 放弃抢前台")
             return False
 
-        injected = False
-        try:
-            for attempt in range(tries):
-                fg = win32gui.GetForegroundWindow()
+        if force_foreground(hwnd, tries=tries, wait=FOREGROUND_WAIT,
+                            log=logger, on_alt_injected=self.mark_script_input):
+            return True
 
-                # 1) Alt 技巧（只在游戏不在前台时才会走到这里：
-                #    上面已经「前台就是游戏 → 直接 return True」）
-                logger.debug(f"抢前台 attempt {attempt}：注入 Alt + SetForegroundWindow")
-                win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
-                injected = True
-                time.sleep(0.02)
-                try:
-                    win32gui.SetForegroundWindow(hwnd)
-                except Exception as e:
-                    logger.debug(f"SetForegroundWindow attempt {attempt}: {e}")
-                finally:
-                    # Alt 必须抬起，否则后续所有按键都会变成 Alt 组合键
-                    win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
-
-                if win32gui.GetForegroundWindow() == hwnd:
-                    return True
-
-                # 2) AttachThreadInput 兜底
-                try:
-                    cur_tid = win32api.GetCurrentThreadId()
-                    fg_tid = win32process.GetWindowThreadProcessId(fg)[0] if fg else 0
-                    if fg_tid and fg_tid != cur_tid:
-                        win32process.AttachThreadInput(cur_tid, fg_tid, True)
-                        try:
-                            win32gui.SetForegroundWindow(hwnd)
-                        finally:
-                            win32process.AttachThreadInput(cur_tid, fg_tid, False)
-                except Exception as e:
-                    logger.debug(f"AttachThreadInput attempt {attempt}: {e}")
-
-                if win32gui.GetForegroundWindow() == hwnd:
-                    return True
-
-                # 3) 置顶再撤回
-                try:
-                    win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                                          win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
-                    win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0,
-                                          win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
-                except Exception as e:
-                    logger.debug(f"SetWindowPos attempt {attempt}: {e}")
-
-                time.sleep(FOREGROUND_WAIT)
-                if win32gui.GetForegroundWindow() == hwnd:
-                    return True
-
-            # 不要用「最小化再恢复」抢前台：前台是管理员进程时恢复会失败，
-            # 窗口会反复 visible=False，WGC 抓不到帧、点击也会全部落空
-            # （实训 2026-10-26）。抢不到就明确放弃，让上层报错/等用户点一下游戏。
-            fg_name = win32gui.GetWindowText(win32gui.GetForegroundWindow())
-            logger.warning(f"游戏未能置前（目标 {hwnd}，当前前台「{fg_name}」），本次操作放弃")
-            return False
-        finally:
-            if injected:
-                # 注入的 Alt 同样是系统输入事件。不记账的话，下一次动作会把它当成
-                # "用户还在操作"，白等 user_idle_wait 秒（尤其是抢前台失败直接抛错时，
-                # mark 根本走不到）。
-                self.mark_script_input()
+        # 不要用「最小化再恢复」硬抢：前台是管理员进程时恢复会失败，窗口反复
+        # visible=False，WGC 抓不到帧、点击也全部落空（实训 2026-10-26）。
+        fg_name = win32gui.GetWindowText(win32gui.GetForegroundWindow())
+        logger.warning(f"游戏未能置前（目标 {hwnd}，当前前台「{fg_name}」），本次操作放弃")
+        return False
 
     def is_foreground(self):
         return win32gui.GetForegroundWindow() == self.hwnd

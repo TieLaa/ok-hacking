@@ -14,9 +14,16 @@ import ctypes
 import time
 
 import win32api
-import win32con
 import win32gui
-import win32process
+
+try:
+    from src.util.win_focus import force_foreground, restore_if_minimized
+except ImportError:  # 直接 `python tools/xxx.py` 跑时 sys.path[0] 是 tools/
+    import pathlib as _pathlib
+    import sys as _sys
+
+    _sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parents[1]))
+    from src.util.win_focus import force_foreground, restore_if_minimized
 
 MOUSEEVENTF_MOVE = 0x0001
 MOUSEEVENTF_LEFTDOWN = 0x0002
@@ -115,52 +122,14 @@ def find_game_hwnd():
 
 
 def ensure_foreground(hwnd, tries=3):
-    """把窗口真正置前；抢不到返回 False，调用方不要硬点。"""
+    """把窗口真正置前；抢不到返回 False，调用方不要硬点。
+
+    实现只有一份：`src/util/win_focus.force_foreground`（src 里 GirlsInteraction
+    与这里共用同一段 win32 逻辑）。保留这个函数名是因为十来个 tools 脚本都在 import 它。
+    """
     if not hwnd:
         return False
     if win32gui.GetForegroundWindow() == hwnd:
         return True
-    if win32gui.IsIconic(hwnd):
-        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-        time.sleep(0.2)
-
-    for _ in range(tries):
-        fg = win32gui.GetForegroundWindow()
-        win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
-        time.sleep(0.02)
-        try:
-            win32gui.SetForegroundWindow(hwnd)
-        except Exception:
-            pass
-        finally:
-            win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
-        if win32gui.GetForegroundWindow() == hwnd:
-            return True
-
-        try:
-            cur_tid = win32api.GetCurrentThreadId()
-            fg_tid = win32process.GetWindowThreadProcessId(fg)[0] if fg else 0
-            if fg_tid and fg_tid != cur_tid:
-                win32process.AttachThreadInput(cur_tid, fg_tid, True)
-                try:
-                    win32gui.SetForegroundWindow(hwnd)
-                finally:
-                    win32process.AttachThreadInput(cur_tid, fg_tid, False)
-        except Exception:
-            pass
-        if win32gui.GetForegroundWindow() == hwnd:
-            return True
-
-        try:
-            win32gui.SetWindowPos(
-                hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
-            win32gui.SetWindowPos(
-                hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0,
-                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
-        except Exception:
-            pass
-        time.sleep(0.15)
-        if win32gui.GetForegroundWindow() == hwnd:
-            return True
-    return False
+    restore_if_minimized(hwnd)
+    return force_foreground(hwnd, tries=tries)
