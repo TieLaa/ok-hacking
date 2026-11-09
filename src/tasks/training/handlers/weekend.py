@@ -12,7 +12,6 @@ import time
 
 from src.tasks.ui import labels
 from src.tasks.training.places import activities
-from src.tasks.training.constants import WORK_STAMINA_COST  # noqa: F401
 
 
 class WeekendHandlers:

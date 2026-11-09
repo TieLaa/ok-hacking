@@ -11,9 +11,9 @@ import os
 import cv2
 import numpy as np
 
-from src.tasks.ui import Defs  # noqa: F401
+from src.tasks.ui import Defs
 from src.tasks.ui import labels
-from src.tasks.training.constants import JPEG_PARAMS, PROJECT_ROOT  # noqa: F401
+from src.tasks.training.constants import JPEG_PARAMS, PROJECT_ROOT
 
 
 class MatchHandlers:

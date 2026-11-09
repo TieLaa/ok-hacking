@@ -7,9 +7,6 @@
 import re
 
 
-from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
-
-
 class TrainingScoringMixin:
 
     # 科目预览打分（2026-10-29 定稿：彩框抬到 2.3）

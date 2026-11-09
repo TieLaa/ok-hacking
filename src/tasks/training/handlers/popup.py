@@ -6,7 +6,6 @@
 
 
 from src.tasks.ui import labels
-from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 
 
 class PopupHandlers:

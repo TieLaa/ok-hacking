@@ -14,7 +14,6 @@ from collections import deque
 
 from src.tasks.BaseGirlsTask import BaseGirlsTask
 from src.tasks.training import config_spec
-from src.tasks.training.constants import JPEG_PARAMS  # noqa: F401
 from src.tasks.training.flow import TrainingFlowMixin
 from src.tasks.training.parsers import TrainingParsersMixin
 from src.tasks.training.scoring import TrainingScoringMixin

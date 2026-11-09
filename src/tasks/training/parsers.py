@@ -14,10 +14,10 @@ import numpy as np
 
 from ok.feature.Box import Box
 
-from src.tasks.ui import Defs  # noqa: F401
+from src.tasks.ui import Defs
 from src.tasks.ui import labels
 from src.tasks.ui import zoom_reread
-from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,  # noqa: F401
+from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,
                                           STYLE_ALIASES, STYLE_BY_NAME)
 
 # 科目按钮外圈「框」的判定门限（比例 = 环带上命中像素 / 环带总像素）。
