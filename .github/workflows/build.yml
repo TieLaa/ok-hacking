@@ -58,6 +58,22 @@ jobs:
           }
           if ($failed) { exit 1 }
 
+      # 模板里写的是「GitHub Action 会自动改 version」，但 pyappify-action 只吃 tag，
+      # 不会回写 src/config.py。不补这一步，打出来的包「关于」页会显示 dev。
+      - name: Stamp version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: python
+        run: |
+          import os, pathlib, re
+          tag = os.environ['GITHUB_REF_NAME'].lstrip('v')
+          path = pathlib.Path('src/config.py')
+          text = path.read_text(encoding='utf-8')
+          new_text, count = re.subn(r'^version = ".*"$', f'version = "{tag}"', text, count=1, flags=re.M)
+          if count != 1:
+              raise SystemExit(f'failed to stamp version, matches={count}')
+          path.write_text(new_text, encoding='utf-8')
+          print(f'version stamped: {tag}')
+
       # 钉到 commit（2026-11-09 的 master），不用 @master 以免上游改动直接影响发布
       - name: Build with PyAppify Action
         id: build-app
