@@ -4,15 +4,6 @@
 禁止在这里 import TrainingTask（循环依赖），需要类时用 handler.__name__ 判断。
 """
 
-import random
-import time
-
-import os
-import threading
-from collections import deque
-
-import cv2
-import numpy as np
 
 from src.tasks.ui import Defs  # noqa: F401
 from src.tasks.ui import labels

@@ -4,13 +4,9 @@
 所以不要在这里假设「当前一定在养成流程里」。
 """
 
-import random
-import re
 import time
 
 import os
-import threading
-from collections import deque
 
 import cv2
 import numpy as np

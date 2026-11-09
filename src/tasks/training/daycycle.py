@@ -26,10 +26,8 @@
 import time
 
 from src.tasks.ui import Defs, labels
-from src.tasks.training.constants import (JPEG_PARAMS,
-                                          PROJECT_ROOT,  # noqa: F401
-                                          SHOP_ENTRY_TRIES,
-                                          STYLE_BY_NAME)  # noqa: F401
+from src.tasks.training.constants import (SHOP_ENTRY_TRIES,
+                                          STYLE_BY_NAME)
 
 
 class DayCycleMixin:

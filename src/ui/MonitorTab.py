@@ -14,7 +14,6 @@ import os
 import time
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QWidget
 from qfluentwidgets import FluentIcon, isDarkTheme
 
 from ok import Logger, og

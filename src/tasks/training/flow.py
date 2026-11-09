@@ -6,18 +6,13 @@
 
 import json
 import os
-import random
-import re
 import threading
 import time
-from collections import deque
 
 import cv2
-import numpy as np
 
 from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,
-                                          THURSDAY_REST_THRESHOLD_BY_STYLE,
-                                          WEEKEND_PLAN)  # noqa: F401
+                                          THURSDAY_REST_THRESHOLD_BY_STYLE)
 from src.tasks.training.queue import CaptainQueue
 from src.tasks.ui import labels
 from src.util.emergency_stop import STOP

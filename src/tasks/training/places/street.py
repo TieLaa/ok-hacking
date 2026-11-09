@@ -61,8 +61,6 @@ from src.tasks.ui import labels
 PLACE = "步行街"
 
 
-
-
 class StreetPlace:
     """步行街的判断与状态。**不点击**，只给判断。"""
 
