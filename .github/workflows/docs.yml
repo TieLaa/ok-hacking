@@ -1,15 +1,16 @@
 name: Docs
 
 on:
-  push:
-    branches:
-      - master
-      - main
-    paths:
-      - "docs/**"
-      - "mkdocs.yml"
-      - "requirements-docs.txt"
-      - ".github/workflows/docs.yml"
+  # 仓库目前是 private，GitHub Pages 用不了（private 仓库的 Pages 需要付费计划），
+  # 所以先只留手动触发。等仓库改成 public 并开启 Pages 后，把下面 push 那段恢复即可。
+  # push:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - "docs/**"
+  #     - "mkdocs.yml"
+  #     - "requirements-docs.txt"
+  #     - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:

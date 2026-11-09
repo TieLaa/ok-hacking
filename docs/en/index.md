@@ -1,46 +1,36 @@
-# ok-script-app
+# ok-hacking
 
-[中文](../index.md)
+Automation for the Windows client of **Basketball Girls: Leap to the Top**, built on [ok-script](https://github.com/ok-oldking/ok-script).
 
-ok-script-app is a Python automation project template built on [ok-script](https://github.com/ok-oldking/ok-script), for native Windows games, Android emulators, and browser games.
+[中文](../index.md) · [GitHub](https://github.com/TieLaa/ok-hacking) · [README](https://github.com/TieLaa/ok-hacking/blob/main/README_en.md)
 
-It is not a finished automation tool for a specific game. The template includes a runnable GUI, task and configuration-widget examples, OCR, template matching, tests, i18n, EXE packaging, and update/release configuration.
+!!! warning "Disclaimer"
+    Not affiliated with the game's publisher. For study and personal use only. Automating an online game may violate its terms of service; bans are possible and are your own risk.
 
-## Start Here
+## What this is
 
-1. Create and initialize a repository with the [Quick start](getting-started.md).
-2. Select at least one runtime target in [App configuration](configuration.md).
-3. Create and register the first task with [Task development](tasks.md).
-4. Build an EXE with [Packaging and release](release.md).
+An automation program that plays the career loop: it recognizes the game UI, decides from configured rules, and runs a full career until the season ends. Everything is local image/OCR logic; no LLM calls at runtime.
 
-## Demo
+## Quick start
 
-### API List and Script Recording
+1. Download an installer from [Releases](https://github.com/TieLaa/ok-hacking/releases), or run from source as administrator;
+2. Confirm the capture page can grab the game window;
+3. On the task page expand “养成-训练循环”, adjust options, press start;
+4. Watch the monitor page. When stuck, read `logs/debug/<time>_<tag>/ocr.txt` first.
 
-![API list and script recording](../images/image_scripting.png)
+See the [README](https://github.com/TieLaa/ok-hacking/blob/main/README_en.md) for install and run details.
 
-### Capture and Interaction Methods
+## Engineering docs
 
-![Capture and interaction methods](../images/image_capture.png)
+Chinese only at the moment:
 
-### Annotation and Template Matching
+- [Architecture](../ARCHITECTURE.md)
+- [Engineering rules](../ENGINEERING.md)
+- [Monitor page](../UI_MONITOR.md)
+- [UI map](../UI_MAP.md)
+- [MCP dev loop](../MCP_DEV.md)
+- [Packaging and release](../release.md)
 
-![Template matching](../images/image_template.png)
+## License
 
-![Annotation management](../images/image_markup.png)
-
-## Included
-
-- `MyOneTimeTask` and `MyTriggerTask` examples.
-- Drop-down, boolean, numeric, text, list, multi-selection, file, global configuration, and button widgets.
-- OCR, relative-region recognition, and template matching examples.
-- `ConfigOption` global configuration and `TaskTestCase` test examples.
-- gettext i18n sources and compiled catalogs.
-- PyAppify and GitHub Actions packaging/release configuration.
-
-## Further Reading (Chinese)
-
-- [Intro to game automation](https://github.com/ok-oldking/ok-script/blob/master/docs/intro_to_automation/README.md)
-- [ok-script quick start](https://github.com/ok-oldking/ok-script/blob/master/docs/quick_start/README.md)
-- [After quick start](https://github.com/ok-oldking/ok-script/blob/master/docs/after_quick_start/README.md)
-- [API documentation](https://github.com/ok-oldking/ok-script/blob/master/docs/api_doc/README.md)
+Code is [MIT](https://github.com/TieLaa/ok-hacking/blob/main/LICENSE). Third-party components (ok-script, PyAppify, PyQt-Fluent-Widgets) keep their own licenses; see the [README](https://github.com/TieLaa/ok-hacking/blob/main/README_en.md#license).

@@ -1,12 +1,14 @@
+# 同步到更新仓库的文件列表（partial-sync-repo 用）。
+# 目前未启用更新仓库（build.yml 里没有 Sync Repositories 步骤），这里是备用的最小集合。
+# 注意：`ok` 由 ok.update.inline_ok_requirements 在打包时生成（把 ok-script 源码复制到仓库根），
+# 仓库里并不存在这个目录，不要因为"找不到"就删掉。
 src
 ok
 main.py
 main_debug.py
-web_main.py
-web_main_debug.py
+main_gui_mcp.py
 icons
 requirements.txt
-requirements-web.txt
 README.md
 i18n
 assets

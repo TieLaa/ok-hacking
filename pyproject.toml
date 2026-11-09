@@ -1,6 +1,8 @@
 [project]
 name = "ok-hacking"
-version = "0.0.0"
+# 发布版本号以 git tag 为准：CI 会把 tag 写进 src/config.py 的 version，
+# 这里的值只用于 pip 元数据，两边保持一致即可。
+version = "0.1.1"
 requires-python = ">=3.12,<3.13"
 dependencies = []
 

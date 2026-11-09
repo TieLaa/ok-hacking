@@ -1,8 +1,8 @@
 site_name: ok-hacking
-site_description: ok-hacking —— 篮球少女：飞跃巅峰 自动化
-repo_name: ok-hacking
-repo_url: https://github.com/
-edit_uri: edit/master/docs/
+site_description: ok-hacking —— 篮球少女：飞跃巅峰 养成自动化
+repo_name: TieLaa/ok-hacking
+repo_url: https://github.com/TieLaa/ok-hacking
+edit_uri: edit/main/docs/
 
 docs_dir: docs
 site_dir: site
@@ -24,7 +24,9 @@ markdown_extensions:
 
 validation:
   nav:
-    omitted_files: warn
+    # docs/ 下还有大量历史文档（RUN_REPORT、research、roster 等）不在 nav 里，
+    # 而 CI 用 `mkdocs build --strict`，这一项必须 ignore，否则构建直接失败。
+    omitted_files: ignore
     not_found: warn
   links:
     not_found: warn
@@ -32,17 +34,15 @@ validation:
     unrecognized_links: warn
 
 nav:
-  - 中文:
-      - 首页: index.md
-      - 快速开始: getting-started.md
-      - 应用配置: configuration.md
-      - 任务开发: tasks.md
-      - 打包与发布: release.md
-      - 文档网站: documentation.md
+  - 首页: index.md
+  - 工程文档:
+      - 架构: ARCHITECTURE.md
+      - 工程约定: ENGINEERING.md
+      - 监控页: UI_MONITOR.md
+      - 界面地图: UI_MAP.md
+      - MCP 开发循环: MCP_DEV.md
+      - 提示词手册: PROMPT_PLAYBOOK.md
+      - 规则: RULES.md
+  - 打包与发布: release.md
   - English:
       - Home: en/index.md
-      - Quick Start: en/getting-started.md
-      - App Configuration: en/configuration.md
-      - Task Development: en/tasks.md
-      - Packaging and Release: en/release.md
-      - Documentation Site: en/documentation.md

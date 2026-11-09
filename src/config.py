@@ -106,11 +106,12 @@ config = {
         'min_size': (1280, 720), #支持的最低游戏分辨率
         'resize_to': [(2560, 1440), (1920, 1080), (1600, 900), (1280, 720)], #可选, 如果非16:9自动缩放为 resize_to
     },
-    # 'links': { # 关于里显示的链接, 等你的仓库建好后再填
-    #         'default': {
-    #             'github': 'https://github.com/<你的用户名>/<你的仓库>',
-    #         }
-    #     },
+    'links': {  # 「关于」页与更新卡片里显示的链接
+        'default': {
+            'github': 'https://github.com/TieLaa/ok-hacking',
+            'download': 'https://github.com/TieLaa/ok-hacking/releases',
+        }
+    },
     'screenshots_folder': "screenshots", #截图存放目录, 每次重新启动会清空目录
     'gui_title': '篮球少女 OK',  #窗口名
     'template_matching': { # 可选, 如使用OpenCV的模板匹配

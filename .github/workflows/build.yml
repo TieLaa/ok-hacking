@@ -2,13 +2,13 @@ name: Build
 
 on:
   push:
-    # Sequence of patterns matched against refs/tags
+    # 推 v* tag 才出包，避免每次提交都跑一遍完整打包
     tags:
       - 'v*'
+  workflow_dispatch: {}   # 也允许在网页上手动跑一次（只在 tag 上才会建 Release）
 
 jobs:
   build:
-
     runs-on: windows-latest
 
     env:
@@ -24,55 +24,46 @@ jobs:
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           git config --global core.autocrlf false
           git config --global core.eol lf
-          git config --global user.email "ok-oldking@users.noreply.github.com"
-          git config --global user.name "ok-oldking"
-          echo "action_state=yellow" >> $env:GITHUB_ENV
-          echo "${{ env.action_state }}"
+          git config --global user.email "353134935+TieLaa@users.noreply.github.com"
+          git config --global user.name "TieLaa"
 
       - uses: actions/checkout@v4
         with:
           lfs: true
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+
       - name: Set UTF-8 encoding
         run: |
           set PYTHONIOENCODING=utf-8
           set PYTHONLEGACYWINDOWSSTDIO=utf-8
           echo PYTHONIOENCODING=utf-8 >> $GITHUB_ENV
 
+      # requirements.txt 是 pip-compile 生成的完整锁定文件（含 pyside6-essentials），
+      # 所以必须 --no-deps，否则 PySide6-Fluent-Widgets 会把整个 PySide6 metapackage 拖进来。
       - name: Install dependencies
         run: |
-          pip install --no-deps -r requirements.txt
-
-      - name: inline_ok_requirements #把ok-script加入源码, 从requirements.txt中删除以提高升级更新速度
-        run: |
-          python -m ok.update.inline_ok_requirements --tag ${{ github.ref_name }}
+          python -m pip install --no-deps -r requirements.txt
 
       - name: Run tests
         run: |
+          $failed = $false
           Get-ChildItem -Path ".\tests\*.py" | ForEach-Object {
               Write-Host "Running tests in $($_.FullName)"
               python -m unittest $_.FullName
+              if ($LASTEXITCODE -ne 0) { $failed = $true }
           }
+          if ($failed) { exit 1 }
 
-      - name: Sync Repositories # 同步部分代码(deploy.txt中), 合并tag中间更新日志, 到更新库, 以减少用户更新使用的git库大小
-        id: sync   # Give the step an ID to access its outputs
-        uses: ok-oldking/partial-sync-repo@master
-        with:
-          repos: |
-            https://cnb:${{ secrets.CNB_TOKEN }}@cnb.cool/ok-oldking/ok-script-app.git
-            https://ok-oldking:${{ secrets.OK_GH }}@github.com/ok-oldking/ok-script-app-update.git
-          sync_list: 'deploy.txt'
-          tag: ${{ github.ref_name }}
-          gitignore_file: '.update_repo_gitignore'
-          show_author: true #在更新日志中加入作者
-
+      # 钉到 commit（2026-11-09 的 master），不用 @master 以免上游改动直接影响发布
       - name: Build with PyAppify Action
         id: build-app
-        uses: ok-oldking/pyappify-action@master #使用pyappify打包exe
+        uses: ok-oldking/pyappify-action@33534434fc01d51039285d3f0c9bd3ab4d952bea
+        with:
+          version: 'v1.2.4'
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -80,21 +71,17 @@ jobs:
         with:
           draft: false
           body: |
-            ###  更新日志 ${{ steps.sync.outputs.start_tag }} -> ${{ steps.sync.outputs.end_tag }}:
-              ${{ steps.sync.outputs.changes_with_asterisk }}          
-            ### 下载包说明
-              * [ok-script-app-win32-China-setup.exe](https://github.com/ok-oldking/ok-script-app/releases/download/${{ github.ref_name }}/ok-script-app-win32-China-setup.exe) 完整安装包, 更新使用阿里云+腾讯CNB.
-              * [ok-script-app-win32-Global-setup.exe](https://github.com/ok-oldking/ok-script-app/releases/download/${{ github.ref_name }}/ok-script-app-win32-Global-setup.exe) full package with dependencies, using GitHub and PyPi as update source
-            ### 如果无法下载或下载慢, 可以使用其他下载源
-              * [Mirror酱下载渠道](https://mirrorchyan.com/zh/projects?rid=ok-script-app&source=ok-script-app-release), 国内网页直链, 下载需要购买CD-KEY, 已有Mirror酱CD-KEY可免费下载
-              * [夸克网盘](https://pan.quark.cn/s/a1052cec4d13), 免费, 但需要注册并下载夸克网盘客户端
-          files: pyappify_dist/*
+            ### 版本 ${{ github.ref_name }}
 
-      - name: Trigger MirrorChyanUploading
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          gh workflow run --repo $GITHUB_REPOSITORY mirrorchyan_uploading.yml -f tag=${{ github.ref_name }}
-          gh workflow run --repo $GITHUB_REPOSITORY mirrorchyan_release_note.yml -f tag=${{ github.ref_name }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            本页下方的安装包按更新源分两个 profile：
+            * `China` —— 依赖走国内镜像，国内用户用这个
+            * `Global` —— 依赖走 PyPI 官方源，海外用户用这个
+
+            ### 安装前请确认
+            * **以管理员身份安装并运行**（游戏进程是管理员权限，非管理员发不进输入）
+            * **安装路径必须是纯英文**（ok-script 拒绝非 ASCII 路径）
+            * **游戏窗口必须保持可见**（完全遮挡或最小化时截图后端拿不到新帧）
+
+            ### 免责声明
+            本项目与游戏官方无关，仅供学习交流。使用自动化工具可能违反游戏用户服务条款，存在封号风险，后果自负。
+          files: pyappify_dist/*
