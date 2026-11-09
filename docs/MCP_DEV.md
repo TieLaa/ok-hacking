@@ -62,8 +62,8 @@ class Task(BaseTask):
 - `BaseGirlsTask`：`reset_to_start` = 回大厅（`recover_to_lobby`）、
   `verify_start_state` = 断言「赛事 + 训练」都在屏幕上。
 - `TrainingTask` 继承上面的严格基线：MCP 里必须从大厅开始。
-- `QuickMatchTask` / `AutoBattleTask` **不回大厅**：比赛打到一半点返回等于毁局，
-  它们只断言「画面是可识别场景」。
+- `QuickMatchTask` **不回大厅**：比赛打到一半点返回等于毁局，
+  它只断言「画面是可识别场景」。
 - GUI/CLI 跑 `TrainingTask` 时会在 `run()` 开头自动回大厅，失败只告警不中止
   （用户手动起任务时不该被卡住）。
 
@@ -92,9 +92,7 @@ ESC → 放弃并存证 `recover_failed`。遇到比赛/小游戏标记（`VS`/`
 |---|---|---|
 | `tools/mcp/training.py` | TrainingTask | 跑完整一轮；`OK_MCP_STEPS` 可限步；**不支持删档**（见下方红线） |
 | `tools/mcp/quickmatch.py` | QuickMatchTask | 跑 N 拍（`OK_MCP_TICKS`，默认 10），不回大厅 |
-| `tools/mcp/autobattle.py` | AutoBattleTask | 骨架任务跑 N 拍，只读画面 |
 | `tools/mcp/input_test.py` | InputTestTask | 点一次并断言界面变化 |
-| `tools/mcp/my_onetime.py` | MyOneTimeTask | 配置演示，冒烟用 |
 | `tools/mcp/probe.py` | — | 回大厅 + 报顶栏/OCR，改代码后的第一只探针 |
 | `tools/mcp/summarize_run.py` | — | 把一次 run 的 `run.log` 数成表（写运行记录用，只读；`-o` 写 UTF-8） |
 
