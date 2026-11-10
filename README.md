@@ -42,10 +42,17 @@
 
 ### 方式一：安装包（推荐）
 
-到 [Releases](https://github.com/TieLaa/ok-hacking/releases) 下载：
+**国内用户走夸克网盘**（GitHub 在国内经常连不上）：
+
+- 夸克网盘：https://pan.quark.cn/s/332f7585ffb9 （永久有效，不用提取码）
+
+海外或能上 GitHub 的，到 [Releases](https://github.com/TieLaa/ok-hacking/releases) 下载：
 
 - `ok-hacking-win32-China-setup.exe` —— 依赖走国内镜像
 - `ok-hacking-win32-Global-setup.exe` —— 依赖走 PyPI 官方源
+
+校验：`ok-hacking-win32-China-setup.exe` v0.1.9 的 SHA256 是
+`ef903299399ba0e71b3230de00fcc63e8c3978aae8e1a27da426c844ac71a9ce`。
 
 安装时系统会要管理员权限（`uac: true`）。首次启动会初始化 OCR 模型（OpenVINO），需要等一会儿。
 
