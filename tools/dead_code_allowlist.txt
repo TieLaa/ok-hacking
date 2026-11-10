@@ -7,3 +7,6 @@ func src/util/emergency_stop.py request
 
 # logging.Filter 的契约方法（由标准库在 logger.handle 里按名字调用，不是死代码）
 func src/util/log_noise.py filter
+
+# WGC 捕获库用 getattr 读 MockWindow 的窗口签名（动态属性，静态扫不到）
+func tools/wgc_capture.py capture_target_signature

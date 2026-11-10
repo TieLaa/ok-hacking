@@ -91,6 +91,15 @@ class MockWindow:
         self.window_width = self.width
         self.window_height = self.height
 
+    @property
+    def capture_target_signature(self):
+        """WGC 捕获库用 getattr 读它判断窗口是否换了（不是死代码！）。
+
+        2026-11-10 曾被死代码门禁误删，导致 `tools/wgc_capture.py` 直接
+        AttributeError——门禁只静态扫引用，读不到这种动态属性。已列入豁免清单。
+        """
+        return (self.hwnd, self.top_hwnd, self.width, self.height, self.client_width, self.client_height)
+
     def get_top_window_cords(self, x, y):
         return x, y
 
