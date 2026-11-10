@@ -6100,20 +6100,20 @@ class MonitorButtonActions(unittest.TestCase):
 
 
 class MonitorQuickMatchSwitch(unittest.TestCase):
-    """「快速比赛」开关只管快速比赛模块（用户 2026-11-02 口径）。
+    """「快速比赛」开关只管快速比赛模块（用户 2026-11-02 / 2026-11-10 口径）。
 
     分工：
     - **执行器**是唯一运行基础，**只有第一栏【启动/停止】能动它**（接入：刷设备 /
       拉游戏 / `executor.start()`；断开：两个开关复位 + `executor.pause()`）；
     - **第二栏【开始/暂停】**只管自动训练；执行器没起来时**顺手**唤醒，不是必须；
-    - **快速比赛开关**同理：只管 `QuickMatchTask` 的 enable/disable + 顺手唤醒。
-      它**不接入**（不碰 `start_controller`），也**不关执行器**；
+    - **快速比赛开关**只管 `QuickMatchTask` 的 enable/disable ——
+      **2026-11-10 删掉「顺手唤醒」**：拨开关把执行器带起来是遗留问题，
+      执行器停着时只提示「按第一栏【启动】后生效」。不接入、不关执行器。
     - 两个模块无关：自动训练自己处理养成里的比赛，快速比赛管养成之外的
       全国大赛 / 圣山战 / 竞技场。
 
-    `QuickMatchTask` 是常驻 `TriggerTask`，**只有执行器没被暂停时才会被调度**
-    （`TaskExecutor.execute()` 里 `if self.paused: 只跑 job`）—— 所以旧版只
-    `enable()` 时开关拨了什么都不动，看着就像「跟第二栏的开始绑在一起」。
+    代价：执行器停着时拨「开」不会立刻跑（`TriggerTask` 只在执行器没被暂停时才被调度），
+    所以必须有那句提示，否则用户以为开关坏了。
     """
 
     def _tab(self, connected=True):
@@ -6155,6 +6155,8 @@ class MonitorQuickMatchSwitch(unittest.TestCase):
         tab._task_by_name = lambda name: quick if name == "QuickMatchTask" else None
         tab._update_data = lambda: None
         tab.executor = executor
+        tab.notes = []
+        tab._notify = lambda msg: tab.notes.append(msg)
         return tab, quick, train, executor
 
     def _forbid_start_controller(self):
@@ -6179,14 +6181,15 @@ class MonitorQuickMatchSwitch(unittest.TestCase):
         self.assertEqual(train.calls, [])
         self.assertEqual(executor.calls, [])   # 执行器在跑，不用动
 
-    def test_switch_on_wakes_paused_executor_incidentally(self):
-        """执行器还停着就**顺手**唤醒一下 —— 只 `executor.start()`，不接入。"""
+    def test_switch_on_does_not_wake_paused_executor(self):
+        """执行器停着时拨「开」也不许启动它（2026-11-10 用户口径，替代旧的「顺手唤醒」）。"""
         tab, quick, train, executor = self._tab(connected=False)
         self._forbid_start_controller()
         tab.set_quick_match(True)
         self.assertIn("enable", quick.calls)
-        self.assertEqual(executor.calls, ["executor.start()"])
-        self.assertFalse(executor.paused)
+        self.assertEqual(executor.calls, [])
+        self.assertTrue(executor.paused)
+        self.assertIn("执行器未启动", tab.notes[-1])
 
     def test_switch_off_only_disables_quick_match(self):
         """拨到「关」：只 disable 快速比赛，不碰自动训练、不动执行器。"""
@@ -6211,8 +6214,8 @@ class MonitorExecutorLifecycle(unittest.TestCase):
 
     - 第一栏【开始/暂停】= `executor.paused` ? pause() : start_controller.start()
       —— 2026-11-09 起与起始页【开始(F9)】完全一致，不再管连接/截图会话/任务；
-    - 第二栏【开始/暂停】、快速比赛开关：开的时候**顺手**唤醒执行器
-      （`executor.start()`），关的时候**只 disable 自己**，绝不 pause 执行器。
+    - 第二栏【开始/暂停】走 `start_controller` / `task.pause()`；
+      **快速比赛开关不碰执行器**（2026-11-10 起：执行器停着只提示，不启动）。
     """
 
     def _tab(self, paused=True):
@@ -6267,6 +6270,8 @@ class MonitorExecutorLifecycle(unittest.TestCase):
         tab._task_by_name = lambda name: quick if name == "QuickMatchTask" else None
         tab._update_data = lambda: None
         tab.executor = executor
+        tab.notes = []
+        tab._notify = lambda msg: tab.notes.append(msg)
         return tab, quick, train, executor
 
     def test_pause_auto_training_never_pauses_executor(self):
@@ -6287,11 +6292,13 @@ class MonitorExecutorLifecycle(unittest.TestCase):
         self.assertEqual(executor.calls, [])
         self.assertFalse(executor.paused)
 
-    def test_quick_match_switch_wakes_paused_executor(self):
-        """快速比赛拨「开」时执行器还停着 → **顺手** `executor.start()`。"""
+    def test_quick_match_switch_does_not_wake_executor(self):
+        """快速比赛拨「开」不再唤醒执行器（2026-11-10：由「顺手唤醒」改为只提示）。"""
         tab, quick, train, executor = self._tab(paused=True)
         tab.set_quick_match(True)
-        self.assertEqual(executor.calls, ["start"])
+        self.assertEqual(executor.calls, [])
+        self.assertTrue(executor.paused)
+        self.assertIn("执行器未启动", tab.notes[-1])
         self.assertIn("enable", quick.calls)
 
     def test_auto_training_wakes_paused_executor(self):
