@@ -142,7 +142,7 @@ places/
 class MapPlace:
     def weekend_map_page(self, texts)          -> bool  # 这是不是地图？
     def today_places(self, day, st)           -> list  # 今天去哪几个（有序）
-    def prefer_mate_venue(texts, places, day) -> list  # 先去哪个
+    def prefer_venue(texts, places, day)      -> list  # 先去哪个
 
 class StreetPlace:      # 其余四个地点同形
     def xxx_page(self, texts)                -> bool  # 这是不是我的页面？
