@@ -18,13 +18,14 @@
                  ├─ pip install --no-deps -r requirements.txt
                  ├─ 跑 tests/*.py（任一文件失败即 fail）
                  ├─ Stamp version from tag   （把 tag 写进 src/config.py 的 version）
-                 ├─ [待恢复] Sync Repositories：按 deploy.txt 灌进 ok-hacking-update 并打同名 tag
+                 ├─ Sync Repositories：按 deploy.txt 灌进 ok-hacking-update 并打同名 tag
                  ├─ pyappify-action（钉 commit + v1.2.4）→ 产出 pyappify_dist/*-setup.exe
                  └─ softprops/action-gh-release 把这些 exe 挂到 Release
 ```
 
 玩家只下 Release 里的 `*-setup.exe`；装好之后的更新由 launcher 去 `pyappify.yml` 的 `git_url` 拉增量。
-**更新仓库还没建**（见下），现在 `git_url` 指向源仓库，玩家会把整个仓库（含 `docs/shots`）拉下去。
+`pyappify.yml` 两个 profile 已指向 `TieLaa/ok-hacking-update`（2026-11-10）；
+**该仓库还没建**，建好并配好 `UPDATE_REPO_TOKEN` 之前，CI 的 Sync 步骤会失败。
 
 ## 本地先打一次包（不用等 CI）
 
@@ -46,17 +47,21 @@ Defender 提示的地方，CI 无桌面会话，验不了这些。
 
 ## 更新仓库（还没建，建之前玩家会下全仓）
 
-`pyappify.yml` 的 `git_url` 应该指向**只含运行时文件**的 `ok-hacking-update`（由 `deploy.txt` 决定内容），
+`pyappify.yml` 的 `git_url` 指向**只含运行时文件**的 `ok-hacking-update`（内容由 `deploy.txt` 决定），
 而不是源仓库。参考项目（ok-ww / ok-ef / ok-nte / ok-duet）都是这个结构。
 
-恢复步骤：
+当前状态（2026-11-10）：
 
-1. 建 public 空仓库 `TieLaa/ok-hacking-update`（launcher 匿名 clone，必须公开）；
-2. 配 secret `UPDATE_REPO_TOKEN`（fine-grained PAT，只授权该仓库）；
-3. `build.yml` 加回 `Sync Repositories` 步骤，指向该仓库，`sync_list: 'deploy.txt'`；
-4. `pyappify.yml` 两个 profile 的 `git_url` 改成该仓库。
+| 步骤 | 状态 |
+|---|---|
+| 1. 建 public 空仓库 `TieLaa/ok-hacking-update`（launcher 匿名 clone，必须公开） | **待做** |
+| 2. 配 secret `UPDATE_REPO_TOKEN`（fine-grained PAT，只授权该仓库） | **待做** |
+| 3. `build.yml` 加回 `Sync Repositories` 步骤（`sync_list: 'deploy.txt'`） | 已完成（钉 `partial-sync-repo@c55d1e59`） |
+| 4. `pyappify.yml` 两个 profile 的 `git_url` 改成该仓库 | 已完成 |
 
-第三方 Action 一律钉 commit SHA（`pyappify-action` 已钉），不要用 `@master`。
+第 1、2 步没做完就推 tag，CI 会在 Sync 步骤失败（测试/打包不受影响，但不会出 Release）。
+
+第三方 Action 一律钉 commit SHA（`pyappify-action` 与 `partial-sync-repo` 均已钉），不要用 `@master`。
 
 ## 发版
 

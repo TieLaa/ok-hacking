@@ -30,7 +30,6 @@ thread_dumps.txt
 site/
 # C extensions
 *.so
-*.bat
 
 # Distribution / packaging
 .Python

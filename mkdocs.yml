@@ -24,7 +24,7 @@ markdown_extensions:
 
 validation:
   nav:
-    # docs/ 下还有大量历史文档（RUN_REPORT、research、roster 等）不在 nav 里，
+    # docs/ 下还有大量历史文档（archive/、shots/、roster 等）不在 nav 里，
     # 而 CI 用 `mkdocs build --strict`，这一项必须 ignore，否则构建直接失败。
     omitted_files: ignore
     not_found: warn
