@@ -110,7 +110,7 @@ def find_ok_window():
     found = []
 
     def cb(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd) and "篮球少女 OK" in win32gui.GetWindowText(hwnd):
+        if win32gui.IsWindowVisible(hwnd) and "ok-hacking" in win32gui.GetWindowText(hwnd):
             found.append(hwnd)
 
     win32gui.EnumWindows(cb, None)
