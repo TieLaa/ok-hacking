@@ -3128,6 +3128,40 @@ class WeekendMapRules(unittest.TestCase):
             self.assertEqual(task.today_places("五", st),
                              task.today_places("六", st), style)
 
+    def _both_venue_switches_off(self, task):
+        task.config["允许进步行街"] = False
+        task.config["允许进游戏厅"] = False
+        return task
+
+    def test_both_venue_switches_off_uses_stamina_gap(self):
+        """2026-11-10 用户口径：两个地点开关都关掉 → **按体力缺口**选公园/餐厅。
+
+        缺口（上限 − 当前）> 60 → 公园（周六 + 周日两次划船正好回 60，还各拿一次属性）；
+        缺口 ≤ 60 → 餐厅打工。训练流精力优先，零花钱不参与这个判断。
+        """
+        for stamina, want in (("100/130", ["餐厅"]),     # 缺口 30 → 体力够，去打工
+                              ("60/130", ["公园"])):      # 缺口 70 → 去公园回精力
+            task = self.styled("训练流",
+                               self._map("星期六") + [box(380, 16, stamina, 210, 53)])
+            st = task.weekend_state()
+            self._both_venue_switches_off(task)
+            self.assertEqual(task.today_places("六", st), want, stamina)
+
+    def test_both_venue_switches_off_without_stamina_goes_park(self):
+        """读不到体力（精力/上限）→ 不赌「够用」，仍去公园（原行为）。"""
+        task = self.styled("训练流", self._map("星期六"))
+        st = task.weekend_state()
+        self._both_venue_switches_off(task)
+        self.assertEqual(task.today_places("六", st), ["公园"])
+
+    def test_venue_switches_only_affect_days_with_venues(self):
+        """周日训练流只有公园：两个开关跟它无关，仍然是公园（不是餐厅）。"""
+        task = self.styled("训练流", self._map("星期日"))
+        st = task.weekend_state()
+        task.config["允许进步行街"] = False
+        task.config["允许进游戏厅"] = False
+        self.assertEqual(task.today_places("日", st), ["公园"])
+
     def test_map_entry_marks_outing_used(self):
         """**进了地图**才记「今天的出行机会用掉了」（记账点在 handle_weekend）。"""
         for day in ("星期五", "星期六", "星期日"):

@@ -19,7 +19,8 @@
 """
 
 from src.tasks.training.constants import (
-    WEEKEND_MAIN_PLACE, WEEKEND_PLAN, WEEKEND_RICH_MONEY, WEEKEND_WORK_MONEY_GATE)
+    WEEKEND_MAIN_PLACE, WEEKEND_PARK_GAP, WEEKEND_PLAN, WEEKEND_RICH_MONEY,
+    WEEKEND_WORK_MONEY_GATE)
 from src.tasks.ui import labels
 
 
@@ -55,7 +56,7 @@ class MapPlace:
         day = day or "六"
         places = list(WEEKEND_PLAN.get((day, self.style))
                       or WEEKEND_PLAN.get(("六", self.style))
-                      or ["公园"])
+                      or ["餐厅"])
         # 2026-10-30 用户口径：扭蛋流（默认带野上泷，周五也有额外周末）先抽扭蛋，
         # **今天没消费**才再去餐厅打工；已经买到东西就不去了。
         # 小游戏流不用这条：游戏厅进过就记 `visited`，没成交时 todo 里自然只剩餐厅。
@@ -64,14 +65,48 @@ class MapPlace:
             if not st.get("gacha_spent"):
                 places.append("餐厅")
         places = [p for p in places if p != "商店"]
+        # 今天本来有没有「开关控制的地点」（步行街 / 游戏厅）。
+        # 只有这种日子才可能被两个开关删空 —— 周日训练流只有公园，不算，
+        # 那两个开关跟它没关系。
+        had_venues = any(p in ("步行街", "游戏厅") for p in places)
         if not self.config.get("允许进游戏厅"):
             places = [p for p in places if p != "游戏厅"]
         if not self.config.get("允许进步行街"):
             places = [p for p in places if p != "步行街"]
-        # 兜底：开关全关/表里没这个组合时总得花掉一天，退化去公园。
+        # 2026-11-10 用户口径：开关把当天地点**全关掉**时按**体力缺口**二选一 ——
+        #   缺口（上限−当前）> WEEKEND_PARK_GAP → 公园
+        #   缺口 ≤ WEEKEND_PARK_GAP → 餐厅打工
+        # 阈值 60 取自「两次划船合计 +60」。周日不一定划船：精力 < 周末野餐
+        # 阈值时是野餐（+70），那两天实际回 100 —— 60 是分界，不是回收量的保证。
+        # 训练流精力优先，零花钱不参与这个判断；读不到体力就不赌，仍去公园。
+        if had_venues and not any(p in ("步行街", "游戏厅") for p in places):
+            if "公园" in places and self.park_gap_small():
+                places = ["餐厅"]
+        # 兜底：表里没这个组合时总得花掉一天，也去餐厅（赚钱比白逛一天好）。
         if not places:
-            places = ["公园"]
+            places = ["餐厅"]
         return places
+
+    # ---------- 体力缺口（双关时公园 vs 餐厅） ----------
+
+    def park_gap_small(self):
+        """体力缺口（上限 − 当前）小到不用去公园回血吗？
+
+        `True`  = 体力够用 → 双关时改去餐厅打工；
+        `False` = 缺得多、或读不到体力 → 去公园（不拿 OCR 抖动赌「够用」）。
+        阈值在 `constants.WEEKEND_PARK_GAP`：60 = 周六 + 周日两次划船的回血量。
+        """
+        bar = self.top_bar()
+        cur, top = bar.get("stamina"), bar.get("stamina_max")
+        if cur is None or top is None:
+            self.log_info("周末：读不到体力（精力/上限）→ 双关时按「公园」兜底")
+            return False
+        gap = top - cur
+        self.log_info(
+            f"周末：体力缺口 {top}−{cur}={gap}"
+            f"{'≤' if gap <= WEEKEND_PARK_GAP else '>'} {WEEKEND_PARK_GAP} → "
+            f"{'餐厅打工' if gap <= WEEKEND_PARK_GAP else '公园回精力'}")
+        return gap <= WEEKEND_PARK_GAP
 
     # ---------- 先去哪个 ----------
 
