@@ -1,0 +1,51 @@
+name: Export release to cnb
+
+# 用途：把 GitHub Release 里的安装包搬到 cnb 的 dist 分支，供国内快速下载。
+# 背景：国内直连 GitHub 附件常被限到几十 KB/s，211 MB 要两小时；cnb 在国内，速度快。
+# 用法：Actions → Export release to cnb → Run workflow，填 tag。
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要导出的 tag（如 v0.1.9）"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            -p "*-China-setup.exe" -p "win32_sha256.txt" -D out
+          ls -l out
+
+      - name: Push to cnb dist branch
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CNB_TOKEN:-}" ]; then
+            echo "::error::CNB_TOKEN 未配置，无法导出到 cnb"
+            exit 1
+          fi
+          git clone --depth=1 "https://cnb:${CNB_TOKEN}@cnb.cool/TieLaa/ok-hacking-update.git" tmp
+          cd tmp
+          git checkout --orphan dist
+          git rm -rf . >/dev/null 2>&1 || true
+          cp -v ../out/* .
+          git config user.name "cnb-export"
+          git config user.email "cnb-export@local"
+          git add -A
+          git commit -m "dist ${TAG}"
+          git push -f origin dist
