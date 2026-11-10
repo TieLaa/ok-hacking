@@ -46,6 +46,10 @@
 
 安装时系统会要管理员权限（`uac: true`）。首次启动会初始化 OCR 模型（OpenVINO），需要等一会儿。
 
+**第一次用先手动开一次游戏**：新装的应用不知道游戏装在哪（`configs/devices.json` 的 `pc_full_path` 是空的），
+点【启动】会提示 `Game path does not exist, Please open game manually!`。
+手动打开游戏后，应用刷新设备时会自己记住路径，之后就能一键拉起。别装在纯中文路径下（ok-script 会拒绝）。
+
 ### 方式二：从源码跑
 
 ```powershell
