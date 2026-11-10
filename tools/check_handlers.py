@@ -416,6 +416,33 @@ def check_date_entry():
 # ---------- 地点模块互不知道（2026-11-01 架构）----------
 # 地点模块（places/）只管自己的判断，**不许引用别的地点**。
 # 「今天该去哪」是**地图模块**的职责；地点模块之间互相知道 = 耦合又回来了。
+def _docstring_ids(tree):
+    """收集 docstring 节点 id。
+
+    docstring 里说明「为什么」是**需要**写的（记录了具体事故），
+    所以这两条门禁只查**代码里真正用到的字符串**，不看文档。
+    """
+    ids = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)):
+            body = getattr(node, "body", None)
+            if body and isinstance(body[0], ast.Expr) \
+                    and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                ids.add(id(body[0].value))
+    return ids
+
+
+def _code_strings(tree):
+    """遍历代码里的字符串常量（跳过 docstring）。"""
+    skip = _docstring_ids(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                and id(node) not in skip:
+            yield node
+
+
 def check_places():
     """地点模块之间不许互相引用。
 
@@ -444,22 +471,7 @@ def check_places():
         path = os.path.join(places_dir, f)
         src = open(path, encoding="utf-8").read()
         tree = ast.parse(src, filename=path)
-        # docstring 里说明「为什么」是**需要**写的（记录了具体事故），
-        # 所以只查**代码里真正用到的字符串**，不看文档。
-        docstrings = set()
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
-                                 ast.AsyncFunctionDef)):
-                body = getattr(node, "body", None)
-                if body and isinstance(body[0], ast.Expr) \
-                        and isinstance(body[0].value, ast.Constant) \
-                        and isinstance(body[0].value.value, str):
-                    docstrings.add(id(body[0].value))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
-                continue
-            if id(node) in docstrings:
-                continue
+        for node in _code_strings(tree):
             text = node.value
             # 地点模块之间不许提别的地点名
             for other_file, other_place in owners.items():
@@ -504,25 +516,9 @@ def check_interactions():
     place_words.update(("划船", "野餐", "散步", "当服务员", "桌游GM"))
     src = open(path, encoding="utf-8").read()
     tree = ast.parse(src, filename=path)
-    # docstring 里说明「为什么」是**需要**写的（记录了 2026-11-01 的具体事故），
-    # 所以只查**代码里真正用到的字符串**，不看文档。
-    docstrings = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
-                             ast.AsyncFunctionDef)):
-            body = getattr(node, "body", None)
-            if body and isinstance(body[0], ast.Expr) \
-                    and isinstance(body[0].value, ast.Constant) \
-                    and isinstance(body[0].value.value, str):
-                docstrings.add(id(body[0].value))
-    for node in ast.walk(tree):
-        # 只看**字符串常量**（注释/docstring 里的地名不算 ——
-        # 文档里说明「为什么」是需要写的）
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if id(node) in docstrings:
-                continue
-            for w in place_words:
-                if w in node.value:
+    for node in _code_strings(tree):
+        for w in place_words:
+            if w in node.value:
                     problems.append(
                         f"src/tasks/training/interactions.py:{node.lineno} "
                         f"字符串里出现了地点名「{w}」——"
