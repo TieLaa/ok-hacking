@@ -11,6 +11,10 @@ jobs:
   build:
     runs-on: windows-latest
 
+    # 默认 GITHUB_TOKEN 是只读的；Release 步骤要上传附件，必须显式给写权限
+    permissions:
+      contents: write
+
     env:
       PYTHONIOENCODING: 'UTF-8'
 
