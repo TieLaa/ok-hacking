@@ -25,7 +25,7 @@
 ```
 
 玩家只下 Release 里的 `*-setup.exe`；装好之后的更新由 launcher 去 `pyappify.yml` 的 `git_url` 拉增量。
-`pyappify.yml` 两个 profile 已指向 `TieLaa/ok-hacking-update`（2026-11-10），该仓库已建。
+`pyappify.yml` 两个 profile 已按 region 分开指向（2026-11-10）：China → cnb.cool，Global → GitHub，见「国内更新源」一节。
 
 ## 本地先打一次包（不用等 CI）
 
@@ -78,6 +78,40 @@ Defender 提示的地方，CI 无桌面会话，验不了这些。
 
 第三方 Action 一律钉 commit SHA（`pyappify-action` 已钉），不要用 `@master`。
 
+## 国内更新源（cnb.cool，2026-11-10 建）
+
+China profile 的 `git_url` 不指向 GitHub，而是 cnb.cool 上的同名镜像仓库：
+
+| 项 | 值 |
+|---|---|
+| 仓库 | https://cnb.cool/TieLaa/ok-hacking-update （公开，匿名可 clone） |
+| 组织 | `TieLaa`（腾讯 CNB，注册需实名认证） |
+| 同步方向 | **GitHub Actions 事件驱动推送**，没有定时抓取 |
+| 凭据 | GitHub 更新仓库的 Actions secret `CNB_TOKEN`（cnb 访问令牌，用户名固定 `cnb`） |
+
+推送逻辑在**更新仓库**的 `sync.yml` 末尾：commit + 打 tag + push 到 GitHub 之后，顺手把
+`main` 和所有 tag 强推到 cnb。发版那一刻两边就一致，不存在「等下一次抓取」的空窗。
+
+```
+源仓库推 tag → sync.yml（手动 Run 或 03:17 定时）→ push GitHub 更新仓库 → push cnb 镜像
+```
+
+cnb 仓库里的 `.cnb.yml` 已清空（2026-11-10）：早先那版是 cnb 定时 pull，已废弃 ——
+不要在那里再放 crontab，两套机制同时写同一个 main 会互相覆盖。
+
+免费额度（`https://docs.cnb.cool/zh/pricing.md`）：仓库存储 100 GiB、构建 160 核时/月。
+只当镜像仓库基本用不到。不要把 `*-setup.exe` 提交进 git —— 安装包走 Release，
+仓库里只放 `deploy.txt` 列的运行时文件。
+
+::: warning 当前卡点
+同步链路要能跑，前提是**源仓库 `TieLaa/ok-hacking` 是 public**。它现在还是 private，
+`sync.yml` 里匿名 `curl` 源仓库的 tag 列表会 404，整个 Run 在第一步就挂 —— 这一步与 cnb 无关，
+是 GitHub 更新仓库自己的老问题。
+
+给 `sync.yml` 里的 `actions/checkout` / `curl` 加 `Authorization` 头（PAT）也能绕过，
+但那又回到「要维护一个会过期的 PAT」；按原计划把源仓库转 public 更省事（玩家也才下得了 Release 附件）。
+:::
+
 ## 发版
 
 ```powershell
@@ -87,6 +121,9 @@ git push origin v0.1.8      # 只推 tag，CI 自动出包并建 Release
 
 推完 tag 还要做**第二步**：到 https://github.com/TieLaa/ok-hacking-update/actions
 点 **Sync from source**，填同一个 tag。漏了这步，已安装用户的更新源会停在旧版本。
+
+同一次 Run 里，GitHub 更新仓库推完会立刻把 main + tags 推给 cnb 镜像，国内用户不用等第二次。
+想确认就去 https://cnb.cool/TieLaa/ok-hacking-update 看有没有同名 tag。
 
 `v0.1.0` / `v0.1.1` 是发布链路修好之前的旧 tag，**不要推它们** —— 那时的 `build.yml` 还指向模板作者的仓库。
 
