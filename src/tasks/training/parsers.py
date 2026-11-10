@@ -5,9 +5,6 @@
 """
 
 import re
-import time
-
-import os
 
 import cv2
 import numpy as np
@@ -17,8 +14,7 @@ from ok.feature.Box import Box
 from src.tasks.ui import Defs
 from src.tasks.ui import labels
 from src.tasks.ui import zoom_reread
-from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,
-                                          STYLE_ALIASES, STYLE_BY_NAME)
+from src.tasks.training.constants import (STYLE_ALIASES, STYLE_BY_NAME)
 
 # 科目按钮外圈「框」的判定门限（比例 = 环带上命中像素 / 环带总像素）。
 # 2026-10-27 第六局实跑 + 用户当场复核：
@@ -1652,21 +1648,11 @@ class TrainingParsersMixin:
         frame = self.frame
         if frame is None or not frame.any():
             return
-        try:
-            folder = os.path.join(PROJECT_ROOT, "logs", "debug")
-            os.makedirs(folder, exist_ok=True)
-            idx = getattr(self, "_subject_dumps", 0)
-            # 文件名只用 ASCII：提权进程写中文名会变成乱码，OpenCV 也读不了
-            path = os.path.join(
-                folder, f"{time.strftime('%m%d-%H%M%S')}_subject{idx:02d}.jpg")
-            cv2.imwrite(path, frame, JPEG_PARAMS)
-            with open(path[:-4] + ".txt", "w", encoding="utf-8") as f:
-                f.write(f"# subject={subject}\n")
-                f.write("\n".join(
-                    f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
+        idx = getattr(self, "_subject_dumps", 0)
+        # 文件名只用 ASCII（evidence 那边统一生成）；科目名写进 txt 头
+        if self.evidence.dump_frame("subject", texts, frame, idx=idx,
+                                    header=f"# subject={subject}"):
             self._subject_dumps = idx + 1
-        except Exception as e:                   # noqa: BLE001
-            self.log_debug(f"科目帧存证失败: {type(e).__name__}: {e}")
 
     def analyze_preview(self, texts, subject=None):
         """读一帧科目预览，返回打分要用的全部字段。

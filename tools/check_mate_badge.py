@@ -24,7 +24,6 @@
 退出码：有「应检出未检出」或「不该检出却检出」时返回 1。
 """
 
-import glob
 import json
 import os
 import sys
@@ -36,6 +35,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from tools._console import utf8_stdout, write_report  # noqa: E402
+from tools._logdirs import evidence_files  # noqa: E402  新老结构都认（按局分目录）
 
 # 三个卡位的中心 x 比例（1549 宽实测：左 397/1549、中 778、右 1159）
 CARD_CX = {"左": 0.256, "中": 0.502, "右": 0.748}
@@ -130,8 +130,8 @@ def main():
     if args:
         files = [a for a in args if os.path.exists(a)]
     else:
-        files = sorted(glob.glob(
-            os.path.join(ROOT, "logs", "events", "*_handle_street.jpg")))
+        files = evidence_files(os.path.join(ROOT, "logs"), "events",
+                               "*_handle_street.jpg")
 
     lines = []
     fails = []

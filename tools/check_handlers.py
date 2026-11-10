@@ -64,6 +64,34 @@ class _FakeExecutor:
         self.method = _FakeMethod(frame.shape[1], frame.shape[0])
 
 
+class _NullEvidence:
+    """回归跑**不落盘**：存证调用全部是空操作（2026-11-10 落盘归口后统一在这里挡）。
+
+    以前只挡了 `dump_unmark`，结果 `dump_frame`（技能/炒股/科目帧）绕过去，
+    每跑一次 `check_handlers` 就往 `logs/debug` 塞几张图。
+    """
+
+    root = ""
+    round_dir = ""
+    round_id = ""
+
+    @staticmethod
+    def _noop(*args, **kwargs):
+        return None
+
+    def begin_run(self, *args, **kwargs):
+        return ""
+
+    def begin_round(self, *args, **kwargs):
+        return ""
+
+    def end_round(self, *args, **kwargs):
+        return None
+
+    def __getattr__(self, _name):
+        return self._noop
+
+
 class DryRunTask(TrainingTask):
     """只判断、不动作的 TrainingTask。
 
@@ -181,8 +209,11 @@ class DryRunTask(TrainingTask):
         pass
 
     def dump_unmark(self, *args, **kwargs):
-        """回归跑不落盘：否则每跑一次 check_handlers 就往 logs/unmark/ 塞一张图。"""
+        """回归跑不落盘：否则每跑一次 check_handlers 就往 logs/ 里塞存储证据。"""
         return None
+
+    #: 存证口整套换成空操作（新结构下 dump_frame / snap_event 也走它）
+    evidence = _NullEvidence()
 
     # ---------- 日志 ----------
     def log_info(self, msg, **kwargs):

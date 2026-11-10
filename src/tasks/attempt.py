@@ -16,31 +16,21 @@ GUI / CLI / 计划任务这三种入口直接调 ``run()``，不经过这些钩�
 - **GUI/CLI**：任务自己在 run() 里重置、校验、建产物目录（失败只告警，不中断）。
 
 本模块只提供「知道这次被谁拉起、产物往哪写」和安全的默认实现，
-具体任务的起始状态判据放在各自的类里。
+具体任务的起始状态判据放在各自的类里。**落盘细节全部在
+``src/tasks/evidence.py``**（2026-11-10 归口），这里只管「本次运行的产物根」。
 """
 
-import os
-import time
-
-import cv2
-
-from src.tasks.training.constants import JPEG_PARAMS, PROJECT_ROOT
-
-# GUI/CLI 运行的产物根目录（MCP 运行时用 runner 注入的目录，不落这里）。
-ATTEMPT_ROOT = os.path.join(PROJECT_ROOT, "logs", "mcp", "attempts")
+from src.tasks.evidence import EvidenceSink
 
 
 class AttemptSupport:
     """MCP / GUI 双路径运行支持，作为任务基类最左边的 mixin 使用。
 
-    只依赖 ``self.log_info`` / ``self.frame``，不假设任务有 OCR 能力；
-    需要界面判据的（大厅、比赛 HUD）在 BaseGirlsTask 里覆盖。
+    只依赖 ``self.log_info`` / ``self.log_debug`` / ``self.frame``，不假设任务有
+    OCR 能力；需要界面判据的（大厅、比赛 HUD）在 BaseGirlsTask 里覆盖。
     """
 
-    #: 单次运行最多往产物目录写几张图，防止长跑把磁盘塞满
-    ATTEMPT_MAX_IMAGES = 20
-
-    # ---------- 运行身份与产物目录 ----------
+    # ---------- 运行身份与产物根 ----------
 
     @property
     def mcp_driven(self):
@@ -52,76 +42,53 @@ class AttemptSupport:
         return bool(getattr(self, "artifact_directory", None))
 
     @property
-    def attempt_dir(self):
-        """本次运行的产物目录（绝对路径）。
+    def evidence(self):
+        """存证口（单例挂在任务实例上，每局换目录）。
 
-        MCP：runner 注入的目录。
-        GUI/CLI：``logs/mcp/attempts/<时间>_<任务名>/``，同一实例每次运行新建一个。
-        存证统一走这里，MCP 的 ``get_run_status`` 才能把文件当成本次运行的证据。
+        MCP：产物根 = runner 注入的 ``artifact_directory``（框架只认这里的文件
+        作为本次运行的证据）；GUI/CLI：产物根 = ``logs/``，局目录直接挂在下面。
         """
-        injected = getattr(self, "artifact_directory", None)
-        if injected:
-            return str(injected)
-        cached = getattr(self, "_attempt_dir", None)
-        if cached:
-            return cached
-        name = getattr(self, "name", None) or type(self).__name__
-        safe = "".join(c if (c.isalnum() or c in "-_") else "_" for c in str(name))
-        folder = os.path.join(ATTEMPT_ROOT, f"{time.strftime('%m%d-%H%M%S')}_{safe}")
-        os.makedirs(folder, exist_ok=True)
-        self._attempt_dir = folder
-        return folder
+        sink = getattr(self, "_evidence", None)
+        if sink is None:
+            root = str(self.artifact_directory) if self.mcp_driven else None
+            sink = EvidenceSink().set_logger(self.log_debug)
+            sink.begin_run(root)
+            self._evidence = sink
+        return sink
 
     def begin_attempt(self):
-        """在 run() 最开头调用：定下本次产物目录并打一行日志，返回目录路径。
+        """在 run() 最开头（以及 MCP 的 reset 钩子里）调用：定下本次运行的产物根。
 
-        TriggerTask 每拍都会调用；同一目录只初始化一次，避免把图片计数清零。
+        真正「开一局」是 ``begin_round()``（每局一次）；这里只是运行级初始化，
+        重复调用无副作用，TriggerTask 每拍都会走到。
         """
-        directory = self.attempt_dir
-        if (getattr(self, "_attempt_started_at", None) is not None
-                and getattr(self, "_attempt_dir", None) == directory):
-            return directory
-        self._attempt_images = 0
-        self._attempt_started_at = time.time()
-        self.log_info(
-            f"本次运行产物：{directory}"
-            f"（入口：{'MCP' if self.mcp_driven else 'GUI/CLI'}）")
-        return directory
+        sink = self.evidence
+        sink.begin_run(str(self.artifact_directory) if self.mcp_driven else None)
+        if not getattr(self, "_attempt_logged", False):
+            self._attempt_logged = True
+            self.log_info(f"本次运行产物根：{sink.root}"
+                          f"（入口：{'MCP' if self.mcp_driven else 'GUI/CLI'}）")
+        return sink.root
 
-    # ---------- 存证 ----------
+    # ---------- 局外存证 ----------
 
     def attempt_dump(self, tag, texts=None, frame=None):
-        """把一帧 + OCR 文本写进本次运行目录，返回目录路径（失败返回 None）。
+        """把一帧 + OCR 文本存进当前局目录的 ``debug/``（局还没开始时落 ``pre/``）。
 
-        与 ``dump_debug`` 的区别：dump_debug 固定写 ``logs/debug/<时间>_<tag>/``，
-        那是给人翻的；MCP 运行要求产物落在 ``artifact_directory`` 里。
-        图仍用 JPEG q95 + 4:4:4（见 constants.JPEG_PARAMS）。
+        与 ``dump_debug`` 的区别：这里不带 actions/threads（reset 阶段没有那些
+        上下文）；两者共用同一套目录规则，见 ``evidence.EvidenceSink``。
         """
-        try:
-            if int(getattr(self, "_attempt_images", 0) or 0) >= self.ATTEMPT_MAX_IMAGES:
-                self.log_debug(f"产物图已达上限 {self.ATTEMPT_MAX_IMAGES}，跳过 {tag}")
-                return None
-            folder = os.path.join(self.attempt_dir, "frames")
-            os.makedirs(folder, exist_ok=True)
-            stamp = time.strftime("%H%M%S")
-            base = os.path.join(folder, f"{stamp}_{tag}")
-            image = frame if frame is not None else getattr(self, "frame", None)
-            if image is not None and getattr(image, "any", lambda: False)():
-                cv2.imwrite(base + ".jpg", image, JPEG_PARAMS)
-            if texts is None:
-                try:
-                    texts = self._ocr_region()
-                except Exception:                # noqa: BLE001
-                    texts = []
-            with open(base + ".txt", "w", encoding="utf-8") as f:
-                f.write("\n".join(
-                    f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts or []))
-            self._attempt_images = int(getattr(self, "_attempt_images", 0) or 0) + 1
-            self.log_info(f"存证 {os.path.relpath(base, PROJECT_ROOT)}")
-            return folder
-        except Exception as e:                   # noqa: BLE001
-            self.log_debug(f"attempt_dump 失败: {type(e).__name__}: {e}")
-            return None
+        if texts is None:
+            try:
+                texts = self._ocr_region()
+            except Exception:                # noqa: BLE001
+                texts = []
+        path = self.evidence.dump_debug(texts, tag, frame if frame is not None
+                                       else getattr(self, "frame", None),
+                                       summary="attempt")
+        if path:
+            self.log_info(f"存证 {path}")
+        return path
 
     # ---------- MCP 契约默认实现 ----------
 
@@ -139,13 +106,8 @@ class AttemptSupport:
         return True
 
     def on_destroy(self):
-        """清掉本次运行的状态；MCP 和 GUI 都会在任务结束时调用。
-
-        用 delattr 而不是置 None：置 None 会让下一次 `getattr(..., 0)` 拿到 None，
-        attempt_dump 里的比较直接抛 TypeError（异常被吞掉，表现是「存证没生成」，
-        2026-10-30 实跑踩过）。
-        """
-        for attr in ("_attempt_images", "_attempt_started_at"):
+        """清掉本次运行的状态；MCP 和 GUI 都会在任务结束时调用。"""
+        for attr in ("_attempt_logged",):
             if hasattr(self, attr):
                 try:
                     delattr(self, attr)

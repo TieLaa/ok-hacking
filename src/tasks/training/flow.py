@@ -4,24 +4,16 @@
 禁止在这里 import TrainingTask（循环依赖），需要类时用 handler.__name__ 判断。
 """
 
-import json
-import os
-import threading
 import time
 
-import cv2
-
-from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,
-                                          THURSDAY_REST_THRESHOLD_BY_STYLE)
+from src.tasks.training.constants import THURSDAY_REST_THRESHOLD_BY_STYLE
 from src.tasks.training.queue import CaptainQueue
 from src.tasks.ui import labels
 from src.util.emergency_stop import STOP
 from src.util.log_fallback import ensure_run_log
 
-# 点击流水：一行一个 JSON 事件（时间戳 / 步数 / 当时界面 / 坐标）。
-# 放在 logs/ 下，已被 .gitignore 忽略；任务结束后用它复盘「第几秒点了哪里」。
-CLICK_LOG = os.path.join(PROJECT_ROOT, "logs", "clicks.jsonl")
-EVENT_DIR = os.path.join(PROJECT_ROOT, "logs", "events")
+# 点击流水 / 事件截图的落盘细节**全部在 src/tasks/evidence.py**（2026-11-10 归口：
+# 原来这里和各 handler 各自拼路径，一共 7 个写入点）。本文件只决定「存什么」。
 
 # 这些 handler 命中时存一帧（报告页要「事件 ↔ 截图」一一对应）。
 # 训练科目/比赛内这种每几秒一次的就不存，避免每轮几十张图。
@@ -157,6 +149,7 @@ class TrainingFlowMixin:
         runs = 0
         while True:
             runs += 1
+            self._round_no = runs        # 局ID 里的「第N局」（只在队列模式出现）
             if not self.run_one_round():
                 return False
             if not self.advance_queue_after_round():
@@ -186,7 +179,29 @@ class TrainingFlowMixin:
 
         返回 True = 这一局正常跑完（可以接着开下一局），False = 出事了/被停止。
         多角色时上层（`run`）负责换队长再进来一次。
+
+        存证按局分目录（2026-11-10）：本方法只负责「开局写 meta、收工写 meta」，
+        目录布局和命名全在 `evidence.EvidenceSink.begin_round/end_round`。
         """
+        try:
+            return self._run_one_round()
+        finally:
+            self.evidence.end_round(getattr(self, "_abort_reason", "") or "",
+                                    self._steps, style=getattr(self, "_style", "") or "")
+
+    def start_round_evidence(self):
+        """定下本局的存证目录（回大厅之后调用：那段时间不属于这一局）。"""
+        captain = self.configured_captain()
+        self.evidence.begin_round(
+            captain=captain,
+            handover=not captain,          # 没指定队长 = 快速接手别人开好的局
+            round_no=getattr(self, "_round_no", 0),
+            style=getattr(self, "_style", "") or "",
+            entry="MCP" if self.mcp_driven else "GUI",
+            keep_days=self.config.get("日志保留天数"),
+        )
+
+    def _run_one_round(self):
         self._steps = 0
         # 日志文件自检（2026-11-10）：GUI 跑任务时 ok 的 FileHandler 会失踪，
         # 整场运行没有日志落盘。这里每次开局确认一次，没有就由我们补一个
@@ -194,7 +209,7 @@ class TrainingFlowMixin:
         ensure_run_log()
         # 暂停中不要开新局（队列模式会在两局之间回来）：等着，继续后接着开
         self.wait_while_paused()
-        # MCP / GUI 双入口：定产物目录。MCP 的 runner 已经 reset+verify 过，
+        # MCP / GUI 双入口：定本次运行的产物根。MCP 的 runner 已经 reset+verify 过，
         # GUI/CLI 走这里自己恢复基线（失败只告警，不打断用户手动起的任务）。
         self.begin_attempt()
         if not self.mcp_driven:
@@ -203,6 +218,9 @@ class TrainingFlowMixin:
                                  "（MCP 运行遇到同样情况会直接判失败）")
             else:
                 self.log_info("GUI 运行：已回到大厅，开始跑流程")
+        # 回大厅之后再开局目录：局ID 的时间戳 = 真正开始跑这一局的时刻
+        self.start_round_evidence()
+        self.log_info(f"本局存证：{self.evidence.round_dir}")
         STOP.ensure_started()
         self.log_info(f"紧急停止热键：{STOP.label or '（注册失败，F8/F12 轮询兜底已启用）'}")
         # 代码版本戳：确认跑的是哪份 parsers.py（圈识别调效果时排查过「改了不生效」）
@@ -348,7 +366,7 @@ class TrainingFlowMixin:
                 self.dump_debug(texts, f"nochange{self._no_change}", frame)
                 self.log_warning(
                     f"连续 {self._no_change} 次点击界面没变化（上次动作：{self._last_state}）"
-                    f"→ 已存证 logs/debug/，点击屏幕中央重试")
+                    f"→ 已存证（本局 debug/），点击屏幕中央重试")
                 if self._stuck_rounds >= 3:
                     self.log_error("已经 3 轮「点不动」→ 停止任务，避免一直卡在同一界面")
                     return False
@@ -622,35 +640,15 @@ class TrainingFlowMixin:
         不传才退回 self.frame —— 那时 handler 已经点过，可能已经是下一页，
         这就是 2026-10-30 用户反馈「截图没截到正确时间点」的原因。
 
-        限流：同一秒只存一张；只存 SNAP_HANDLERS 里的 handler。
+        限流与落点都在 `evidence.EvidenceSink.snap_event`；这里只决定**哪些**
+        handler 值得存一帧（业务口径，见 SNAP_HANDLERS）。
         """
         if handler_name not in SNAP_HANDLERS:
             return
-        now = time.time()
-        if now - getattr(self, "_last_snap_at", 0.0) < 1.0:
-            return
-        self._last_snap_at = now
-        frame = self.frame if frame is None else frame
-        if frame is None or not frame.any():
-            return
-        try:
-            os.makedirs(EVENT_DIR, exist_ok=True)
-            stamp = time.strftime("%m%d-%H%M%S", time.localtime(now))
-            base = os.path.join(EVENT_DIR, f"{stamp}_{handler_name}")
-            cv2.imwrite(base + ".jpg", frame, JPEG_PARAMS)
-            names = [t.name.strip() for t in texts if t.name.strip()][:30]
-            # 本拍的点击（handler 在这一拍里实际点了哪里）：报告「内容」列直接用它，
-            # 不用再去日志里猜。
-            clicks = list(getattr(self, "_tick_clicks", []))
-            with open(base + ".json", "w", encoding="utf-8") as f:
-                json.dump({"at": time.strftime("%Y-%m-%d %H:%M:%S",
-                                               time.localtime(now)),
-                           "handler": handler_name,
-                           "texts": names,
-                           "clicks": clicks},
-                          f, ensure_ascii=False)
-        except Exception as e:                   # noqa: BLE001
-            self.log_debug(f"事件截图失败: {type(e).__name__}: {e}")
+        self.evidence.snap_event(
+            handler_name, texts,
+            self.frame if frame is None else frame,
+            clicks=getattr(self, "_tick_clicks", None))
 
     @staticmethod
     def _signature(texts):
@@ -820,14 +818,14 @@ class TrainingFlowMixin:
         self._sig_changed_at = time.time()
         self.dump_debug(texts, tag, frame)
         self.log_warning(
-            f"{why} → 立刻接管：已存证 logs/debug/，清掉当天拦路标记后点屏幕中央继续"
+            f"{why} → 立刻接管：已存证（本局 debug/），清掉当天拦路标记后点屏幕中央继续"
             f"（第 {self._day_fixes}/3 次接管）", notify=True)
         info = getattr(self, "info", None)
         if isinstance(info, dict):
             who = f"第{key[0]}周 星期{key[1]}" if key else "无日期页"
             info["stuck"] = f"{who} · 已接管 {self._day_fixes} 次（{tag}）"
         if self._day_fixes >= 3:
-            self._abort_reason = f"{why}；同一天接管 3 次仍然推不动（已存证 logs/debug/）"
+            self._abort_reason = f"{why}；同一天接管 3 次仍然推不动（已存证（本局 debug/））"
             self.log_error(self._abort_reason, notify=True)
             return True                            # 下一拍 run() 看到 _abort_reason 就退出
         self._clear_day_home_brakes()
@@ -897,49 +895,28 @@ class TrainingFlowMixin:
         state["visited"] = set()
         self.log_info("干预纠错：已清掉当天拦路标记（商店试次/出行/笔记/科目/已去地点）")
 
-    @staticmethod
-    def _journal_click(record):
-        try:
-            os.makedirs(os.path.dirname(CLICK_LOG), exist_ok=True)
-            with open(CLICK_LOG, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
-        except Exception:                            # noqa: BLE001
-            pass
+    def _journal_click(self, record):
+        """点击流水落盘（单点归口：`evidence.EvidenceSink.click`，每行带 round）。"""
+        self.evidence.click(record)
 
     def dump_debug(self, texts, tag, frame=None):
         """点不动的时候存一份「调试包」：截图 + OCR + 最近动作 + 线程。
 
         用户口径（2026-10-26）：连续点 3 次界面没变化就要开始 debug。
-        产物在 logs/debug/<时间>_<tag>/，logs 已被 .gitignore 忽略。
+        产物在当前局目录的 `debug/<时间>_<tag>/`（落点见 `evidence.EvidenceSink`）。
         frame 同样要传**本拍识别那一帧**，否则存的是点击后的画面。
         """
-        try:
-            root = os.path.join(PROJECT_ROOT, "logs", "debug")
-            folder = os.path.join(root, f"{time.strftime('%m%d-%H%M%S')}_{tag}")
-            os.makedirs(folder, exist_ok=True)
-
-            frame = self.frame if frame is None else frame
-            if frame is not None:
-                # 存 JPEG 不存 PNG：同一帧 PNG 约 2.4 MB、JPEG 约 0.36 MB，读图更快。
-                # JPEG_PARAMS 是 q95 + 4:4:4（见文件顶部），保证颜色可复核。
-                # 注意：运行时取色读的是内存里的 self.frame，与这里存盘格式无关。
-                cv2.imwrite(os.path.join(folder, "frame.jpg"), frame, JPEG_PARAMS)
-            with open(os.path.join(folder, "ocr.txt"), "w", encoding="utf-8") as f:
-                f.write("\n".join(
-                    f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
-            with open(os.path.join(folder, "actions.txt"), "w", encoding="utf-8") as f:
-                f.write(f"step={self._steps} last={self._last_state} "
-                        f"no_change={self._no_change} rounds={self._stuck_rounds} "
-                        f"day={getattr(self, '_day_key', None)}"
-                        f" clicks={getattr(self, '_day_clicks', 0)}"
-                        f" fixes={getattr(self, '_day_fixes', 0)}\n")
-                f.write("\n".join(self._recent_actions))
-            with open(os.path.join(folder, "threads.txt"), "w", encoding="utf-8") as f:
-                for th in threading.enumerate():
-                    f.write(f"{th.name}\t{th.is_alive()}\n")
-            self.log_info(f"调试包已保存：logs/debug/{os.path.basename(folder)}")
-        except Exception as e:                       # noqa: BLE001
-            self.log_debug(f"调试包保存失败: {type(e).__name__}: {e}")
+        summary = (f"step={self._steps} last={self._last_state} "
+                   f"no_change={self._no_change} rounds={self._stuck_rounds} "
+                   f"day={getattr(self, '_day_key', None)}"
+                   f" clicks={getattr(self, '_day_clicks', 0)}"
+                   f" fixes={getattr(self, '_day_fixes', 0)}")
+        folder = self.evidence.dump_debug(
+            texts, tag,
+            self.frame if frame is None else frame,
+            summary=summary, actions=list(self._recent_actions))
+        if folder:
+            self.log_info(f"调试包已保存：{folder}")
 
     def _reset_handler_leave_states(self, hit_name):
         """命中 `hit_name` 后，把**其它** handler 声明的瞬时状态清回默认值。
@@ -989,7 +966,7 @@ class TrainingFlowMixin:
                         self.dump_debug(texts, f"loop{self._loop_count}", frame)
                         self._abort_reason = (
                             f"{handler.__name__} 连续 {self._loop_count} 拍命中同一页"
-                            "却推不动（已存证 logs/debug/）")
+                            "却推不动（已存证（本局 debug/））")
                         self.log_error(self._abort_reason, notify=True)
                     return True
             except Exception as e:

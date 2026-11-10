@@ -12,6 +12,7 @@
 跑法：
     .venv\\Scripts\\python.exe tools\\check_gold_border.py
 """
+import glob
 import os
 import re
 import sys
@@ -21,8 +22,10 @@ import numpy as np
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    "logs", "debug")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOGS = os.path.join(ROOT, "logs")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _logdirs import evidence_dirs  # noqa: E402  新老存证结构都认（按局分目录）
 SUBJ = ("投射", "弹跳", "防守", "体能", "运控", "意识")
 
 # 与 src/tasks/training/parsers.py 保持一致（这里不 import，避免拉起整个 ok 包）
@@ -104,17 +107,18 @@ def is_border(ratio, over_count, n_subjects):
 
 
 def main():
-    if not os.path.isdir(ROOT):
-        print(f"跳过：找不到存证目录 {ROOT}")
+    files = sorted(p for base in evidence_dirs(LOGS, ("debug",))
+                   for p in glob.glob(os.path.join(base, "*subject*.txt")))
+    if not files:
+        print(f"跳过：没找到科目页存证帧（扫过 {LOGS} 下的 debug/）")
         return 0
-    files = sorted(f for f in os.listdir(ROOT)
-                   if f.endswith(".txt") and "subject" in f)
     fails = []
     checked = 0
     gold_hits = 0
     vac_false_pos = 0
     max_baseline = 0.0
-    for f in files:
+    for txt in files:
+        f = os.path.basename(txt)
         txt = os.path.join(ROOT, f)
         try:
             img, rows, h, w = parse(txt)

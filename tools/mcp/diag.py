@@ -8,7 +8,8 @@ import win32gui
 from ok import BaseTask
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OUT = os.path.join(ROOT, "logs", "debug", "diag_shot.jpg")
+# 2026-11-10 起存证按局分目录（logs/<局ID>/debug/），开发脚本的临时帧统一放 logs/dev/
+OUT = os.path.join(ROOT, "logs", "dev", "diag_shot.jpg")
 
 
 class Task(BaseTask):
@@ -51,6 +52,7 @@ class Task(BaseTask):
             diff = float(np.abs(before.astype(int) - after.astype(int)).mean())
         report["drag_diff"] = diff
         if after is not None and after.any():
+            os.makedirs(os.path.dirname(OUT), exist_ok=True)
             cv2.imwrite(OUT, after)
             report["shot"] = OUT
         self.log_info("诊断：" + str(report))

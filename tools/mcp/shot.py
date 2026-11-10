@@ -11,7 +11,8 @@ import cv2
 from ok import BaseTask
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OUT = os.path.join(ROOT, "logs", "debug", "manual_shot2.jpg")
+# 2026-11-10 起存证按局分目录（logs/<局ID>/debug/），开发脚本的临时帧统一放 logs/dev/
+OUT = os.path.join(ROOT, "logs", "dev", "manual_shot2.jpg")
 
 
 class Task(BaseTask):

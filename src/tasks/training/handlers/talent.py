@@ -34,13 +34,9 @@
     5. docs/shots/ 存回归样例，跑 `python tools/check_handlers.py --cache`。
 """
 
-import os
 import time
 
-import cv2
-
 from src.tasks.ui import labels
-from src.tasks.training.constants import JPEG_PARAMS, PROJECT_ROOT
 
 # 做饭页同一页重复存证的间隔（秒）：点卡 → 点确定要 2~3 拍，别把一页刷成十几张图。
 UNMARK_INTERVAL = 10.0
@@ -155,19 +151,9 @@ class TalentHandlers:
             frame = self.frame
         if frame is None or not frame.any():
             return
-        try:
-            folder = os.path.join(PROJECT_ROOT, "logs", "debug")
-            os.makedirs(folder, exist_ok=True)
-            idx = getattr(self, "_stock_dumps", 0)
-            path = os.path.join(
-                folder, f"{time.strftime('%m%d-%H%M%S')}_stock{idx:02d}.jpg")
-            cv2.imwrite(path, frame, JPEG_PARAMS)
-            with open(path[:-4] + ".txt", "w", encoding="utf-8") as f:
-                f.write("\n".join(
-                    f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts))
+        idx = getattr(self, "_stock_dumps", 0)
+        if self.evidence.dump_frame("stock", texts, frame, idx=idx):
             self._stock_dumps = idx + 1
-        except Exception as e:                   # noqa: BLE001
-            self.log_debug(f"炒股帧存证失败: {type(e).__name__}: {e}")
 
     def stock_card_marks(self, texts, label_box):
         """卡片头顶的台词气泡（「相信奇迹!」「一定能赚!」「我梭哈了」）= 有队友推荐。

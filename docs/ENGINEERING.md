@@ -99,12 +99,40 @@
 
 规则见 `AGENTS.md`（q95 + 4:4:4、先读 `ocr.txt`、单会话最多 5 张图）。
 
-- 运行时取色读内存帧，不受存盘格式影响。
-- 事后复核颜色必须用 q95+4:4:4 的 jpg，不要用历史 PNG 之外的压缩图。
-- **保留策略**在 `tools/prune_logs.py`（默认 dry-run）：`logs/unknown` 只删 jpg、txt 永久保留；
-  `events` / `debug` 按天数；`logs/mcp` 留最近 10 次 run；总量上限 1.5 GB。
-  永不碰 `docs/shots/`（回归语料）。有 run 在跑时 `--apply` 会拒绝执行。
-  （2026-11-01：4.9 GB → 1.5 GB，`unknown` 的 5847 个 txt 一个没动。）
+### 6.1 落盘只有一处：`src/tasks/evidence.py`（2026-11-10）
+
+**存证按「局」分目录，落盘策略单点归口。** 调用方只说要存什么，不碰路径：
+
+```
+MCP 运行：logs/mcp/<run_id>/<局ID>/{events,unknown,unmark,debug}/ + meta.json
+GUI 运行：logs/<局ID>/{events,unknown,unmark,debug}/ + meta.json
+局还没开始（MCP reset 阶段就出错）：logs/pre/ 或 <run_id>/pre/
+
+局ID = <mmdd-HHMMSS>[_接手][_第N局][_队长]
+```
+
+- **局** = 脚本视角的一局（开始跑流程 → 收工回大厅）。暂停/继续是原地挂起，
+  **不换目录**；停止再开始才换。
+- `接手` 标记「没指定队长、接手别人开好的局」——那种局的开局时刻脚本不知道，
+  时间戳只能表示「开始管它的时刻」。
+- 时间戳在 `recover_to_lobby()` **之后**取（回大厅可能几十秒，不算这一局）。
+- `meta.json` 记入口 / 队长 / 流派 / 起止时间 / 步数 / `run.log` 起止字节偏移
+  （进程日志是连续写的，要按局切就用这两个偏移）。
+- 四个子目录的文件名规则与老结构**逐字节一致**，老工具只需改成递归扫描
+  （`tools/_logdirs.py` 提供了 `evidence_dirs` / `evidence_files`）。
+- 图片走 `evidence.write_jpg`（`imencode` + 字节写），**不要**用 `cv2.imwrite`：
+  目录名带中文（队长名）时它在 Windows 上静默失败。
+
+### 6.2 保留策略
+
+- 运行时：配置项 `日志保留天数`（默认 3，`0` = 不清理），每局开头清一次
+  超期的**整局目录**。安全阀：名字要像局ID、目录里必须有
+  `events|unknown|unmark|debug` 之一 —— 所以 `clicks.jsonl`、`reports/`、
+  `connections/`、`docs/shots/` 不可能被删。
+- 手工：`tools/prune_logs.py`（默认 dry-run）清老平铺结构，`--no-rounds` 可跳过
+  新结构；`logs/mcp` 留最近 10 次 run；总量上限 1.5 GB；有 run 在跑时拒绝 `--apply`。
+- 永不删：`docs/shots/`（回归语料）、`logs/clicks.jsonl`、`logs/reports/`、
+  `logs/mcp/connections/`、局目录的 `meta.json`。
 
 ## 7. 重构规则
 

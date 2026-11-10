@@ -17,12 +17,12 @@
 """
 
 import argparse
-import glob
 import html
 import io
 import json
 import os
 import re
+import sys
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,9 +30,12 @@ from urllib.parse import parse_qs, quote, urlparse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG = os.path.join(ROOT, "logs", "ok-script.log")
-EVENTS = os.path.join(ROOT, "logs", "events")
-REPORTS = os.path.join(ROOT, "logs", "reports")
+LOGS = os.path.join(ROOT, "logs")
+REPORTS = os.path.join(LOGS, "reports")
 REPLIES = os.path.join(REPORTS, "replies.jsonl")
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _logdirs import evidence_files  # noqa: E402  新老存证结构都认（按局分目录）
 
 TYPE_LABEL = {
     "handle_event_choice": "事件选项",
@@ -108,9 +111,9 @@ def log_lines(window):
 
 
 def load_events(since):
-    """读 logs/events 下这一轮的快照，按时间排序。"""
+    """读这一轮的快照（跨局合并，按时间排序；新老目录结构都认）。"""
     rows = []
-    for path in sorted(glob.glob(os.path.join(EVENTS, "*.json"))):
+    for path in evidence_files(LOGS, "events", "*.json"):
         try:
             with io.open(path, encoding="utf-8") as f:
                 meta = json.load(f)

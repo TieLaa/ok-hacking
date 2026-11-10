@@ -7,36 +7,49 @@
 一个「没见过的界面」存证里，**真正被读的是 txt**（AGENTS.md 的硬规则：先读文本，
 看不出来才看图），所以删 jpg 保 txt 能拿回 2 GB 而几乎不损失信息。
 
+2026-11-10 起存证按局分目录（`logs/<局ID>/`、`logs/mcp/<run_id>/<局ID>/`），
+运行时自己会按「日志保留天数」删老旧**整局目录**（见 `src/tasks/evidence.py`）。
+本脚本保留两个用途：
+    ① 清**老平铺结构**（logs/events、logs/unknown、logs/unmark、logs/debug）；
+    ② 手动清新结构的整局目录（`--rounds`，默认也清）。
+
 规则（按目录，理由见各条注释）：
     1. unknown：只删 jpg，txt 永久保留；超过 --days 天才删。
     2. events：报告页（tools/report_web.py）用的截图，保留最近 --days 天。
     3. debug：handler 判据的调试帧，保留最近 --days 天。
-    4. mcp/<run_id>：最近 --keep-runs 次运行的 run.log / status.json 全留（那是运行
+    4. 局目录（新结构）：超过 --days 天的**整个目录**删掉。
+    5. mcp/<run_id>：最近 --keep-runs 次运行的 run.log / status.json 全留（那是运行
        记录的证据链），frames/ 按天数删。
-    5. 总量兜底：清完仍超过 --max-gb，就从最老的 jpg 开始删到低于上限。
-    6. **永不删**：docs/shots（判据回归语料）、logs/clicks.jsonl、logs/reports、
-       logs/mcp/connections。
+    6. 总量兜底：清完仍超过 --max-gb，就从最老的 jpg 开始删到低于上限。
+    7. **永不删**：docs/shots（判据回归语料）、logs/clicks.jsonl、logs/reports、
+       logs/mcp/connections、局目录的 meta.json。
 
 安全阀：
     - 默认 dry-run，只打印会删什么；`--apply` 才真删。
     - 检测到有 run 正在跑（任意 logs/mcp/*/status.json 的 state == running）时，
       `--apply` 直接拒绝 —— 否则会删掉正在写的帧。
-
-用法：
-    .venv\\Scripts\\python.exe tools\\prune_logs.py                 # 看能回收多少
-    .venv\\Scripts\\python.exe tools\\prune_logs.py --apply         # 真删
-    .venv\\Scripts\\python.exe tools\\prune_logs.py --apply --days 7 --max-gb 1.5
 """
 
 import argparse
 import glob
 import json
 import os
+import re
+import shutil
 import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(ROOT, "logs")
+#: 局目录名：`1110-091635[_接手][_第N局][_队长]`
+ROUND_RE = re.compile(r"^\d{4}-\d{6}_")
+#: 局目录里必然存在的子目录（安全阀：没有就绝不整目录删）
+ROUND_SUBS = ("events", "unknown", "unmark", "debug")
+
+# 用法：
+#     .venv\\Scripts\\python.exe tools\\prune_logs.py            # 看能回收多少
+#     .venv\\Scripts\\python.exe tools\\prune_logs.py --apply    # 真删
+#     .venv\\Scripts\\python.exe tools\\prune_logs.py --apply --days 3 --max-gb 1.5
 
 # (目录, 保留天数, 是否保留同名 txt)
 BY_AGE = [
@@ -98,6 +111,59 @@ def collect(days):
     return todo
 
 
+def round_parents():
+    """局目录可能挂在两处：`logs/`（GUI）和 `logs/mcp/<run_id>/`（MCP）。"""
+    parents = [LOG_DIR]
+    mcp = os.path.join(LOG_DIR, "mcp")
+    if os.path.isdir(mcp):
+        for name in os.listdir(mcp):
+            sub = os.path.join(mcp, name)
+            if os.path.isdir(sub) and name not in ("connections", "attempts"):
+                parents.append(sub)
+    return parents
+
+
+def dir_size(path):
+    total = 0
+    for dp, _, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(dp, f))
+            except OSError:
+                pass
+    return total
+
+
+def collect_rounds(days):
+    """新结构：整局目录按天删（`logs/<局ID>/`、`logs/mcp/<run_id>/<局ID>/`）。
+
+    安全阀和运行时清理一致：名字要像局ID、里面必须有 events/unknown/unmark/debug
+    之一。`clicks.jsonl`、`reports/`、`connections/` 不可能被选中。
+    """
+    cutoff = time.time() - days * 86400
+    todo = []
+    for base in round_parents():
+        try:
+            names = os.listdir(base)
+        except OSError:
+            continue
+        for name in names:
+            if not ROUND_RE.match(name):
+                continue
+            path = os.path.join(base, name)
+            if not os.path.isdir(path):
+                continue
+            if not any(os.path.isdir(os.path.join(path, s)) for s in ROUND_SUBS):
+                continue
+            try:
+                if os.path.getmtime(path) >= cutoff:
+                    continue
+            except OSError:
+                continue
+            todo.append((path, dir_size(path), f"局目录: 超过 {days} 天"))
+    return todo
+
+
 def collect_mcp_runs(keep_runs):
     """mcp/<run_id>/ 里只留最近 keep_runs 次的 run.log + status.json。"""
     runs = sorted(glob.glob(os.path.join(LOG_DIR, "mcp", "*", "status.json")),
@@ -129,6 +195,7 @@ def enforce_cap(todo, max_bytes):
     if have <= max_bytes:
         return []
     picked, extra = set(p for p, _, _ in todo), []
+    picked_dirs = tuple(p for p in picked if os.path.isdir(p))
     jpgs = []
     for dp, _, files in os.walk(LOG_DIR):
         for f in files:
@@ -137,6 +204,8 @@ def enforce_cap(todo, max_bytes):
             p = os.path.join(dp, f)
             if p in picked:
                 continue
+            if picked_dirs and p.startswith(tuple(d + os.sep for d in picked_dirs)):
+                continue          # 整个局目录已经要删了，别重复算体积
             try:
                 st = os.stat(p)
             except OSError:
@@ -158,6 +227,8 @@ def main():
     ap.add_argument("--days", type=int, default=None, help="统一覆盖各目录的保留天数")
     ap.add_argument("--keep-runs", type=int, default=10, help="logs/mcp 保留最近几次 run")
     ap.add_argument("--max-gb", type=float, default=1.5, help="logs/ 总量上限")
+    ap.add_argument("--no-rounds", action="store_true",
+                    help="不清理新结构的整局目录（只清老的平铺目录）")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -166,21 +237,25 @@ def main():
         return 0
 
     days = {name: (args.days if args.days is not None else d) for name, d, _ in BY_AGE}
+    keep_days = args.days if args.days is not None else 3
     todo = collect(days)
+    rounds = [] if args.no_rounds else collect_rounds(keep_days)
+    todo += rounds
     todo += collect_mcp_runs(args.keep_runs)
     todo += enforce_cap(todo, int(args.max_gb * 1024 ** 3))
 
     before = total_size()
     freed = sum(s for _, s, _ in todo)
-    print(f"logs/ 当前 {human(before)}（{sum(len(f) for _, _, f in os.walk(LOG_DIR))} 个文件）")
-    print(f"可回收 {human(freed)}，{len(todo)} 个文件")
+    nfiles = sum(len(f) for _, _, f in os.walk(LOG_DIR))
+    print(f"logs/ 当前 {human(before)}（{nfiles} 个文件）")
+    print(f"可回收 {human(freed)}，{len(todo)} 项")
     by_reason = {}
     for _, size, reason in todo:
         key = reason.split(":")[0]
         n, s = by_reason.get(key, (0, 0))
         by_reason[key] = (n + 1, s + size)
     for key, (n, s) in sorted(by_reason.items()):
-        print(f"  {key:<10} {n:>6} 个  {human(s):>10}")
+        print(f"  {key:<10} {n:>6} 项  {human(s):>10}")
     print(f"预计清理后：{human(max(before - freed, 0))}")
 
     if not args.apply:
@@ -195,11 +270,14 @@ def main():
     removed = 0
     for path, _, _ in todo:
         try:
-            os.remove(path)
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
             removed += 1
         except OSError as e:
             print(f"  删不掉 {path}: {e}")
-    print(f"\n已删除 {removed} 个文件，logs/ 现在 {human(total_size())}")
+    print(f"\n已删除 {removed} 项，logs/ 现在 {human(total_size())}")
     return 0
 
 

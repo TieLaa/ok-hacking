@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import cv2  # noqa: E402
 
 from src.tasks.ui import topbar_day  # noqa: E402
+from tools._logdirs import evidence_dirs  # noqa: E402  新老结构都认（按局分目录）
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BOX_RE = re.compile(r"^(.*?)\s*\((\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)\s*$")
@@ -66,8 +67,7 @@ def find_residual_frame(engine):
     所以必须**当场重跑整帧 OCR** 来确认，不能信历史记录。
     """
     logs = os.path.join(ROOT, "logs")
-    for sub in ("unknown", "debug"):
-        base = os.path.join(logs, sub)
+    for base in evidence_dirs(logs, ("unknown", "debug")):
         if not os.path.isdir(base):
             continue
         for dp, _dn, fn in os.walk(base):

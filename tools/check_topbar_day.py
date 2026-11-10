@@ -27,6 +27,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import cv2  # noqa: E402
 
+from tools._logdirs import evidence_dirs  # noqa: E402  新老结构都认（按局分目录）
+
 from src.tasks.ui import topbar_day  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -79,12 +81,9 @@ class _Box:
 
 
 def collect_candidates():
-    """扫 logs/，返回 [(记录里的星期形态, 图片路径), …]。"""
+    """扫 logs/，返回 [(记录里的星期形态, 图片路径), …]（新老结构都认）。"""
     out = []
-    for sub in ("unknown", "debug"):
-        base = os.path.join(LOGS, sub)
-        if not os.path.isdir(base):
-            continue
+    for base in evidence_dirs(LOGS, ("unknown", "debug")):
         for dp, _dn, fn in os.walk(base):
             for f in fn:
                 if not f.endswith(".txt"):

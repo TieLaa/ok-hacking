@@ -57,7 +57,7 @@ class UnmarkedHandlers:
             self._unmark_dumped_at = now
         self.log_warning(
             f"未登记的选项页：{detail} → 按品质选「{pick['name']}」"
-            f"（{pick['quality']}，已存 logs/unmark/）")
+            f"（{pick['quality']}，已存证到本局 unmark/）")
 
         self.click_box(pick["box"], after_sleep=0.5)
         # 有的页面（做饭那种食材三选一）选完还要点「确定」。认不到就不点，
