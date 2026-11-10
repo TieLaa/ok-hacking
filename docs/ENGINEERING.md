@@ -133,6 +133,10 @@ GUI 运行：logs/<局ID>/{events,unknown,unmark,debug}/ + meta.json
   新结构；`logs/mcp` 留最近 10 次 run；总量上限 1.5 GB；有 run 在跑时拒绝 `--apply`。
 - 永不删：`docs/shots/`（回归语料）、`logs/clicks.jsonl`、`logs/reports/`、
   `logs/mcp/connections/`、局目录的 `meta.json`。
+- 2026-11-10 一次性清理：老平铺结构（`logs/events|unknown|unmark|debug/`，10.7 GB）
+  与开发期残留（`run_session*`、`live*`、`state_check*`、`topbar/`、`history/`、
+  mcp 顶层的一次性脚本日志）已全部删除；旧 OCR 文本也一并清掉（10.7 GB → 34 MB）。
+  文档里引用的「logs/unknown/1108-…」这类历史证据帧**已不存在**，只能看文档摘录。
 
 ## 7. 重构规则
 
