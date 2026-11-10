@@ -32,17 +32,17 @@ from tools.abs_mouse import click_screen, ensure_foreground  # noqa: E402
 LOG = os.path.join(ROOT, "logs", "ok-script.log")
 
 # 相对于 ok-script 主窗口左上角的「开始」按钮候选位置（兜底用：
-# 优先按 OCR 找「训练循环」那一行的「开始」按钮，因为用户可以拖窗口改尺寸，
+# 优先按 OCR 找「自动训练」那一行的「开始」按钮，因为用户可以拖窗口改尺寸，
 # 2026-10-27 10:43 窗口被缩到 1170x749，固定坐标就点歪到第 4 张卡了）
 CANDIDATE_Y = (89, 470, 350, 210)
 BUTTON_X = 1089
 
 # 只有排上这些任务名才算成功（否则是点到了别的任务卡）
-TARGET_KEYWORDS = ("训练循环", "TrainingTask")
+TARGET_KEYWORDS = ("自动训练", "TrainingTask")
 
 
 def locate_start_button(ok):
-    """OCR 定位：「训练循环」标题同一行右侧的「开始」按钮，返回窗口内相对坐标。
+    """OCR 定位：「自动训练」标题同一行右侧的「开始」按钮，返回窗口内相对坐标。
 
     找不到就返回 None，交给固定候选坐标兜底。
     """
@@ -84,7 +84,7 @@ def locate_start_button(ok):
                 title = (x, y, w, h)
                 break
         if title is None:
-            print("OCR 没找到「训练循环」标题，改用固定候选坐标")
+            print("OCR 没找到「自动训练」标题，改用固定候选坐标")
             return None
         ty = title[1] + title[3] / 2
         best = None
@@ -167,7 +167,7 @@ def main():
     clicked = None
     wrong = None
 
-    # 先按 OCR 找「训练循环」那一行的「开始」按钮（窗口尺寸被拖过也不会点歪）
+    # 先按 OCR 找「自动训练」那一行的「开始」按钮（窗口尺寸被拖过也不会点歪）
     rect = win32gui.GetWindowRect(ok)
     located = locate_start_button(ok)
     candidates = []

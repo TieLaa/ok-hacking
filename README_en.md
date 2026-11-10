@@ -65,7 +65,7 @@ Start-Process -FilePath ".\.venv\Scripts\python.exe" -ArgumentList "main_debug.p
 ## Usage
 
 1. Open the capture page and confirm a screenshot of the game window works.
-2. On the task page, expand “养成-训练循环” and adjust options. **Leaving the captain empty means takeover-only**: it runs matches you started by hand and stops on setup screens instead of starting them.
+2. On the task page, expand “自动训练” (Auto Training) and adjust options. **Leaving the captain empty means takeover-only**: it runs matches you started by hand and stops on setup screens instead of starting them.
 3. Press start and switch to the monitor page.
 4. When stuck, read text first: `logs/debug/<time>_<tag>/ocr.txt` (text + coordinates) and `actions.txt` usually show the blocking step; only look at `frame.jpg` when OCR misses a button.
 
