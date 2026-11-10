@@ -23,7 +23,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools.abs_mouse import ensure_foreground, find_game_hwnd, move_to_screen  # noqa: E402
-from tools.wgc_capture import MockWindow  # noqa: E402
+from tools import _capture, _ocr  # noqa: E402
 
 import win32gui  # noqa: E402
 
@@ -39,42 +39,16 @@ SPEED_POINT = (0.760, 0.044)
 
 
 def grab(hwnd):
-    from ok.device.capture_methods.windows_graphics import WindowsGraphicsCaptureMethod
-
-    cap = WindowsGraphicsCaptureMethod(MockWindow(hwnd))
-    frame = None
-    try:
-        for _ in range(15):
-            frame = cap.get_frame()
-            if frame is not None:
-                break
-            time.sleep(0.1)
-    finally:
-        cap.close()
-    return frame
+    return _capture.grab_hwnd(hwnd, tries=15)
 
 
 def ocr_engine():
-    from onnxocr.onnx_paddleocr import ONNXPaddleOcr
-
-    return ONNXPaddleOcr(use_angle_cls=False, use_openvino=True, show_log=False)
+    return _ocr.engine()
 
 
 def ocr_items(ocr, img):
-    result = ocr.ocr(img)
-    page = result[0] if isinstance(result, list) and len(result) == 1 else result
-    items = []
-    for entry in page or []:
-        try:
-            box, (text, score) = entry[0], entry[1]
-        except Exception:
-            continue
-        if not text or score is None or score < 0.4:
-            continue
-        xs = [int(p[0]) for p in box]
-        ys = [int(p[1]) for p in box]
-        items.append((text, min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys), float(score)))
-    return items
+    """`[(text, x, y, w, h, score)]`（实现见 tools/_ocr.py）。"""
+    return _ocr.items(img, eng=ocr, min_score=0.4)
 
 
 def crop_rel(frame, box):

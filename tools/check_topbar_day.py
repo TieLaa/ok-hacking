@@ -27,14 +27,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import cv2  # noqa: E402
 
-from tools._logdirs import evidence_dirs  # noqa: E402  新老结构都认（按局分目录）
+from tools._evidence_scan import iter_day_lines  # noqa: E402  新老结构都认（按局分目录）
 
 from src.tasks.ui import topbar_day  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOGS = os.path.join(ROOT, "logs")
 
-BOX_RE = re.compile(r"^(.*?)\s*\((\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)\s*$")
 KNOWN = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 # 整帧 OCR 读星期几时用的正则是 labels.DAY_RE（**包含**匹配，容许「星期天」）
 DAY_LOOSE_RE = re.compile(r"星期\s*([一二三四五六日天])")
@@ -83,35 +82,10 @@ class _Box:
 def collect_candidates():
     """扫 logs/，返回 [(记录里的星期形态, 图片路径), …]（新老结构都认）。"""
     out = []
-    for base in evidence_dirs(LOGS, ("unknown", "debug")):
-        for dp, _dn, fn in os.walk(base):
-            for f in fn:
-                if not f.endswith(".txt"):
-                    continue
-                p = os.path.join(dp, f)
-                try:
-                    content = open(p, encoding="utf-8", errors="replace").read()
-                except OSError:
-                    continue
-                form = None
-                for line in content.splitlines():
-                    m = BOX_RE.match(line)
-                    if not m:
-                        continue
-                    s = m.group(1).strip()
-                    x = int(m.group(2))
-                    y = int(m.group(3))
-                    if y < 60 and 120 <= x <= 300 and ("期" in s or "星" in s):
-                        form = s
-                        break
-                if form is None:
-                    continue
-                jpg = os.path.splitext(p)[0] + ".jpg"
-                if not os.path.exists(jpg):
-                    jpg = os.path.join(dp, "frame.jpg")
-                if not os.path.exists(jpg):
-                    continue
-                out.append((form, jpg))
+    for _p, jpg, hits in iter_day_lines(LOGS):
+        form = next((s for s, _x, _y in hits if "期" in s or "星" in s), None)
+        if form:
+            out.append((form, jpg))
     return out
 
 

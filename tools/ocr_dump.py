@@ -25,25 +25,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools._console import utf8_stdout  # noqa: E402
 from tools import _ocr
-from tools.wgc_capture import find_hwnd, MockWindow  # noqa: E402
+from tools import _capture  # noqa: E402
 
 
 def grab_frame():
-    from ok.device.capture_methods.windows_graphics import WindowsGraphicsCaptureMethod
-
-    hwnd = find_hwnd("篮球少女：飞跃巅峰")
-    if not hwnd:
-        raise SystemExit("找不到游戏窗口")
-    cap = WindowsGraphicsCaptureMethod(MockWindow(hwnd))
-    frame = None
-    for _ in range(10):
-        frame = cap.get_frame()
-        if frame is not None:
-            break
-    cap.close()
-    if frame is None:
-        raise SystemExit("抓帧失败")
-    return frame
+    """抓一帧（实现见 `tools/_capture.py`）。"""
+    return _capture.grab_frame()
 
 
 def run_ocr(frame):

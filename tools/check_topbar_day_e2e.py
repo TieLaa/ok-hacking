@@ -20,10 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import cv2  # noqa: E402
 
 from src.tasks.ui import topbar_day  # noqa: E402
-from tools._logdirs import evidence_dirs  # noqa: E402  新老结构都认（按局分目录）
+from tools._evidence_scan import iter_day_lines  # noqa: E402  新老结构都认（按局分目录）
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BOX_RE = re.compile(r"^(.*?)\s*\((\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)\s*$")
 RESIDUAL_FORMS = ("星期", "星期-")
 
 
@@ -67,45 +66,19 @@ def find_residual_frame(engine):
     所以必须**当场重跑整帧 OCR** 来确认，不能信历史记录。
     """
     logs = os.path.join(ROOT, "logs")
-    for base in evidence_dirs(logs, ("unknown", "debug")):
-        if not os.path.isdir(base):
+    for _p, jpg, hits in iter_day_lines(logs):
+        hit = next(((s, x) for s, x, _y in hits if s in RESIDUAL_FORMS), None)
+        if not hit:
             continue
-        for dp, _dn, fn in os.walk(base):
-            for f in fn:
-                if not f.endswith(".txt"):
-                    continue
-                p = os.path.join(dp, f)
-                try:
-                    content = open(p, encoding="utf-8", errors="replace").read()
-                except OSError:
-                    continue
-                hit = None
-                for line in content.splitlines():
-                    m = BOX_RE.match(line)
-                    if not m:
-                        continue
-                    s = m.group(1).strip()
-                    x = int(m.group(2))
-                    y = int(m.group(3))
-                    if y < 60 and 120 <= x <= 300 and s in RESIDUAL_FORMS:
-                        hit = (s, x)
-                        break
-                if not hit:
-                    continue
-                jpg = os.path.splitext(p)[0] + ".jpg"
-                if not os.path.exists(jpg):
-                    jpg = os.path.join(dp, "frame.jpg")
-                if not os.path.exists(jpg):
-                    continue
-                img = cv2.imread(jpg)
-                if img is None:
-                    continue
-                # 当场重跑整帧 OCR，确认这帧此刻真的读不出
-                names = [b.name for b in engine.ocr(frame=img)]
-                joined = " ".join(names)
-                if re.search(r"星期\s*([一二三四五六日天])", joined.replace(" ", "")):
-                    continue          # 现在读得出 → 不是丢字帧
-                return hit, jpg, img, names
+        img = cv2.imread(jpg)
+        if img is None:
+            continue
+        # 当场重跑整帧 OCR，确认这帧此刻真的读不出
+        names = [b.name for b in engine.ocr(frame=img)]
+        joined = " ".join(names)
+        if re.search(r"星期\s*([一二三四五六日天])", joined.replace(" ", "")):
+            continue          # 现在读得出 → 不是丢字帧
+        return hit, jpg, img, names
     return None, None, None, None
 
 

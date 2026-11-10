@@ -27,7 +27,6 @@ R 区，导致「只采到几个」）。卡池详情页（SSR/SR/R 同页）请
 """
 
 import argparse
-import json
 import os
 import re
 import sys
@@ -45,6 +44,7 @@ sys.path.insert(0, ROOT)
 from tools.abs_mouse import (click_client, ensure_foreground,  # noqa: E402
                              find_game_hwnd, move_to_screen)
 from tools.wgc_capture import MockWindow  # noqa: E402
+from tools._roster_json import merge_and_save  # noqa: E402
 
 POSITIONS = ("分卫", "控卫", "小前", "大前", "中锋")
 OUT_JSON = os.path.join(ROOT, "docs", "roster", "ssr_roster.json")
@@ -512,24 +512,7 @@ def main(argv=None):
     if not rows:
         print("没采到任何角色")
         return 1
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    merged, order = {}, []
-    if os.path.exists(out_path):                     # 和已有数据合并（按名字去重）
-        try:
-            for r in json.load(open(out_path, encoding="utf-8")):
-                if r.get("name") and r["name"] not in merged:
-                    merged[r["name"]] = r
-                    order.append(r["name"])
-        except Exception as e:                       # noqa: BLE001
-            print("旧文件读不出来，直接覆盖：", e)
-    for r in rows:
-        if r.get("name") and r["name"] not in merged:
-            order.append(r["name"])
-        merged[r.get("name")] = r
-    out = [merged[n] for n in order if n]
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=2)
-    print(f"已写入 {out_path}（本次 {len(rows)} 个，累计 {len(out)} 个）")
+    merge_and_save(rows, out_path)
     return 0
 
 

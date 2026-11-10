@@ -23,7 +23,7 @@ import win32api  # noqa: E402  # noqa: E402
 import win32gui  # noqa: E402
 
 from tools.abs_mouse import click_screen, ensure_foreground, find_game_hwnd, move_to_screen  # noqa: E402
-from tools.wgc_capture import MockWindow  # noqa: E402
+from tools import _capture, _ocr  # noqa: E402
 
 HISTORY_POINT = (0.819, 0.045)      # 顶栏第 2 个图标（历史记录）
 LIST_CENTER = (0.50, 0.50)          # 面板中间，滚动落点
@@ -32,37 +32,13 @@ WHEEL_DELTA = 120
 
 
 def grab(hwnd):
-    from ok.device.capture_methods.windows_graphics import WindowsGraphicsCaptureMethod
-
-    cap = WindowsGraphicsCaptureMethod(MockWindow(hwnd))
-    fr = None
-    try:
-        for _ in range(15):
-            fr = cap.get_frame()
-            if fr is not None:
-                break
-            time.sleep(0.1)
-    finally:
-        cap.close()
-    return fr
+    return _capture.grab_hwnd(hwnd, tries=15)
 
 
 def ocr_items(ocr, img):
-    result = ocr.ocr(img)
-    page = result[0] if isinstance(result, list) and len(result) == 1 else result
-    out = []
-    for entry in page or []:
-        try:
-            box, (text, score) = entry[0], entry[1]
-        except Exception:
-            continue
-        if not text or score is None or score < 0.4:
-            continue
-        xs = [int(p[0]) for p in box]
-        ys = [int(p[1]) for p in box]
-        out.append((min(ys), min(xs), text, float(score)))
-    out.sort()
-    return out
+    """按 y 排序的 `[(y, x, text, score)]`（历史记录面板是自上而下的流水）。"""
+    return sorted((y, x, text, score)
+                  for text, x, y, _w, _h, score in _ocr.items(img, eng=ocr, min_score=0.4))
 
 
 def wheel_up(times=3, gap=0.12):

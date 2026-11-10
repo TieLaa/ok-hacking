@@ -19,7 +19,7 @@ from ok.feature.Box import Box  # noqa: E402
 from src.tasks.training.parsers import TrainingParsersMixin  # noqa: E402
 from src.tasks.training.places.street import StreetPlace  # noqa: E402
 from src.tasks.training.scoring import TrainingScoringMixin  # noqa: E402
-from tools import _ocr  # noqa: E402
+from tools import _capture, _ocr  # noqa: E402
 
 
 DEFAULT_CONFIG = {
@@ -45,23 +45,7 @@ def grab_frame(path=None):
         if frame is None:
             raise SystemExit("读不到帧：" + path)
         return frame
-    from tools.wgc_capture import find_hwnd, MockWindow
-
-    from ok.device.capture_methods.windows_graphics import WindowsGraphicsCaptureMethod
-
-    hwnd = find_hwnd("篮球少女：飞跃巅峰")
-    if not hwnd:
-        raise SystemExit("找不到游戏窗口")
-    cap = WindowsGraphicsCaptureMethod(MockWindow(hwnd))
-    frame = None
-    for _ in range(10):
-        frame = cap.get_frame()
-        if frame is not None:
-            break
-    cap.close()
-    if frame is None:
-        raise SystemExit("抓帧失败")
-    return frame
+    return _capture.grab_frame()
 
 
 def run_ocr(frame):
