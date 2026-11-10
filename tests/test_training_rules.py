@@ -2354,9 +2354,14 @@ class ConfigSpecRules(unittest.TestCase):
         多出来的键**删掉**（用户改过的值就丢了）。
         """
         import json
+        import os
         from src.tasks.training import config_spec
+
+        path = os.path.join("configs", "TrainingTask.json")
+        if not os.path.exists(path):
+            self.skipTest("本机没有 configs/TrainingTask.json（configs/ 不进仓库）")
         spec = {s.key for s in config_spec.ALL}
-        cfg = json.load(open(r"configs\TrainingTask.json", encoding="utf-8"))
+        cfg = json.load(open(path, encoding="utf-8"))
         extra = set(cfg) - spec
         self.assertEqual(extra, set(),
                          "json 里多出来的键会被 verify_config 删掉：%s" % extra)
@@ -6328,7 +6333,10 @@ class MonitorButtons(unittest.TestCase):
             groups.setdefault(style, []).append(name)
         order = ["训练流", "商店流", "扭蛋流", "小游戏流"]
         caps = {k: sorted(groups[k]) for k in order if k in groups}
-        with open("configs/monitor_layout.json", encoding="utf-8") as f:
+        layout_path = os.path.join("configs", "monitor_layout.json")
+        if not os.path.exists(layout_path):
+            self.skipTest("本机没有 configs/monitor_layout.json（configs/ 不进仓库）")
+        with open(layout_path, encoding="utf-8") as f:
             layout = json.load(f)
 
         class _Actions(MonitorActions):
