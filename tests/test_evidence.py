@@ -16,7 +16,7 @@ import unittest
 
 import numpy as np
 
-from src.tasks import evidence
+from src.tasks import evidence, retention
 
 
 class RoundDirs(unittest.TestCase):
@@ -42,7 +42,7 @@ class RoundDirs(unittest.TestCase):
         self.assertEqual(meta["captain"], "野上泷")
         self.assertEqual(meta["entry"], "GUI")
         self.assertFalse(meta["handover"])
-        self.assertTrue(evidence.ROUND_RE.match(os.path.basename(path)))
+        self.assertTrue(retention.ROUND_RE.match(os.path.basename(path)))
 
     def test_handover_and_round_no_markers(self):
         path = self.sink.begin_round(captain="", handover=True, round_no=3)
@@ -127,14 +127,14 @@ class PruneSafety(unittest.TestCase):
 
     def test_old_round_is_deleted(self):
         path = self._fake_round("1110-091635_野上泷")
-        self.sink.prune(3)
+        self.sink.prune(3, log_dir=self.tmp)
         self.assertFalse(os.path.exists(path))
 
     def test_fresh_round_is_kept(self):
         old = self._fake_round("1110-091635_野上泷")
         fresh = os.path.join(self.tmp, "1110-120000_近江奏")
         os.makedirs(os.path.join(fresh, "events"), exist_ok=True)
-        self.sink.prune(3)
+        self.sink.prune(3, log_dir=self.tmp)
         self.assertFalse(os.path.exists(old))
         self.assertTrue(os.path.exists(fresh))
 
@@ -149,7 +149,7 @@ class PruneSafety(unittest.TestCase):
                 os.makedirs(p)
             self._age(p, 30)
         self._age(os.path.join(self.tmp, "clicks.jsonl"), 30)
-        self.sink.prune(3)
+        self.sink.prune(3, log_dir=self.tmp)
         for p in (reports, pre, os.path.join(self.tmp, "connections"),
                   os.path.join(self.tmp, "clicks.jsonl")):
             self.assertTrue(os.path.exists(p), p)
@@ -159,12 +159,12 @@ class PruneSafety(unittest.TestCase):
         path = os.path.join(self.tmp, "1110-091635_别的东西")
         os.makedirs(os.path.join(path, "something"))
         self._age(path, 30)
-        self.sink.prune(3)
+        self.sink.prune(3, log_dir=self.tmp)
         self.assertTrue(os.path.exists(path))
 
     def test_zero_days_disables_prune(self):
         path = self._fake_round("1110-091635_野上泷")
-        self.sink.prune(0)
+        self.sink.prune(0, log_dir=self.tmp)
         self.assertTrue(os.path.exists(path))
 
 
@@ -192,25 +192,25 @@ class ClickRetention(unittest.TestCase):
 
     def test_old_lines_trimmed(self):
         self._write([10, 9, 1])
-        trimmed, kept = evidence.trim_clicks(3)
+        trimmed, kept = retention.trim_clicks(3, evidence.CLICK_LOG)
         self.assertEqual((trimmed, kept), (2, 1))
         self.assertEqual(len(self._lines()), 1)
 
     def test_all_fresh_is_noop(self):
         self._write([2, 1, 0])
-        self.assertEqual(evidence.trim_clicks(3), (0, 3))
+        self.assertEqual(retention.trim_clicks(3, evidence.CLICK_LOG), (0, 3))
         self.assertEqual(len(self._lines()), 3)
 
     def test_zero_days_keeps_everything(self):
         self._write([100, 50])
-        self.assertEqual(evidence.trim_clicks(0), (0, 0))
+        self.assertEqual(retention.trim_clicks(0, evidence.CLICK_LOG), (0, 0))
         self.assertEqual(len(self._lines()), 2)
 
     def test_unparsable_line_survives(self):
         self._write([10, 1])
         with open(evidence.CLICK_LOG, "a", encoding="utf-8") as f:
             f.write("这不是 JSON\n")
-        trimmed, _kept = evidence.trim_clicks(3)
+        trimmed, _kept = retention.trim_clicks(3, evidence.CLICK_LOG)
         self.assertEqual(trimmed, 1)
         self.assertIn("这不是 JSON", "".join(self._lines()))
 
@@ -220,12 +220,15 @@ class DailyLogRetention(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="ok-daily-")
-        self._log_root = evidence.LOG_ROOT
-        evidence.LOG_ROOT = self.tmp
 
     def tearDown(self):
-        evidence.LOG_ROOT = self._log_root
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _trim(self, days):
+        actions = retention.plan(days, self.tmp, kinds=("daily",))
+        paths = [a["path"] for a in actions]
+        retention.apply(actions)
+        return paths
 
     def _touch(self, name):
         path = os.path.join(self.tmp, name)
@@ -237,7 +240,7 @@ class DailyLogRetention(unittest.TestCase):
         old = self._touch("ok-script.2020-01-01.log")
         today = time.strftime("ok-script.%Y-%m-%d.log")
         recent = self._touch(today)
-        gone = evidence.trim_daily_logs(3, self.tmp)
+        gone = self._trim(3)
         self.assertIn(old, gone)
         self.assertFalse(os.path.exists(old))
         self.assertTrue(os.path.exists(recent))
@@ -248,13 +251,13 @@ class DailyLogRetention(unittest.TestCase):
         run1 = self._touch("run.log.1")
         for path in (current, run, run1):
             os.utime(path, (time.time() - 90 * 86400,) * 2)
-        self.assertEqual(evidence.trim_daily_logs(3, self.tmp), [])
+        self.assertEqual(self._trim(3), [])
         for path in (current, run, run1):
             self.assertTrue(os.path.exists(path), path)
 
     def test_zero_days_keeps_everything(self):
         old = self._touch("ok-script.2020-01-01.log")
-        self.assertEqual(evidence.trim_daily_logs(0, self.tmp), [])
+        self.assertEqual(self._trim(0), [])
         self.assertTrue(os.path.exists(old))
 
 

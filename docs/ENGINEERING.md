@@ -123,20 +123,23 @@ GUI 运行：logs/<局ID>/{events,unknown,unmark,debug}/ + meta.json
 - 图片走 `evidence.write_jpg`（`imencode` + 字节写），**不要**用 `cv2.imwrite`：
   目录名带中文（队长名）时它在 Windows 上静默失败。
 
-### 6.2 保留策略
+### 6.2 保留策略（唯一实现：`src/tasks/retention.py`）
 
-- 运行时：配置项 `日志保留天数`（默认 3，`0` = 不清理），每局开头清一次
-  超期的**整局目录**。安全阀：名字要像局ID、目录里必须有
-  `events|unknown|unmark|debug` 之一 —— 所以 `reports/`、`connections/`、
-  `docs/shots/` 不可能被删。
-- `clicks.jsonl` 走**同一保留期裁行**（`evidence.trim_clicks`：文件永不删，
-  只删 `at` 超期的行；第一行没超期就整份跳过，不做无谓重写）。
-- 框架按天日志 `ok-script.YYYY-MM-DD.log` 走**同一保留期删整天文件**
-  （`evidence.trim_daily_logs`；`ok-script.log` 是活跃文件、没日期，永不删）。
-- 手工：`tools/prune_logs.py`（默认 dry-run）清老平铺结构，`--no-rounds` 可跳过
-  新结构；`logs/mcp` 留最近 10 次 run；总量上限 1.5 GB；有 run 在跑时拒绝 `--apply`。
-- 永不删：`docs/shots/`（回归语料）、`logs/reports/`（会被覆盖）、
-  `logs/mcp/connections/`、局目录的 `meta.json`。
+**所有「什么算过期、怎么删」都只在 `src/tasks/retention.py`**，两个调用方只选类别：
+
+| 调用方 | 管的类别 | 时机 |
+| --- | --- | --- |
+| `EvidenceSink.prune()` | `retention.RUNTIME`：局目录 / clicks 裁行 / 按天日志 / 失效连接记录 | 每局开头 |
+| `tools/prune_logs.py` | `retention.ALL`：再加平铺老目录 / mcp 旧 run / 总量兜底 | 手动，默认 dry-run |
+
+- 保留期：配置项 `日志保留天数`（默认 3，`0` = 不清理）。
+- 局目录安全阀：名字像局ID + 目录里必须有 `events|unknown|unmark|debug` 之一。
+- `clicks.jsonl` **裁行不删文件**（第一行没超期就整份跳过，不做无谓重写）。
+- `ok-script.log` 是活跃文件（名字带日期才是按天日志），永不删。
+- 连接记录只在**进程已不在**时才删（`retention.pid_alive`，pid + 创建时刻一起比）。
+- 平铺老目录只删图片，OCR 文本保留；`logs/mcp` 留最近 10 次 run。
+- 永不删：`docs/shots/`（回归语料）、`logs/reports/`（会被覆盖）、局目录的 `meta.json`。
+- 有 run 在跑时 `prune_logs.py --apply` 拒绝执行。
 - 2026-11-10 一次性清理：老平铺结构（`logs/events|unknown|unmark|debug/`，10.7 GB）
   与开发期残留（`run_session*`、`live*`、`state_check*`、`topbar/`、`history/`、
   mcp 顶层的一次性脚本日志）已全部删除；旧 OCR 文本也一并清掉（10.7 GB → 34 MB）。

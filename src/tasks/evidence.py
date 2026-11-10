@@ -26,14 +26,9 @@
 四个子目录的产物与老结构**逐字节同构**（文件名规则不变），所以老工具只需
 把「扫一层目录」换成「扫递归」，判据和回归语料都不用动。
 
-保留期：每局开头清一次 `日志保留天数` 之前建好的**整局目录**。只删
-「名字像局ID + 里面确实有那四个子目录之一」的目录，`reports/`、
-`mcp/connections/`、`docs/shots/` 都不在扫描范围内。
-
-`clicks.jsonl` 和框架按天日志（`ok-script.YYYY-MM-DD.log`）是两处例外：
-它们不在局目录里，所以**按同一保留期单独处理**：
-  - `trim_clicks`：裁行，文件永不删（实测 14 天 10.5 万行 / 15 MB）；
-  - `trim_daily_logs`：删超期的整天日志（一天一份，没人清就无界增长）。
+保留期：每局开头调一次 `retention.plan(kinds=RUNTIME)` —— 整局目录、点击流水
+裁行、框架按天日志、失效连接记录**四类的判据与实现都在
+`src/tasks/retention.py`**（2026-11-10 归集，运行时与运维脚本共用一套）。
 
 用户 2026-11-10 口径：**不做 jpg 开关** —— 真需要调试时没有图更麻烦，
 靠按局清理控制体积。
@@ -41,25 +36,21 @@
 
 import json
 import os
-import re
-import shutil
 import threading
 import time
 
-from src.tasks.training.constants import JPEG_PARAMS, PROJECT_ROOT
+from src.tasks.training.constants import JPEG_PARAMS
 
 import cv2
 
-#: 所有运行期产物的根（GUI 运行时局目录直接挂在这里）
-LOG_ROOT = os.path.join(PROJECT_ROOT, "logs")
+from src.tasks import retention
+
+#: 所有运行期产物的根（GUI 运行时局目录直接挂在这里）—— 与保留策略同一来源
+LOG_ROOT = retention.LOG_ROOT
 #: 点击流水：全局单文件（跨局），每行带 round 字段
-CLICK_LOG = os.path.join(LOG_ROOT, "clicks.jsonl")
-#: 局目录判定：`1110-091635` 开头
-ROUND_RE = re.compile(r"^\d{4}-\d{6}_")
+CLICK_LOG = os.path.join(LOG_ROOT, retention.CLICK_LOG)
 #: 局目录里必然存在的子目录（清理时的安全阀：没有就绝不删）
 ROUND_SUBS = ("events", "unknown", "unmark", "debug")
-#: 框架按天日志的文件名日期：ok-script.2026-11-03.log
-DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 #: 局还没开始时的存证落点
 PRE_DIR = "pre"
 
@@ -75,119 +66,6 @@ def _safe(name):
 
 def _texts_block(texts):
     return "\n".join(f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts or [])
-
-
-def trim_clicks(keep_days=3, log_path=None):
-    """裁掉点击流水里**超过保留期**的行；文件本身永不删。
-
-    为什么要裁：`clicks.jsonl` 是全局单文件（跨局追加），不裁就无界增长
-    （实测 14 天 10.5 万行 / 15 MB）。它不在任何局目录里，所以局目录清理管不到它。
-
-    省事的判据：第一行是最老的 —— 它都没超期就直接返回，不做一次 15 MB 的重写。
-    解析不了的行**保留**（别顺手把证据毁了）。
-    返回 (删掉的行数, 保留的行数)。
-    """
-    keep_days = int(keep_days or 0)
-    path = log_path or CLICK_LOG
-    if keep_days <= 0 or not os.path.isfile(path):
-        return (0, 0)
-    cutoff = time.time() - keep_days * 86400
-    try:
-        with open(path, encoding="utf-8") as f:
-            lines = f.readlines()
-    except OSError:
-        return (0, 0)
-    if not lines:
-        return (0, 0)
-
-    def fresh(line):
-        try:
-            at = json.loads(line).get("at")
-        except ValueError:
-            return True
-        return not isinstance(at, (int, float)) or at >= cutoff
-
-    try:
-        oldest = json.loads(lines[0]).get("at")
-    except ValueError:
-        oldest = None
-    if isinstance(oldest, (int, float)) and oldest >= cutoff:
-        return (0, len(lines))
-
-    kept = [line for line in lines if fresh(line)]
-    if len(kept) == len(lines):
-        return (0, len(lines))
-    tmp = path + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.writelines(kept)
-        os.replace(tmp, path)
-    except OSError:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        return (0, len(lines))
-    return (len(lines) - len(kept), len(kept))
-
-
-def daily_logs_to_delete(keep_days=3, log_dir=None):
-    """列出超期的框架按天日志：[(路径, 字节数), …]。
-
-    三处安全：
-      - 只认文件名里**带 `YYYY-MM-DD`** 的 `ok-script*.log`：`ok-script.log`（当前
-        活跃文件，没有日期）和 `run.log*` 都不在名单里；
-      - 日期解析不出来就跳过（不拿 mtime 兜底 —— 活跃文件的 mtime 可能很老）；
-      - 只列不删（调用方决定；`trim_daily_logs` 负责删）。
-    """
-    keep_days = int(keep_days or 0)
-    if keep_days <= 0:
-        return []
-    log_dir = log_dir or LOG_ROOT
-    cutoff = time.time() - keep_days * 86400
-    out = []
-    try:
-        names = os.listdir(log_dir)
-    except OSError:
-        return []
-    for name in names:
-        if not (name.startswith("ok-script") and name.endswith(".log")):
-            continue
-        m = DATE_RE.search(name)
-        if not m:
-            continue                      # ok-script.log = 当前活跃文件，永不删
-        try:
-            stamp = time.mktime(time.strptime(m.group(1), "%Y-%m-%d"))
-        except ValueError:
-            continue
-        if stamp >= cutoff:
-            continue
-        path = os.path.join(log_dir, name)
-        if not os.path.isfile(path):
-            continue
-        try:
-            out.append((path, os.path.getsize(path)))
-        except OSError:
-            continue
-    return out
-
-
-def trim_daily_logs(keep_days=3, log_dir=None):
-    """删掉 `keep_days` 天之前的框架按天日志（`ok-script.YYYY-MM-DD.log`）。
-
-    为什么它也要管：这套文件是框架每天新建一份、**只追加没人删**，
-    实测重的一天 5.9 MB，一个月就是几十 MB。唯一读它的是
-    `tools/check_training_gain.py`（属性增益复盘），而复盘只对最近几局有意义。
-    删不掉（文件被占用/权限）就跳过，不抛异常。返回删掉的文件路径列表。
-    """
-    removed = []
-    for path, _size in daily_logs_to_delete(keep_days, log_dir):
-        try:
-            os.remove(path)
-            removed.append(path)
-        except OSError:
-            continue
-    return removed
 
 
 def write_jpg(path, frame):
@@ -433,52 +311,17 @@ class EvidenceSink:
 
     # ---------- 保留期 ----------
 
-    def prune(self, keep_days=3):
-        """删掉 `keep_days` 天之前的**整局目录**，并裁掉点击流水 / 按天框架日志。
+    def prune(self, keep_days=3, log_dir=None):
+        """按 `日志保留天数` 清理：整局目录 + 点击流水裁行 + 按天日志 + 连接记录。
 
-        0 = 不清理。
-        安全阀有三道：名字必须像局ID、里面必须有 `events|unknown|unmark|debug`
-        之一、必须是目录。所以 `clicks.jsonl` / `reports/` / `mcp/connections/`
-        / `connections` / `docs/shots` 都不可能被误删。
+        **策略与实现都在 `src/tasks/retention.py`**（2026-11-10 归集）：
+        这里只说「运行时该管哪几类」（`retention.RUNTIME`），不再自己写判据。
+        `log_dir` 只给测试用（默认 `logs/`）。
         """
         keep_days = int(keep_days or 0)
         if keep_days <= 0:
             return []
-        cutoff = time.time() - keep_days * 86400
-        removed = []
-        for base in self._round_parents():
-            try:
-                names = os.listdir(base)
-            except OSError:
-                continue
-            for name in names:
-                if not ROUND_RE.match(name):
-                    continue
-                path = os.path.join(base, name)
-                if not os.path.isdir(path):
-                    continue
-                if not any(os.path.isdir(os.path.join(path, s)) for s in ROUND_SUBS):
-                    continue
-                try:
-                    if os.path.getmtime(path) >= cutoff:
-                        continue
-                    shutil.rmtree(path, ignore_errors=True)
-                    removed.append(path)
-                except OSError:
-                    continue
-        trim_clicks(keep_days=keep_days)
-        trim_daily_logs(keep_days=keep_days)
-        return removed
-
-    def _round_parents(self):
-        """局目录可能挂在两处：GUI 的 logs/ 和 MCP 的 logs/mcp/<run_id>/。"""
-        parents = [self.root or LOG_ROOT]
-        mcp = os.path.join(LOG_ROOT, "mcp")
-        try:
-            for name in os.listdir(mcp):
-                sub = os.path.join(mcp, name)
-                if os.path.isdir(sub) and name not in ("connections", "attempts"):
-                    parents.append(sub)
-        except OSError:
-            pass
-        return parents
+        actions = retention.plan(keep_days, log_dir or retention.LOG_ROOT,
+                                 kinds=retention.RUNTIME)
+        retention.apply(actions)
+        return [a["path"] for a in actions if a["kind"] == "round"]
