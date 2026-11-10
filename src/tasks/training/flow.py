@@ -16,6 +16,7 @@ from src.tasks.training.constants import (JPEG_PARAMS, PROJECT_ROOT,
 from src.tasks.training.queue import CaptainQueue
 from src.tasks.ui import labels
 from src.util.emergency_stop import STOP
+from src.util.log_fallback import ensure_run_log
 
 # 点击流水：一行一个 JSON 事件（时间戳 / 步数 / 当时界面 / 坐标）。
 # 放在 logs/ 下，已被 .gitignore 忽略；任务结束后用它复盘「第几秒点了哪里」。
@@ -151,7 +152,7 @@ class TrainingFlowMixin:
         # 队列在**上次运行**里就已经全部达标（进度存在 logs/training_queue.json）→
         # 直接收工，不要再白跑一局（2026-11-04：达标却还开新局跑）
         if self._queue is not None and self._queue.finished:
-            self.log_info(f"队列已全部达标 → 提前终止（{self._queue.summary()}）", notify=True)
+            self.log_info(self.queue_finished_message(self._queue), notify=True)
             return True
         runs = 0
         while True:
@@ -161,7 +162,8 @@ class TrainingFlowMixin:
             if not self.advance_queue_after_round():
                 return True
             if runs >= max_runs:
-                self.log_error(f"连跑 {runs} 局仍未达成全部目标（最大局数 {max_runs}）→ 停止",
+                goal = "目标分" if len(self._queue.items) == 1 else "全部目标"
+                self.log_error(f"连跑 {runs} 局仍未达成{goal}（最大局数 {max_runs}）→ 停止",
                                notify=True)
                 return False
 
@@ -186,6 +188,10 @@ class TrainingFlowMixin:
         多角色时上层（`run`）负责换队长再进来一次。
         """
         self._steps = 0
+        # 日志文件自检（2026-11-10）：GUI 跑任务时 ok 的 FileHandler 会失踪，
+        # 整场运行没有日志落盘。这里每次开局确认一次，没有就由我们补一个
+        # 写 logs/run.log 的 handler（细节见 src/util/log_fallback.py）。
+        ensure_run_log()
         # 暂停中不要开新局（队列模式会在两局之间回来）：等着，继续后接着开
         self.wait_while_paused()
         # MCP / GUI 双入口：定产物目录。MCP 的 runner 已经 reset+verify 过，
@@ -360,13 +366,21 @@ class TrainingFlowMixin:
                     self.sleep(interval)
                     continue
 
-            # ---- 一局的终点：注册球员六步走完（点过左上角「«」返回大厅）才算跑完 ----
+            # ---- 一局的终点：注册球员六步走完、**回到大厅**才算跑完 ----
             # 2026-10-27 用户补充：打完训练赛 → 注册球员 → 编队 → 保存 → 回大厅，
             # 才是完整一局；旧版停在「注册球员」页就算完成，把最后 6 步留给玩家。
+            #
+            # 2026-11-10 修正（用户报「刷完提示后界面又点开训练页」）：旧判据是
+            # 「不在战术板」，靠「战术板 / 首发 / 保存编队」三个**短词做子串匹配**，
+            # 回大厅的过渡帧里「首发」很容易误中 → 这一拍不算收工，继续往下走 handler，
+            # 被 handle_lobby 点了大厅「训练」（实跑 01:06:41 点了 (1203,788)）。
+            # 现在**先认大厅**（`is_lobby`：社团GO / 赛事 / 转一转 / 冠军之路…），
+            # 认到就收工；认不出大厅时再退回旧的「不在战术板」兜底。
             at_board = (self.match_text(texts, "战术板") is not None
                         or self.match_text(texts, "首发") is not None
                         or self.match_text(texts, "保存编队") is not None)
-            if getattr(self, "_register_stage", None) == "back" and not at_board:
+            if getattr(self, "_register_stage", None) == "back" and (
+                    self.is_lobby(texts) or not at_board):
                 self.log_info("注册球员流程完成（已回大厅）→ 本局结束", notify=True)
                 return True
 
@@ -556,10 +570,25 @@ class TrainingFlowMixin:
                       f" / 目标 {queue.target} → {'达标' if met else '未达标，再练一局'}"
                       f"（{queue.summary()}）")
         if queue.finished:
-            self.log_info(f"多角色队列全部达标 → 提前终止（{queue.summary()}）", notify=True)
+            self.log_info(self.queue_finished_message(queue), notify=True)
             return False
         self.switch_captain(queue.captain)
         return True
+
+    def queue_finished_message(self, queue):
+        """队列跑完时的那句提示（用户看的通知）。
+
+        为什么不再一律说「多角色队列」（2026-11-10 用户反馈：只选了一个队长，
+        提示却说多角色队列）：第二栏勾「刷到目标分」时，`captain_queue_spec`
+        派生出的是**只有一项**的队列（`队长:目标分`），机制相同但说法该按项数分岔。
+        """
+        if len(queue.items) == 1:
+            item = queue.items[0]
+            target = item.get("target")
+            if target:
+                return f"已刷到目标分 {target} → 提前终止（{queue.summary()}）"
+            return f"本队列已跑完 → 提前终止（{queue.summary()}）"
+        return f"多角色队列全部达标 → 提前终止（{queue.summary()}）"
 
     def switch_captain(self, name):
         """换队长（只在内存里换）：清流派 + 清上一局的运行期状态。
