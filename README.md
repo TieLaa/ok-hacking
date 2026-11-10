@@ -1,9 +1,6 @@
 # ok-hacking
 
-《篮球少女：飞跃巅峰》Windows 客户端的养成自动化，基于 [ok-script](https://github.com/ok-oldking/ok-script) 构建。
-
-> 感谢 [ok-oldking](https://github.com/ok-oldking) 开源的 ok-script 框架 —— 没有它就没有这个项目；
-> 也感谢 ok-ww / ok-end-field 等参考项目留下的工程实践。
+《篮球少女：飞跃巅峰》Windows 客户端的养成自动化，基于 [ok-script](https://github.com/ok-oldking/ok-script) 构建；感谢 [ok-oldking](https://github.com/ok-oldking) 开源。
 
 - 「hacking」 就是「打手犯规」的意思，双关解放双手，很直白了。
 - 纯vibe coding，代码质量有问题不是我的问题。
@@ -11,6 +8,7 @@
 - 训练优先选有经理的或者队友多的，道具强化看运气。
 - 随机事件默认选第一个；有数值的会判断数学期望。
 - 根据精力和零花钱决定周末去处和消费，有逻辑但不多。
+- 小游戏无法代劳，还得亲自打3星才能自动消费。
 - 刷分效果跟手操也差不太多了，反正我是一点都不手操；定向强化等我找个群里老师学一下逻辑。
 - 适合没时间又菜又爱玩的我们。
 - 强制前台抢鼠标是因为Unity的问题，这一点跟ok-Endfield是一样的。
