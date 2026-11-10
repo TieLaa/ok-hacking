@@ -54,7 +54,7 @@ Defender 提示的地方，CI 无桌面会话，验不了这些。
 
 | 步骤 | 状态 |
 |---|---|
-| 1. 建 public 空仓库 `TieLaa/ok-hacking-update`（launcher 匿名 clone，必须公开） | **待做** |
+| 1. 建 public 空仓库 `TieLaa/ok-hacking-update`（launcher 匿名 clone，必须公开） | 已完成（2026-11-10，空仓库） |
 | 2. 配 secret `UPDATE_REPO_TOKEN`（fine-grained PAT，只授权该仓库） | **待做** |
 | 3. `build.yml` 加回 `Sync Repositories` 步骤（`sync_list: 'deploy.txt'`） | 已完成（钉 `partial-sync-repo@c55d1e59`） |
 | 4. `pyappify.yml` 两个 profile 的 `git_url` 改成该仓库 | 已完成 |
