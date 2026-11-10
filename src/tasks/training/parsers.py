@@ -2164,6 +2164,35 @@ class TrainingParsersMixin:
             slots.add(nearest)
         return slots
 
+    def skill_card_names(self, texts):
+        """三张技能卡**名字行**上的技能名 → `{槽位: 名字}`（认不出就不给）。
+
+        判据和 `skill_card_slots` 同一套（cy≈0.43，cx 离哪个卡心最近），
+        只是把「这一槽有没有名字」变成「这个名字是什么」。用途：日志里记下
+        选的是哪张，事后对账不用再靠点击坐标反推（2026-11-10 核分数差异时
+        就是这么反推的，一局 45 张卡）。
+
+        同一张卡在名字行常被读成多个框（`logs/events/1110-112907`：
+        `['速度强势', '★★', '速', '速度强势']`，`速` 是图标碎片、`★★` 是等级），
+        所以只收「≥2 字、不含 ★/数字/百分号」的名字，同一槽取最长的那个。
+        """
+        out = {}
+        for t in texts:
+            cy = (t.y + t.height / 2) / self.height
+            if abs(cy - SKILL_NAME_CY) > SKILL_NAME_CY_TOL:
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            if not 0.1 <= cx <= 0.9:
+                continue
+            name = t.name.strip()
+            if len(name) < 2 or re.search(r"[★☆0-9%＋+/*]", name):
+                continue
+            idx = min(range(len(Defs.SKILL_CARDS)),
+                      key=lambda i: abs(cx - Defs.SKILL_CARDS[i][0]))
+            if len(name) > len(out.get(idx, "")):
+                out[idx] = name
+        return out
+
     def _card_quality(self, frame, idx):
         """判断技能卡品质，返回 3=彩色 / 2=金色 / 1=白色。
 

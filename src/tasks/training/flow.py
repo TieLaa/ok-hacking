@@ -463,6 +463,12 @@ class TrainingFlowMixin:
             info.pop("attrs", None)
             # 「卡住干预」那一行的上一次结论也别留着（新一局从头数点击）
             info.pop("stuck", None)
+            # 技能是**一局一个角色**的量（`handle_skill_select` 每选一次 +1），
+            # 必须每局清零。2026-11-10 实跑：只在 enable 时清 → 8 局攒成
+            # 「彩1 金37 白9」→ 监控页分数预测 9444，而注册球员页真值 7703
+            # （真值 1 彩 + 4 金 + 2 白 = 325 分，一局只有 5 次三选一）。
+            info.pop("skill_gained", None)
+            info.pop("skill_last", None)
 
     # ---------- 多角色队列（2026-11-04 用户口径） ----------
 

@@ -597,6 +597,7 @@ class MatchHandlers:
             return Defs.SKILL_CARDS[i][1]
 
         best_idx, best_key, best_quality = 0, (-1, -1, -1), 1
+        names = self.skill_card_names(texts)     # 只用于日志/对账，不参与排序
         detail = []
         for i in range(3):
             card_texts = self._card_texts(texts, i)
@@ -607,11 +608,13 @@ class MatchHandlers:
             # （压过两张真金边卡），所以**只能排在品质后面**，不进分数。
             gem = 1 if self.skill_card_item_gem(cx_of(i), cy_of(i)) else 0
             key = (quality, gem, has_pref)
-            detail.append(f"{i + 1}:{labels.QUALITY_LABEL[quality]}/标签{has_pref}"
+            detail.append(f"{i + 1}:{labels.QUALITY_LABEL[quality]}"
+                          f"「{names.get(i, '?')}」/标签{has_pref}"
                           f"/道具{gem}({getattr(self, '_gem_ratio', 0):.3f})")
             if key > best_key:
                 best_idx, best_key, best_quality = i, key, quality
-        self.log_info("技能评分 " + " ".join(detail) + f" → 选第 {best_idx + 1} 张")
+        self.log_info("技能评分 " + " ".join(detail)
+                      + f" → 选第 {best_idx + 1} 张「{names.get(best_idx, '?')}」")
         self.dump_skill_frame(texts)
 
         cx, cy = Defs.SKILL_CARDS[best_idx]
@@ -632,7 +635,8 @@ class MatchHandlers:
         self.info["skill_gained"] = gained
         self.info["skill_last"] = labels.QUALITY_LABEL.get(best_quality, "白")
         self.log_info(
-            f"技能+1（{self.info['skill_last']}）本局累计："
+            f"技能+1（{self.info['skill_last']}"
+            f"「{names.get(best_idx, '?')}」）本局累计："
             f"彩{gained['color']} 金{gained['gold']} 白{gained['white']}")
         return True
 
