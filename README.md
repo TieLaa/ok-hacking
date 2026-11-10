@@ -2,6 +2,9 @@
 
 《篮球少女：飞跃巅峰》Windows 客户端的养成自动化，基于 [ok-script](https://github.com/ok-oldking/ok-script) 构建。
 
+> 感谢 [ok-oldking](https://github.com/ok-oldking) 开源的 ok-script 框架 —— 没有它就没有这个项目；
+> 也感谢 ok-ww / ok-end-field 等参考项目留下的工程实践。
+
 - 「hacking」 就是「打手犯规」的意思，双关解放双手，很直白了。
 - 纯vibe coding，代码质量有问题不是我的问题。
 - 目前只跑通了训练流和扭蛋流，事件的识别远没有达到100%。

@@ -2,6 +2,9 @@
 
 Automation for the Windows client of **Basketball Girls: Leap to the Top** (篮球少女：飞跃巅峰), built on [ok-script](https://github.com/ok-oldking/ok-script).
 
+> Thanks to [ok-oldking](https://github.com/ok-oldking) for open-sourcing the ok-script framework, and to
+> ok-ww / ok-end-field for the engineering practices this project borrows from.
+
 [中文](README.md) · [Docs](docs/en/index.md)
 
 > Not affiliated with the game's publisher. For study and personal use only. Automating an online game may violate its terms of service; bans are possible and are your own risk.
