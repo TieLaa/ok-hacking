@@ -14,7 +14,7 @@
 
 ```
 ┌ 第一栏（connection）  ● PC端 已连接：xxx 1548x871      [开始/暂停] [截图] [重新检测]
-├ 第二栏（captain）      ☐ 指定队长 [▼ 真崎辉世]  ☐ 刷到目标分 [目标分] ☐ 允许吃专注药  快速比赛●
+├ 第二栏（captain）      ☐ 指定队长 [▼ 真崎辉世] [开始/暂停] [■]  ☐ 刷到目标分 [目标分] ☐ 允许吃专注药  快速比赛●
 ├ 主状态卡（hero）      当前进度 第N周 星期X | 精力 120/130 | 六维 | 分数预测 | 技能
 ├ 卡片（cards）         比赛倒计时 / 周末计划 / 今日商店 / 失败率 …
 └ 最近动作（timeline）  时间 | 事件 | 详情 | 结果
@@ -33,7 +33,7 @@
 | type | 键 |
 | --- | --- |
 | `connection` | `height` `title` `meta` `show_run` `run_text` `stop_text`（`starting_text` 已是遗留键，不再使用） |
-| `captain` | `height` `label` `hint` `show_quick_match` `show_auto_training` `start_text` `pause_text` |
+| `captain` | `height` `label` `hint` `show_quick_match` `show_auto_training` `start_text` `pause_text` `show_stop` `stop_size` |
 | `hero` | `height` `kicker` `title` `fallback` `right_ratio` `stats[]`（`label`/`value`/`suffix`/`bar`/`bar_key`/`bar_width`） |
 | `cards` | `height` `items[]`（`id`/`title`/`rows[]`，每行 `[标签, 模板]`） |
 | `timeline` | `title` `max_rows` `time_width` `event_width` |
@@ -67,28 +67,39 @@ def toggle_connection(self):
 「停止＝断开游戏」（停任务 + 暂停执行器 + 关截图会话）、抢前台、`_connected()` 相关的
 测试。现在第一栏只剩上面三行。
 
-## 第二栏【开始 / 继续 / 暂停】＝ 任务卡的【开始】
+## 第二栏【开始 / 继续 / 暂停】＋【■】＝ 任务卡的【开始】与【停止】
 
 ```python
+# 开始/继续/暂停（同一颗，两种文案）
 if enabled and paused:   task.unpause()                        # 框架此时显示 Resume
 elif running:            task.pause()
 else:                    og.app.start_controller.start(task)   # 刷设备/拉游戏，连上后 enable 本任务
+
+# 【■】停止（图标按钮，无文字）
+task.disable()
+task.unpause()
 ```
 
-与框架 `ok/ui/qt/tasks/TaskCard.py:118`（`start_clicked`）+ `:144`（`pause_clicked`）同源。
+与框架 `ok/ui/qt/tasks/TaskCard.py:118`（`start_clicked`）+ `:144`（`pause_clicked`）+
+`:140`（`stop_clicked`）同源。
 
 | 项 | 口径 |
 | --- | --- |
 | 判据 | `task.enabled / paused / running` 三态（`training_active` 驱动按钮文案） |
+| 【■】显隐 | 只看 `task.enabled`（`training_enabled`）—— 与 `TaskCard.update_buttons` 一致：disabled 时那颗 Stop 也是藏起来的 |
 | 未连接 | **不判断**。`start_controller.start(task)` 自己刷设备、必要时拉起游戏 exe，连上后 enable |
 | 防连点 | 无（与任务卡一致） |
 | 抢前台 | 不做（删掉了；真抢前台在执行器线程里由 `GirlsInteraction` 每次点击前做） |
-| 停止 | 没有单独的【■】按钮（2026-11-10 删除）。要停就是再点一次【暂停】 |
+| 停止 | 【■】只停这一个任务：执行器/截图会话/快速比赛都不碰，**配置与注入的队列参数也不清**（任务卡的 Stop 同样不清） |
 
 **副作用（框架设计，不是 bug）**：点第二栏【开始】→ `start_controller.start(task)`
 → `executor.start()` → `communicate.executor_paused.emit(False)` → **第一栏跟着显示【暂停】**。
 启动任何任务都必然启动执行器，所以第一栏跟着变是事实。反方向不成立：第一栏【开始】
 不 enable 任务，第二栏保持【开始】。
+
+**已知边界**：接入游戏那 5~30 秒里点【■】不会拦住接入 —— 框架的 `start_controller`
+没有取消接口，接入走完还会把任务重新 enable。这是框架 `TaskCard` 也有的行为，
+不在监控页补丁（旧的自建【■ 完全停止】曾用定时补刀解决，2026-11-10 删掉了）。
 
 ## 与框架按钮的对应关系
 
@@ -96,6 +107,7 @@ else:                    og.app.start_controller.start(task)   # 刷设备/拉�
 | --- | --- | --- |
 | 第一栏【开始/暂停】 | 起始页【开始(F9)】`StartCard.clicked` | 执行器总开关 |
 | 第二栏【开始/继续/暂停】 | 任务卡【开始】`TaskCard.start_clicked` | 这一个任务的开关 |
+| 第二栏【■】 | 任务卡【停止】`TaskCard.stop_clicked` | 停这一个任务（disable + unpause） |
 
 ## 队长选择
 
@@ -129,7 +141,7 @@ else:                    og.app.start_controller.start(task)   # 刷设备/拉�
 | `week` `day` `stamina` `stamina_max` `stamina_pct` `coin` | 顶栏读数 |
 | `captain` `captain_memory` `style` | 勾选/下拉记忆/当前流派 |
 | `paused` | **执行器**是否暂停（第一栏判据） |
-| `training_running` `training_active` `training_paused` | 任务状态（第二栏判据） |
+| `training_running` `training_active` `training_paused` `training_enabled` | 任务状态（第二栏判据；`training_enabled` 管【■】显隐） |
 | `attrs` `score` | 六维 / 分数预测（六维不齐时 `score` 为 `None`） |
 | `skill_color` `skill_gold` `skill_white` `skill_gained` `skill_last` | 技能数（配置里是开局自带，`gained` 是本局三选一累加） |
 | `quick_enabled` `score_stop` `score_target` `stamina_allowed` | 第二栏设置的回填值 |

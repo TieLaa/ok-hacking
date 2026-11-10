@@ -5939,6 +5939,24 @@ class MonitorButtonActions(unittest.TestCase):
         self.assertFalse(executor.paused)
         self.assertEqual(executor.calls, [])
 
+    def test_stop_disables_task_and_unpauses(self):
+        """第二栏【■】= 框架 `TaskCard.stop_clicked`：`disable()` + `unpause()`。
+
+        只停这一个任务：执行器不碰（那是第一栏的语义），
+        配置和注入的队列参数也不清（任务卡的 Stop 同样不清）。
+        """
+        tab, task, executor, _ = self._tab()
+        task.enabled = True
+        task.running = True
+        task.paused = True
+        tab.stop_auto_training()
+        self.assertIn("disable", task.calls)
+        self.assertIn("unpause", task.calls)
+        self.assertFalse(task.enabled)
+        self.assertFalse(task.paused)
+        self.assertEqual(executor.calls, [])
+        self.assertEqual(task.config["指定队长"], "")
+
     def _fake_app(self, starting=False):
         """给 `og.app.start_controller` 换成一个只记账的假货。"""
         import ok
@@ -6234,6 +6252,9 @@ class MonitorButtons(unittest.TestCase):
             def toggle_auto_training(self):
                 self.log.append("training")
 
+            def stop_auto_training(self):
+                self.log.append("stop")
+
             def set_captain(self, name, memory=""):
                 self.log.append(("captain", name))
                 if memory:
@@ -6246,7 +6267,8 @@ class MonitorButtons(unittest.TestCase):
     def _data(**over):
         """一份最小可用数据（键名 = MonitorTab._collect 的键）。"""
         data = {"captain": "", "connected": False, "paused": True,
-                "training_running": False, "training_active": False}
+                "training_running": False, "training_active": False,
+                "training_enabled": False}
         data.update(over)
         return data
 
@@ -6369,6 +6391,52 @@ class MonitorButtons(unittest.TestCase):
         self.assertTrue(self._same_icon(view._btn_train, FluentIcon.PLAY))
         view.update_data(self._data(training_active=True))
         self.assertTrue(self._same_icon(view._btn_train, FluentIcon.PAUSE))
+
+    def test_second_bar_stop_button_exists_icon_only(self):
+        """【■】是**纯图标**按钮（用户 2026-11-10 口径）：无文字、方形、有图标。"""
+        view, _ = self._view()
+        btn = view._btn_stop
+        self.assertIsNotNone(btn)
+        self.assertEqual(btn.text(), "")
+        self.assertEqual((btn.width(), btn.height()), (30, 30))
+        self.assertFalse(btn.icon().isNull())
+
+    def test_second_bar_stop_follows_task_enabled(self):
+        """照框架 `TaskCard.update_buttons`：enabled 才有【■】，disabled 只剩【开始】。
+
+        `enabled+paused`（挂起）也在 —— 框架那颗 Stop 一样在，点了同样是
+        disable + unpause。
+        """
+        view, _ = self._view()
+        self.assertTrue(view._btn_stop.isHidden())          # 一开始没启用
+        view.update_data(self._data(training_enabled=True, training_active=True))
+        self.assertFalse(view._btn_stop.isHidden())
+        view.update_data(self._data(training_enabled=True, training_paused=True))
+        self.assertFalse(view._btn_stop.isHidden())
+        view.update_data(self._data(training_enabled=False))
+        self.assertTrue(view._btn_stop.isHidden())
+
+    def test_second_bar_stop_click_calls_stop_action(self):
+        """点【■】走 `stop_auto_training`（不是 `toggle_auto_training`）。"""
+        view, actions = self._view()
+        view.update_data(self._data(training_enabled=True, training_active=True))
+        actions.log.clear()
+        view._btn_stop._click_handler()
+        self.assertEqual(actions.log, ["stop"])
+
+    def test_second_bar_stop_icon_is_actually_painted(self):
+        """无文字按钮的坑：`minimumSizeHint` 不给死，qfw 把图标算到按钮外面。
+
+        `PushButton.paintEvent` 的 x = 12 + (width - hint)/2，无文字 hint=106 →
+        30px 按钮上 x = -26，画出来是**纯色白板**。2026-11-07 像素取证过，
+        这里按像素钉住回归（`_IconButton` 钉死 hint=40 → 图标落在中间）。
+        """
+        view, _ = self._view()
+        view.update_data(self._data(training_enabled=True, training_active=True))
+        img = view._btn_stop.grab().toImage()
+        white = sum(1 for x in range(img.width()) for y in range(img.height())
+                    if all(c > 200 for c in img.pixelColor(x, y).getRgb()[:3]))
+        self.assertGreater(white, 20, "图标没画出来（一片纯色按钮底）")
 
 
 

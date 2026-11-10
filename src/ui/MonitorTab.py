@@ -121,6 +121,9 @@ class _Actions(MonitorActions):
     def toggle_auto_training(self):
         self.tab.toggle_auto_training()
 
+    def stop_auto_training(self):
+        self.tab.stop_auto_training()
+
 
 class MonitorTab(CustomTab):
     """左侧导航的「监控」页。"""
@@ -370,6 +373,10 @@ class MonitorTab(CustomTab):
             # 对齐框架 TaskCard.update_buttons 的「enabled+paused → Start(Resume)」。
             "training_paused": (bool(getattr(task, "enabled", False))
                                 and bool(getattr(task, "paused", False))) if task else False,
+            # 任务是否 enabled（判据与框架 TaskCard.update_buttons 一致）：
+            # 第二栏【■ 停止】只在 enabled 时出现 —— disabled 时候框架那颗 Stop
+            # 也是藏起来的，只剩【开始】。
+            "training_enabled": bool(getattr(task, "enabled", False)) if task else False,
             "attrs": attrs,
             "score": score,
             "skill_color": skills["color"],
@@ -795,6 +802,31 @@ class MonitorTab(CustomTab):
                 og.app.start_controller.start(task)
         except Exception as e:  # noqa: BLE001
             logger.error(f"自动训练开关失败: {e}")
+        self._update_data()
+
+    def stop_auto_training(self):
+        """第二栏【■ 停止】—— 与框架 `TaskCard.stop_clicked` 逐字同源（用户 2026-11-10 口径）。
+
+        ```python
+        self.task.disable()
+        self.task.unpause()
+        ```
+        只停这一个任务：
+        - 执行器、截图会话、快速比赛**都不碰**（执行器归第一栏）；
+        - 配置和「本次注入的队列参数」**不清**（任务卡的 Stop 也不清）。
+          想让注入的队列作废，改一次队长即可（`set_captain` 会清 `_launch_queue`）。
+        """
+        task = self._task()
+        if task is None:
+            logger.warning("监控页：没找到训练任务，停止未执行")
+            return
+        try:
+            task.disable()
+            task.unpause()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"停止自动训练失败: {e}")
+        else:
+            logger.info("监控页：自动训练 → 停止（task.disable + unpause）")
         self._update_data()
 
     def _task_by_name(self, name):
