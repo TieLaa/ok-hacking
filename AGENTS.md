@@ -30,6 +30,8 @@
   当前实例（供对照，不是判据）：Python 侧用 `$env:PYTHONUTF8="1"`（或 `-X utf8`，不继承子进程）固定自己的 stdio；PowerShell 侧 `|`、`2>`、`*>`、`2>&1` 都会替你转一次文本，不转的只有「不 pipe」和 stdout 的 `>`。踩坑细节见 `docs/PROMPT_PLAYBOOK.md`「跨边界不猜编码」。
   <!-- 变更 2026-11-10 · opencode · 用通用规则替换「跑 Python 前固定 UTF-8」特例 · 特例越加越满、换个语法就失效；通用规则给判断问句，pipe/重定向/subprocess/文件/终端由同一句覆盖 -->
 - **MCP 开发循环**（ok-script 2.0.16+）：改已注册任务用 `list_tasks` → 原地改源码 → `reload_tasks(task_ids)` → 用 `tools/mcp/probe.py` / `training.py` 验证，不要重启 GUI。任务类必须保持 `reset_to_start` / `verify_start_state` 可用（`src/tasks/attempt.py`），业务逻辑不复制进 harness。流程见 `docs/MCP_DEV.md`。
+- **提交信息写给用户看。** subject 是一句话的「用户能感知的变化」——发版时 pyappify 直接拿两个 tag 之间的提交生成更新提示，`handler`、`TaskExecutor`、`ci/test/chore` 这些内部词会原样出现在用户面前。技术细节放正文；纯内部改动（测试 / CI / 死代码）发版前用 `git rebase -i` 合并或压掉。
+  <!-- 变更 2026-11-10 · opencode · 新增提交信息口径 · 安装器更新提示由 tag 之间的 commit 生成，内部词会直接暴露给用户；v0.1.9 前已按此口径重写过一批提交 -->
 - 踩到新坑时，把「下次该怎么说」补进 `docs/PROMPT_PLAYBOOK.md`，不要只改代码。
 
 ## 开跑指令（用户 2026-11-07 口径）
