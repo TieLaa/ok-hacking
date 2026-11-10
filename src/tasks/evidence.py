@@ -95,6 +95,7 @@ class EvidenceSink:
         self.root = ""          # 本次运行的产物根
         self.round_id = ""      # 当前局ID
         self.round_dir = ""     # 当前局目录（绝对路径）
+        self.save = True        # 是否落盘（安装包默认关，见 config「保存调试存证」）
         self._last_snap = 0.0   # 事件存帧限流
         self._meta = {}
         self._log = None        # 存证失败时用任务自己的 log_debug 打一行
@@ -120,15 +121,25 @@ class EvidenceSink:
         return self.root
 
     def begin_round(self, *, captain="", handover=False, round_no=0,
-                    style="", entry="GUI", keep_days=3):
+                    style="", entry="GUI", keep_days=3, save=True):
         """开一局：清旧目录 → 建新目录 → 写 meta.json。
 
         返回局目录的绝对路径。时间戳取**调用时刻**，调用点必须在
         `recover_to_lobby()` **之后**（回大厅可能几十秒，那段时间不属于这一局）。
+
+        `save=False` = 这一局不落盘（安装包默认）：旧目录照常清理，
+        但不建目录、不写 meta、后续所有 dump 直接返回。
         """
         if not self.root:
             self.begin_run()
         self.prune(keep_days)
+
+        self.save = bool(save)
+        if not self.save:
+            self.round_id = ""
+            self.round_dir = ""
+            self._meta = {}
+            return ""
 
         parts = [_stamp()]
         if handover:
@@ -208,6 +219,8 @@ class EvidenceSink:
 
     def snap_event(self, handler, texts, frame=None, clicks=None):
         """事件级截图 + JSON（报告页「事件 ↔ 截图」用）。同一秒最多一张。"""
+        if not self.save:
+            return None
         now = time.time()
         if now - self._last_snap < 1.0:
             return None
@@ -230,6 +243,8 @@ class EvidenceSink:
 
     def dump_unknown(self, texts, tag, frame=None, step=0):
         """完全认不出来的界面：jpg + OCR 文本（文本才是排查时真正读的东西）。"""
+        if not self.save:
+            return None
         try:
             base = os.path.join(self._sub("unknown"), f"{_stamp()}_{tag}_s{step}")
             if frame is not None:
@@ -242,6 +257,8 @@ class EvidenceSink:
 
     def dump_unmark(self, texts, tag, frame=None, step=0, cards=None, picked=None, note=""):
         """未标注样本：按品质色猜着选的页面，三件套 jpg/txt/json。"""
+        if not self.save:
+            return None
         try:
             base = os.path.join(self._sub("unmark"), f"{_stamp()}_{tag}_s{step}")
             if frame is not None:
@@ -261,6 +278,8 @@ class EvidenceSink:
 
     def dump_debug(self, texts, tag, frame=None, summary="", actions=None):
         """点不动 / 异常的调试包：frame.jpg + ocr.txt + actions.txt + threads.txt。"""
+        if not self.save:
+            return None
         try:
             folder = self._sub("debug", f"{_stamp()}_{tag}")
             if frame is not None:
@@ -281,6 +300,8 @@ class EvidenceSink:
 
     def dump_frame(self, kind, texts, frame=None, idx=0, header=""):
         """限流校准帧（技能三选一 / 炒股 / 科目页）：`<kind><序号>` 由调用方管。"""
+        if not self.save:
+            return None
         try:
             stamp = _stamp()
             folder = self._sub("debug")
@@ -300,6 +321,8 @@ class EvidenceSink:
 
     def click(self, record):
         """每次点击一行，追加到全局 `logs/clicks.jsonl`（带 round）。"""
+        if not self.save:
+            return
         try:
             os.makedirs(os.path.dirname(CLICK_LOG), exist_ok=True)
             line = dict(record)

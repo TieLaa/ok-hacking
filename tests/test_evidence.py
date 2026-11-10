@@ -261,5 +261,41 @@ class DailyLogRetention(unittest.TestCase):
         self.assertTrue(os.path.exists(old))
 
 
+class SaveOff(unittest.TestCase):
+    """安装包默认关存证：`begin_round(save=False)` 之后一个字节都不该落盘。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="ok-evidence-off-")
+        self._click_log = evidence.CLICK_LOG
+        evidence.CLICK_LOG = os.path.join(self.tmp, "clicks.jsonl")
+        self.sink = evidence.EvidenceSink()
+        self.sink.begin_run(self.tmp)
+        self.frame = np.zeros((120, 160, 3), dtype=np.uint8)
+
+    def tearDown(self):
+        evidence.CLICK_LOG = self._click_log
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_save_off_writes_nothing(self):
+        path = self.sink.begin_round(captain="野上泷", save=False, keep_days=0)
+        self.assertEqual(path, "")
+        self.assertEqual(os.listdir(self.tmp), [])
+
+        self.assertIsNone(self.sink.snap_event("handle_x", [], frame=self.frame))
+        self.assertIsNone(self.sink.dump_unknown([], "x", frame=self.frame))
+        self.assertIsNone(self.sink.dump_unmark([], "x", frame=self.frame))
+        self.assertIsNone(self.sink.dump_debug([], "x", frame=self.frame))
+        self.assertIsNone(self.sink.dump_frame("subject", [], frame=self.frame))
+        self.sink.click({"name": "x", "x": 1, "y": 2})
+
+        self.assertEqual(os.listdir(self.tmp), [])
+        self.assertFalse(os.path.exists(evidence.CLICK_LOG))
+
+    def test_save_on_still_works(self):
+        path = self.sink.begin_round(captain="野上泷", save=True, keep_days=0)
+        self.assertTrue(os.path.isdir(path))
+        self.assertTrue(self.sink.dump_unknown([], "x", frame=self.frame))
+
+
 if __name__ == "__main__":
     unittest.main()
