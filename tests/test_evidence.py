@@ -168,5 +168,52 @@ class PruneSafety(unittest.TestCase):
         self.assertTrue(os.path.exists(path))
 
 
+class ClickRetention(unittest.TestCase):
+    """点击流水按同一保留期**裁行**：文件永不删，只删过期行。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="ok-clicks-")
+        self._click_log = evidence.CLICK_LOG
+        evidence.CLICK_LOG = os.path.join(self.tmp, "clicks.jsonl")
+
+    def tearDown(self):
+        evidence.CLICK_LOG = self._click_log
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write(self, days_ago_list):
+        now = time.time()
+        with open(evidence.CLICK_LOG, "w", encoding="utf-8") as f:
+            for days in days_ago_list:
+                f.write(json.dumps({"at": now - days * 86400, "name": "x"}) + "\n")
+
+    def _lines(self):
+        with open(evidence.CLICK_LOG, encoding="utf-8") as f:
+            return [line for line in f if line.strip()]
+
+    def test_old_lines_trimmed(self):
+        self._write([10, 9, 1])
+        trimmed, kept = evidence.trim_clicks(3)
+        self.assertEqual((trimmed, kept), (2, 1))
+        self.assertEqual(len(self._lines()), 1)
+
+    def test_all_fresh_is_noop(self):
+        self._write([2, 1, 0])
+        self.assertEqual(evidence.trim_clicks(3), (0, 3))
+        self.assertEqual(len(self._lines()), 3)
+
+    def test_zero_days_keeps_everything(self):
+        self._write([100, 50])
+        self.assertEqual(evidence.trim_clicks(0), (0, 0))
+        self.assertEqual(len(self._lines()), 2)
+
+    def test_unparsable_line_survives(self):
+        self._write([10, 1])
+        with open(evidence.CLICK_LOG, "a", encoding="utf-8") as f:
+            f.write("这不是 JSON\n")
+        trimmed, _kept = evidence.trim_clicks(3)
+        self.assertEqual(trimmed, 1)
+        self.assertIn("这不是 JSON", "".join(self._lines()))
+
+
 if __name__ == "__main__":
     unittest.main()

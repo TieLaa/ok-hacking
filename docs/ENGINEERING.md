@@ -127,11 +127,13 @@ GUI 运行：logs/<局ID>/{events,unknown,unmark,debug}/ + meta.json
 
 - 运行时：配置项 `日志保留天数`（默认 3，`0` = 不清理），每局开头清一次
   超期的**整局目录**。安全阀：名字要像局ID、目录里必须有
-  `events|unknown|unmark|debug` 之一 —— 所以 `clicks.jsonl`、`reports/`、
-  `connections/`、`docs/shots/` 不可能被删。
+  `events|unknown|unmark|debug` 之一 —— 所以 `reports/`、`connections/`、
+  `docs/shots/` 不可能被删。
+- `clicks.jsonl` 走**同一保留期裁行**（`evidence.trim_clicks`：文件永不删，
+  只删 `at` 超期的行；第一行没超期就整份跳过，不做无谓重写）。
 - 手工：`tools/prune_logs.py`（默认 dry-run）清老平铺结构，`--no-rounds` 可跳过
   新结构；`logs/mcp` 留最近 10 次 run；总量上限 1.5 GB；有 run 在跑时拒绝 `--apply`。
-- 永不删：`docs/shots/`（回归语料）、`logs/clicks.jsonl`、`logs/reports/`、
+- 永不删：`docs/shots/`（回归语料）、`logs/reports/`（会被覆盖）、
   `logs/mcp/connections/`、局目录的 `meta.json`。
 - 2026-11-10 一次性清理：老平铺结构（`logs/events|unknown|unmark|debug/`，10.7 GB）
   与开发期残留（`run_session*`、`live*`、`state_check*`、`topbar/`、`history/`、

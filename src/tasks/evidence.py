@@ -27,8 +27,13 @@
 把「扫一层目录」换成「扫递归」，判据和回归语料都不用动。
 
 保留期：每局开头清一次 `日志保留天数` 之前建好的**整局目录**。只删
-「名字像局ID + 里面确实有那四个子目录之一」的目录，`clicks.jsonl`、
-`reports/`、`mcp/connections/`、`docs/shots/` 都不在扫描范围内。
+「名字像局ID + 里面确实有那四个子目录之一」的目录，`reports/`、
+`mcp/connections/`、`docs/shots/` 都不在扫描范围内。
+
+`clicks.jsonl` 是唯一的例外处理：它在 `logs/` 根、不在任何局目录里，
+所以**按同一保留期裁行**（`trim_clicks`：文件永不删，只删过期行）——
+不裁的话它无界增长（实测 14 天 10.5 万行 / 15 MB）。
+
 用户 2026-11-10 口径：**不做 jpg 开关** —— 真需要调试时没有图更麻烦，
 靠按局清理控制体积。
 """
@@ -67,6 +72,60 @@ def _safe(name):
 
 def _texts_block(texts):
     return "\n".join(f"{t.name}\t({t.x},{t.y},{t.width},{t.height})" for t in texts or [])
+
+
+def trim_clicks(keep_days=3, log_path=None):
+    """裁掉点击流水里**超过保留期**的行；文件本身永不删。
+
+    为什么要裁：`clicks.jsonl` 是全局单文件（跨局追加），不裁就无界增长
+    （实测 14 天 10.5 万行 / 15 MB）。它不在任何局目录里，所以局目录清理管不到它。
+
+    省事的判据：第一行是最老的 —— 它都没超期就直接返回，不做一次 15 MB 的重写。
+    解析不了的行**保留**（别顺手把证据毁了）。
+    返回 (删掉的行数, 保留的行数)。
+    """
+    keep_days = int(keep_days or 0)
+    path = log_path or CLICK_LOG
+    if keep_days <= 0 or not os.path.isfile(path):
+        return (0, 0)
+    cutoff = time.time() - keep_days * 86400
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return (0, 0)
+    if not lines:
+        return (0, 0)
+
+    def fresh(line):
+        try:
+            at = json.loads(line).get("at")
+        except ValueError:
+            return True
+        return not isinstance(at, (int, float)) or at >= cutoff
+
+    try:
+        oldest = json.loads(lines[0]).get("at")
+    except ValueError:
+        oldest = None
+    if isinstance(oldest, (int, float)) and oldest >= cutoff:
+        return (0, len(lines))
+
+    kept = [line for line in lines if fresh(line)]
+    if len(kept) == len(lines):
+        return (0, len(lines))
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.writelines(kept)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return (0, len(lines))
+    return (len(lines) - len(kept), len(kept))
 
 
 def write_jpg(path, frame):
@@ -313,8 +372,9 @@ class EvidenceSink:
     # ---------- 保留期 ----------
 
     def prune(self, keep_days=3):
-        """删掉 `keep_days` 天之前的**整局目录**；0 = 不清理。
+        """删掉 `keep_days` 天之前的**整局目录**，并裁掉点击流水里的过期行。
 
+        0 = 不清理。
         安全阀有三道：名字必须像局ID、里面必须有 `events|unknown|unmark|debug`
         之一、必须是目录。所以 `clicks.jsonl` / `reports/` / `mcp/connections/`
         / `connections` / `docs/shots` 都不可能被误删。
@@ -344,6 +404,7 @@ class EvidenceSink:
                     removed.append(path)
                 except OSError:
                     continue
+        trim_clicks(keep_days=keep_days)
         return removed
 
     def _round_parents(self):

@@ -18,10 +18,11 @@
     2. events：报告页（tools/report_web.py）用的截图，保留最近 --days 天。
     3. debug：handler 判据的调试帧，保留最近 --days 天。
     4. 局目录（新结构）：超过 --days 天的**整个目录**删掉。
-    5. mcp/<run_id>：最近 --keep-runs 次运行的 run.log / status.json 全留（那是运行
+    5. 点击流水 clicks.jsonl：按同一 --days **裁行**（文件本身永不删）。
+    6. mcp/<run_id>：最近 --keep-runs 次运行的 run.log / status.json 全留（那是运行
        记录的证据链），frames/ 按天数删。
-    6. 总量兜底：清完仍超过 --max-gb，就从最老的 jpg 开始删到低于上限。
-    7. **永不删**：docs/shots（判据回归语料）、logs/clicks.jsonl、logs/reports、
+    7. 总量兜底：清完仍超过 --max-gb，就从最老的 jpg 开始删到低于上限。
+    8. **永不删**：docs/shots（判据回归语料）、logs/reports、
        logs/mcp/connections、局目录的 meta.json。
 
 安全阀：
@@ -41,6 +42,10 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(ROOT, "logs")
+
+sys.path.insert(0, ROOT)
+# 落盘口径的唯一来源：点击流水的路径与裁行规则都在这里（2026-11-10 归口）
+from src.tasks.evidence import CLICK_LOG, trim_clicks  # noqa: E402
 #: 局目录名：`1110-091635[_接手][_第N局][_队长]`
 ROUND_RE = re.compile(r"^\d{4}-\d{6}_")
 #: 局目录里必然存在的子目录（安全阀：没有就绝不整目录删）
@@ -164,6 +169,25 @@ def collect_rounds(days):
     return todo
 
 
+def clicks_plan(keep_days):
+    """统计 clicks.jsonl 会被裁掉多少行（只数不改）。返回 (行数, 预估体积)。"""
+    if not os.path.isfile(CLICK_LOG):
+        return 0, 0
+    cutoff = time.time() - keep_days * 86400
+    n = 0
+    size = 0
+    with open(CLICK_LOG, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                at = json.loads(line).get("at")
+            except ValueError:
+                continue
+            if isinstance(at, (int, float)) and at < cutoff:
+                n += 1
+                size += len(line.encode("utf-8"))
+    return n, size
+
+
 def collect_mcp_runs(keep_runs):
     """mcp/<run_id>/ 里只留最近 keep_runs 次的 run.log + status.json。"""
     runs = sorted(glob.glob(os.path.join(LOG_DIR, "mcp", "*", "status.json")),
@@ -256,6 +280,10 @@ def main():
         by_reason[key] = (n + 1, s + size)
     for key, (n, s) in sorted(by_reason.items()):
         print(f"  {key:<10} {n:>6} 项  {human(s):>10}")
+    n_clicks, clicks_size = clicks_plan(keep_days)
+    if n_clicks:
+        print(f"  点击流水   {n_clicks:>6} 行  {human(clicks_size):>10}（只裁行，文件保留）")
+        freed += clicks_size
     print(f"预计清理后：{human(max(before - freed, 0))}")
 
     if not args.apply:
@@ -278,6 +306,9 @@ def main():
         except OSError as e:
             print(f"  删不掉 {path}: {e}")
     print(f"\n已删除 {removed} 项，logs/ 现在 {human(total_size())}")
+    trimmed, kept = trim_clicks(keep_days)
+    if trimmed:
+        print(f"点击流水裁掉 {trimmed} 行（保留 {kept} 行），现在 {human(total_size())}")
     return 0
 
 
