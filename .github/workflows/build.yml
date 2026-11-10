@@ -74,22 +74,6 @@ jobs:
           path.write_text(new_text, encoding='utf-8')
           print(f'version stamped: {tag}')
 
-      # 把 deploy.txt 列出的运行时文件按 tag 同步到「更新仓库」。
-      # 玩家 launcher 只 clone 这个仓库（pyappify.yml 的 git_url 指向它）：
-      # 少了这一步，玩家会把自己 clone 成整个源码仓库（含 docs/shots、tests、.agents）。
-      # 与 pyappify.yml 里的 git_url 必须指向同一个仓库。
-      - name: Sync Repositories
-        id: sync
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: ok-oldking/partial-sync-repo@c55d1e590ccab2a14669e9d5da291dde8ee282f3
-        with:
-          repos: |
-            https://TieLaa:${{ secrets.UPDATE_REPO_TOKEN }}@github.com/TieLaa/ok-hacking-update.git
-          sync_list: 'deploy.txt'
-          tag: ${{ github.ref_name }}
-          gitignore_file: '.update_repo_gitignore'
-          show_author: true
-
       # 钉到 commit（2026-11-09 的 master），不用 @master 以免上游改动直接影响发布
       - name: Build with PyAppify Action
         id: build-app

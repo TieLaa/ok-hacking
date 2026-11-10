@@ -18,14 +18,14 @@
                  ├─ pip install --no-deps -r requirements.txt
                  ├─ 跑 tests/*.py（任一文件失败即 fail）
                  ├─ Stamp version from tag   （把 tag 写进 src/config.py 的 version）
-                 ├─ Sync Repositories：按 deploy.txt 灌进 ok-hacking-update 并打同名 tag
                  ├─ pyappify-action（钉 commit + v1.2.4）→ 产出 pyappify_dist/*-setup.exe
                  └─ softprops/action-gh-release 把这些 exe 挂到 Release
+
+更新仓库（ok-hacking-update）由它自己的 workflow 反向拉取，不在本链路里 —— 见下一节。
 ```
 
 玩家只下 Release 里的 `*-setup.exe`；装好之后的更新由 launcher 去 `pyappify.yml` 的 `git_url` 拉增量。
-`pyappify.yml` 两个 profile 已指向 `TieLaa/ok-hacking-update`（2026-11-10）；
-**该仓库还没建**，建好并配好 `UPDATE_REPO_TOKEN` 之前，CI 的 Sync 步骤会失败。
+`pyappify.yml` 两个 profile 已指向 `TieLaa/ok-hacking-update`（2026-11-10），该仓库已建。
 
 ## 本地先打一次包（不用等 CI）
 
@@ -45,30 +45,48 @@ Defender 提示的地方，CI 无桌面会话，验不了这些。
 
 发布前最低限度要过一遍：本地 `-c setup` 能出包 → 装上 → 起 GUI → 跑一轮训练。
 
-## 更新仓库（还没建，建之前玩家会下全仓）
+## 更新仓库（`ok-hacking-update`，由它自己拉源仓库）
 
 `pyappify.yml` 的 `git_url` 指向**只含运行时文件**的 `ok-hacking-update`（内容由 `deploy.txt` 决定），
 而不是源仓库。参考项目（ok-ww / ok-ef / ok-nte / ok-duet）都是这个结构。
 
-当前状态（2026-11-10）：
+**同步方向是反的**（2026-11-10 改）：不是源仓库 CI 往外推，而是更新仓库自己的
+`workflow_dispatch` / 每日定时任务去拉公开的源仓库。这样**不需要 PAT、不需要 GitHub App**——
+`GITHUB_TOKEN` 推自己所在的仓库是合法的，跨仓库推才需要令牌。
 
-| 步骤 | 状态 |
+```
+源仓库推 v* tag
+   └─► 更新仓库的 .github/workflows/sync.yml（手动 Run workflow 或每天 03:17 UTC）
+          ├─ 按 tag clone 源仓库（公开，匿名可读）
+          ├─ 逐行读 deploy.txt 拷文件；源仓库不存在的条目（如 ok/）跳过
+          └─ commit + 打同名 tag + push 到 main
+```
+
+前提与状态（2026-11-10）：
+
+| 前提 | 状态 |
 |---|---|
-| 1. 建 public 空仓库 `TieLaa/ok-hacking-update`（launcher 匿名 clone，必须公开） | 已完成（2026-11-10，空仓库） |
-| 2. 配 secret `UPDATE_REPO_TOKEN`（fine-grained PAT，只授权该仓库） | **待做** |
-| 3. `build.yml` 加回 `Sync Repositories` 步骤（`sync_list: 'deploy.txt'`） | 已完成（钉 `partial-sync-repo@c55d1e59`） |
-| 4. `pyappify.yml` 两个 profile 的 `git_url` 改成该仓库 | 已完成 |
+| `TieLaa/ok-hacking-update` 建为 public | 已完成 |
+| `sync.yml` 与 README 入库 | 已完成 |
+| `pyappify.yml` 的 `git_url` 指向该仓库 | 已完成 |
+| **源仓库 `TieLaa/ok-hacking` 改为 public** | **待做**（否则更新仓库读不到源；玩家也下不了 Release 附件） |
+| 源仓库的 `build.yml` 不再需要 Sync 步骤 | 已删除（避免依赖 PAT） |
 
-第 1、2 步没做完就推 tag，CI 会在 Sync 步骤失败（测试/打包不受影响，但不会出 Release）。
+发版顺序：推 `v*` tag → CI 出包并建 Release → 到更新仓库 Actions 点一次
+**Sync from source**（填同一个 tag）→ 玩家 launcher 才能按新 tag 拉到增量。
+漏了最后一步，已安装的用户更新时会停在旧版本。
 
-第三方 Action 一律钉 commit SHA（`pyappify-action` 与 `partial-sync-repo` 均已钉），不要用 `@master`。
+第三方 Action 一律钉 commit SHA（`pyappify-action` 已钉），不要用 `@master`。
 
 ## 发版
 
 ```powershell
-git tag v0.1.2
-git push origin v0.1.2      # 只推 tag，CI 自动出包并建 Release
+git tag -a v0.1.8 -m "v0.1.8"
+git push origin v0.1.8      # 只推 tag，CI 自动出包并建 Release
 ```
+
+推完 tag 还要做**第二步**：到 https://github.com/TieLaa/ok-hacking-update/actions
+点 **Sync from source**，填同一个 tag。漏了这步，已安装用户的更新源会停在旧版本。
 
 `v0.1.0` / `v0.1.1` 是发布链路修好之前的旧 tag，**不要推它们** —— 那时的 `build.yml` 还指向模板作者的仓库。
 
