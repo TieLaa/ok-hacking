@@ -1,136 +1,311 @@
-"""框选头像生成图标（v2：固定大小方框，拖着走，不要求拖边）。
+"""框选头像生成图标（v3：Qt 版）。
 
-v1 的自由拖边在某些机器上收不到鼠标事件，改成「整块方块跟着鼠标走」：
+前两版都基于 OpenCV HighGUI，鼠标事件在这台机器上都收不到：
+v1 拖边、v2 整块跟鼠标，都表现为「拖不动」。HighGUI 的鼠标回调在
+部分 Windows 环境下直接不进来，改参数救不回来，所以换 PySide6
+（项目本来就有，GUI 也是它）。
 
 操作：
-    鼠标左键按住拖动   移动方块
-    方向键             微调 1px（Shift+方向 = 10px）
-    + / -              放大 / 缩小
-    n / p              下一张 / 上一张截图
-    Enter              确认，生成 icons/icon.png + icon.ico
-    Esc                退出
+    鼠标左键拖动        移动圆框（点在框外 = 直接把框挪到点上）
+    滚轮 / + / -        放大 / 缩小
+    W/A/S/D             大调 50px
+    方向键              微调 1px（Shift+方向 = 10px）
+    n / p               下一张 / 上一张截图
+    Enter               确认，生成 icons/icon.png + icon.ico
+    Esc                 退出
 """
 
 import glob
 import os
 import sys
 
-import cv2
 from PIL import Image, ImageDraw
+from PySide6 import QtCore, QtGui, QtWidgets
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICON_PNG = os.path.join(ROOT, "icons", "icon.png")
 ICON_ICO = os.path.join(ROOT, "icons", "icon.ico")
 
-WINDOW = "pick icon  [drag] move  [wasd] nudge  [+/-] size  [n/p] frame  [Enter] save"
-STATE = {
-    "i": 0,
-    "frame": None,
-    "cx": 0,
-    "cy": 0,
-    "side": 260,
-    "grab": None,      # 鼠标按下时 光标与方框中心的偏移
-}
+MIN_SIDE = 60
+MAX_SIDE = 900
 
 
-def clamp_box():
-    f = STATE["frame"]
-    h, w = f.shape[:2]
-    half = STATE["side"] // 2
-    STATE["cx"] = min(max(STATE["cx"], half), w - half)
-    STATE["cy"] = min(max(STATE["cy"], half), h - half)
+def pil_to_qimage(img):
+    """PIL(RGBA) → QImage；必须 copy()，否则 bytes 被回收后画面是黑的。"""
+    img = img.convert("RGBA")
+    return QtGui.QImage(img.tobytes("raw", "RGBA"), img.width, img.height,
+                        QtGui.QImage.Format_RGBA8888).copy()
 
 
-def on_mouse(event, x, y, _flags, _param):
-    if STATE["frame"] is None:
-        return
-    if event == cv2.EVENT_LBUTTONDOWN:
-        STATE["grab"] = (x - STATE["cx"], y - STATE["cy"])
-    elif event == cv2.EVENT_MOUSEMOVE and STATE["grab"] is not None:
-        dx, dy = STATE["grab"]
-        STATE["cx"], STATE["cy"] = x - dx, y - dy
-        clamp_box()
-    elif event == cv2.EVENT_LBUTTONUP:
-        STATE["grab"] = None
-
-
-def box():
-    half = STATE["side"] // 2
-    return (STATE["cx"] - half, STATE["cy"] - half, STATE["cx"] + half, STATE["cy"] + half)
-
-
-def save_icon(frame, b):
-    x0, y0, x1, y1 = b
-    crop = frame[y0:y1, x0:x1]
-    rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-    img = Image.fromarray(rgb).convert("RGBA").resize((320, 320), Image.LANCZOS)
+def mask_circle(img, size=256):
+    """居中裁成正方形 → 缩放 → 圆形遮罩（与存盘成品同一套参数）。"""
+    w, h = img.size
+    side = min(w, h)
+    left, top = (w - side) // 2, (h - side) // 2
+    img = img.crop((left, top, left + side, top + side)).resize((320, 320), Image.LANCZOS)
     out = Image.new("RGBA", (320, 320), (0, 0, 0, 0))
     mask = Image.new("L", (320, 320), 0)
     ImageDraw.Draw(mask).ellipse((0, 0, 319, 319), fill=255)
     out.paste(img, (0, 0), mask)
-    out = out.resize((256, 256), Image.LANCZOS)
+    return out.resize((size, size), Image.LANCZOS)
+
+
+def save_icon(img, b):
+    """按框裁图 → 圆形遮罩 → 写 png + ico（ico 保留多尺寸）。"""
+    x0, y0, x1, y1 = b
+    out = mask_circle(img.crop((x0, y0, x1, y1)))
     out.save(ICON_PNG)
     out.save(ICON_ICO, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
     return x0, y0, x1, y1
 
 
+class Canvas(QtWidgets.QWidget):
+    """左半边：显示整帧 + 圆框，负责鼠标拖动。"""
+
+    moved = QtCore.Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(880, 560)
+        self.img = None
+        self.cx = self.cy = 0
+        self.side = 300
+        self.grab = None
+        self.setMouseTracking(True)
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+
+    def set_image(self, img):
+        self.img = img
+        self.cx, self.cy = img.width // 2, img.height // 2
+        self.clamp()
+        self.update()
+        self.moved.emit()
+
+    def box(self):
+        half = self.side // 2
+        return (self.cx - half, self.cy - half, self.cx + half, self.cy + half)
+
+    def clamp(self):
+        if not self.img:
+            return
+        half = self.side // 2
+        self.cx = min(max(self.cx, half), max(self.img.width - half, half))
+        self.cy = min(max(self.cy, half), max(self.img.height - half, half))
+
+    def set_side(self, side):
+        self.side = int(min(max(side, MIN_SIDE), MAX_SIDE))
+        self.clamp()
+        self.update()
+        self.moved.emit()
+
+    def scale(self):
+        """图片 → 控件的缩放比例（保持比例，居中留边）。"""
+        if not self.img:
+            return 1.0, 0.0, 0.0
+        s = min(self.width() / self.img.width, self.height() / self.img.height)
+        ox = (self.width() - self.img.width * s) / 2
+        oy = (self.height() - self.img.height * s) / 2
+        return s, ox, oy
+
+    def to_image(self, pos):
+        s, ox, oy = self.scale()
+        return (pos.x() - ox) / s, (pos.y() - oy) / s
+
+    def paintEvent(self, _e):
+        p = QtGui.QPainter(self)
+        p.fillRect(self.rect(), QtGui.QColor("#15181c"))
+        if not self.img:
+            return
+        s, ox, oy = self.scale()
+        rect = QtCore.QRectF(ox, oy, self.img.width * s, self.img.height * s)
+        p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+        p.drawImage(rect, pil_to_qimage(self.img))
+
+        # 圆框外的部分压暗，让「最后裁到哪」一眼可见
+        x0, y0, x1, y1 = self.box()
+        circle = QtCore.QRectF(ox + x0 * s, oy + y0 * s, (x1 - x0) * s, (y1 - y0) * s)
+        veil = QtGui.QPainterPath()
+        veil.addRect(rect)
+        cut = QtGui.QPainterPath()
+        cut.addEllipse(circle)
+        p.fillPath(veil.subtracted(cut), QtGui.QColor(0, 0, 0, 120))
+        p.setPen(QtGui.QPen(QtGui.QColor("#22d3ee"), 2))
+        p.drawEllipse(circle)
+        p.setPen(QtGui.QColor("#b9bfca"))
+        p.drawText(12, 22, f"({x0}, {y0})  side={x1 - x0}  拖动圆心 / 滚轮改大小")
+
+    def mousePressEvent(self, e):
+        if not self.img or e.button() != QtCore.Qt.LeftButton:
+            return
+        ix, iy = self.to_image(e.position())
+        half = self.side // 2
+        inside = abs(ix - self.cx) <= half and abs(iy - self.cy) <= half
+        if inside:
+            self.grab = (ix - self.cx, iy - self.cy)
+        else:
+            self.cx, self.cy = int(ix), int(iy)
+            self.grab = (0, 0)
+            self.clamp()
+            self.update()
+            self.moved.emit()
+
+    def mouseMoveEvent(self, e):
+        if self.grab is None:
+            return
+        ix, iy = self.to_image(e.position())
+        self.cx, self.cy = int(ix - self.grab[0]), int(iy - self.grab[1])
+        self.clamp()
+        self.update()
+        self.moved.emit()
+
+    def mouseReleaseEvent(self, _e):
+        self.grab = None
+
+    def wheelEvent(self, e):
+        self.set_side(self.side + (20 if e.angleDelta().y() > 0 else -20))
+
+    def keyPressEvent(self, e):
+        k = e.key()
+        big = 50 if not (e.modifiers() & QtCore.Qt.ShiftModifier) else 200
+        step = 10 if e.modifiers() & QtCore.Qt.ShiftModifier else 1
+        if k in (QtCore.Qt.Key_W,):
+            self.cy -= big
+        elif k in (QtCore.Qt.Key_S,):
+            self.cy += big
+        elif k in (QtCore.Qt.Key_A,):
+            self.cx -= big
+        elif k in (QtCore.Qt.Key_D,):
+            self.cx += big
+        elif k == QtCore.Qt.Key_Up:
+            self.cy -= step
+        elif k == QtCore.Qt.Key_Down:
+            self.cy += step
+        elif k == QtCore.Qt.Key_Left:
+            self.cx -= step
+        elif k == QtCore.Qt.Key_Right:
+            self.cx += step
+        elif k in (QtCore.Qt.Key_Plus, QtCore.Qt.Key_Equal):
+            self.set_side(self.side + 10)
+            return
+        elif k in (QtCore.Qt.Key_Minus, QtCore.Qt.Key_Underscore):
+            self.set_side(self.side - 10)
+            return
+        else:
+            e.ignore()
+            return
+        self.clamp()
+        self.update()
+        self.moved.emit()
+
+
+class Picker(QtWidgets.QWidget):
+    def __init__(self, paths, visible=True):
+        super().__init__()
+        self.setWindowTitle("pick icon — 拖动圆心 / 滚轮改大小 / n·p 换帧 / Enter 保存")
+        self.paths = paths
+        self.i = 0
+
+        self.canvas = Canvas()
+        self.canvas.moved.connect(self.refresh_preview)
+
+        right = QtWidgets.QVBoxLayout()
+        right.setSpacing(10)
+        self.big = self._preview_label(256)
+        self.mid = self._preview_label(64)
+        self.small = self._preview_label(32)
+        self.info = QtWidgets.QLabel()
+        self.info.setStyleSheet("color:#c9d1d9; font-size:12px")
+        self.info.setWordWrap(True)
+        right.addWidget(self.big, 0, QtCore.Qt.AlignHCenter)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(self.mid)
+        row.addWidget(self.small)
+        row.addStretch(1)
+        right.addLayout(row)
+        right.addWidget(self.info)
+        right.addStretch(1)
+        panel = QtWidgets.QWidget()
+        panel.setLayout(right)
+        panel.setFixedWidth(300)
+
+        root = QtWidgets.QHBoxLayout(self)
+        root.addWidget(self.canvas, 1)
+        root.addWidget(panel, 0)
+
+        self.canvas.set_image(Image.open(paths[0]).convert("RGB"))
+        self.refresh_preview()
+        self.resize(1250, 720)
+        if visible:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            self.canvas.setFocus()
+
+    @staticmethod
+    def _preview_label(size):
+        lab = QtWidgets.QLabel()
+        lab.setFixedSize(size, size)
+        lab.setStyleSheet("background:#2b3138; border:1px solid #3d444d")
+        return lab
+
+    def refresh_preview(self):
+        x0, y0, x1, y1 = self.canvas.box()
+        crop = self.canvas.img.crop((x0, y0, x1, y1))
+        self.big.setPixmap(QtGui.QPixmap.fromImage(pil_to_qimage(mask_circle(crop, 256))))
+        self.mid.setPixmap(QtGui.QPixmap.fromImage(pil_to_qimage(mask_circle(crop, 64))))
+        self.small.setPixmap(QtGui.QPixmap.fromImage(pil_to_qimage(mask_circle(crop, 32))))
+        self.info.setText(f"第 {self.i + 1}/{len(self.paths)} 张\n"
+                          f"{os.path.basename(self.paths[self.i])}\n"
+                          f"框 {x1 - x0}px  @ ({x0}, {y0})")
+
+    def load(self, i):
+        self.i = i % len(self.paths)
+        self.canvas.set_image(Image.open(self.paths[self.i]).convert("RGB"))
+
+    def keyPressEvent(self, e):
+        k = e.key()
+        if k == QtCore.Qt.Key_Escape:
+            self.close()
+        elif k in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+            x0, y0, x1, y1 = save_icon(self.canvas.img, self.canvas.box())
+            print(f"BOX frame={os.path.basename(self.paths[self.i])} "
+                  f"x={x0} y={y0} side={x1 - x0} saved={ICON_PNG}", flush=True)
+            self.close()
+        elif k == QtCore.Qt.Key_N:
+            self.load(self.i + 1)
+        elif k == QtCore.Qt.Key_P:
+            self.load(self.i - 1)
+        else:
+            self.canvas.keyPressEvent(e)
+
+
+def collect(folder):
+    return sorted(glob.glob(os.path.join(folder, "*.jpg")) + glob.glob(os.path.join(folder, "*.png")))
+
+
 def main():
-    folder = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    folder = args[0] if args else os.path.join(
         os.environ.get("TEMP", "."), "opencode", "icon_shots")
-    paths = sorted(glob.glob(os.path.join(folder, "*.jpg")) + glob.glob(os.path.join(folder, "*.png")))
+    paths = collect(folder)
     if not paths:
         raise SystemExit(f"没有截图：{folder}")
 
-    STATE["frame"] = cv2.imread(paths[0])
-    h, w = STATE["frame"].shape[:2]
-    STATE["cx"], STATE["cy"] = w // 2, h // 2     # 默认画面正中
-    clamp_box()
+    app = QtWidgets.QApplication(sys.argv[:1])
+    if "--check" in sys.argv:
+        # 无头自检：不显示窗口，只验证「读帧 → 裁剪 → 圆形遮罩 → 预览」整条链路能出图
+        picker = Picker(paths, visible=False)
+        picker.refresh_preview()
+        assert not picker.big.pixmap().isNull(), "预览图为空"
+        print(f"check ok: {len(paths)} frames, first={os.path.basename(paths[0])} "
+              f"preview={picker.big.pixmap().width()}px", flush=True)
+        return 0
 
-    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-    cv2.setMouseCallback(WINDOW, on_mouse)
-
-    while True:
-        b = box()
-        view = STATE["frame"].copy()
-        cv2.rectangle(view, (b[0], b[1]), (b[2], b[3]), (0, 255, 0), 2)
-        cv2.putText(view, f"{STATE['i'] + 1}/{len(paths)}  {os.path.basename(paths[STATE['i']])}"
-                          f"   {STATE['side']}px", (16, 32),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv2.imshow(WINDOW, view)
-        key = cv2.waitKey(20) & 0xFF
-
-        if key == 27:
-            break
-        if key in (13, 10):
-            x0, y0, x1, y1 = save_icon(STATE["frame"], b)
-            print(f"BOX frame={os.path.basename(paths[STATE['i']])} "
-                  f"x={x0} y={y0} side={x1 - x0}")
-            print(f"saved: {ICON_PNG}")
-            break
-        if key in (ord("n"), ord("p")):
-            STATE["i"] = (STATE["i"] + (1 if key == ord("n") else -1)) % len(paths)
-            STATE["frame"] = cv2.imread(paths[STATE["i"]])
-            clamp_box()
-        elif key in (ord("a"), ord("d"), ord("w"), ord("s"), ord("A"), ord("D"), ord("W"), ord("S")):
-            step = 50 if key in (ord("A"), ord("D"), ord("W"), ord("S")) else 5
-            if key in (ord("a"), ord("A")):
-                STATE["cx"] -= step
-            elif key in (ord("d"), ord("D")):
-                STATE["cx"] += step
-            elif key in (ord("w"), ord("W")):
-                STATE["cy"] -= step
-            else:
-                STATE["cy"] += step
-            clamp_box()
-        elif key in (ord("+"), ord("=")):
-            STATE["side"] = min(STATE["side"] + 10, 500)
-            clamp_box()
-        elif key in (ord("-"), ord("_")):
-            STATE["side"] = max(STATE["side"] - 10, 60)
-            clamp_box()
-
-    cv2.destroyAllWindows()
+    picker = Picker(paths)
+    picker.raise_()
+    picker.activateWindow()
+    return app.exec()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
