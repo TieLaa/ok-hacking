@@ -4614,6 +4614,41 @@ class PurchaseRules(unittest.TestCase):
         self.assertTrue(task.handle_shop(texts))
         self.assertNotIn("买「老板的馈赠」", "".join(task.logs))
 
+    def test_shop_must_take_lottery_before_rules(self):
+        """2026-11-11 用户口径：「大乐透」（60 元换 20~200 零用钱）跟老板的馈赠一样必拿。
+
+        第 6 周 + 同屏还有更贵的金卡，也先买大乐透（不受「第 7 周之前只买 0 元」
+        和品质顺序限制）。
+        """
+        task, texts = self._shop([("大乐透", 60), ("器材手册+", 150)],
+                                 money=500, week=6)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「大乐透」", "".join(task.logs))
+
+    def test_shop_must_take_lottery_needs_money(self):
+        """花钱档必拿商品买不起就不买（不盲点，免得撞看门狗把整店关掉）。"""
+        task, texts = self._shop([("大乐透", 60)], money=50, week=6)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertNotIn("买「大乐透」", "".join(task.logs))
+        # 余额读不到时同样不盲买
+        task, texts = self._shop([("大乐透", 60)], money=None)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertNotIn("买「大乐透」", "".join(task.logs))
+
+    def test_shop_must_take_free_before_lottery(self):
+        """同屏既有 0 元纯赚又有多彩票：先拿不花钱的，不占用买彩票的钱。"""
+        task, texts = self._shop([("老板的馈赠", 0), ("大乐透", 60)], money=500)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「老板的馈赠」", "".join(task.logs))
+        self.assertNotIn("买「大乐透」", "".join(task.logs))
+
+    def test_shop_must_take_lottery_blocked_by_policy(self):
+        """「不买」策略对花钱档必拿商品同样有效。"""
+        task, texts = self._shop([("大乐透", 60)], money=500)
+        task.config["商店购买策略"] = "不买"
+        self.assertTrue(task.handle_shop(texts))
+        self.assertNotIn("买「大乐透」", "".join(task.logs))
+
     def test_shop_never_buys_negative_drinks(self):
         """2026-11-08 用户口径：苦味/怪味饮料带负面/随机效果，一律不买。
 
