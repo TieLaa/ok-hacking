@@ -16,7 +16,6 @@ sys.path.insert(0, __file__.rsplit("tools", 1)[0].rstrip("\\/"))
 
 from tools.abs_mouse import (  # noqa: E402
     click_screen, ensure_foreground, find_game_hwnd, move_to_screen)
-from tools.wgc_capture import MockWindow  # noqa: E402
 
 
 def game_hwnd():
@@ -25,15 +24,17 @@ def game_hwnd():
 
 
 def grab():
-    from ok.device.capture_methods.windows_graphics import WindowsGraphicsCaptureMethod
+    from tools.wgc_capture import make_capture
 
-    cap = WindowsGraphicsCaptureMethod(MockWindow(game_hwnd()))
+    cap = make_capture(game_hwnd())
     frame = None
-    for _ in range(10):
-        frame = cap.get_frame()
-        if frame is not None:
-            break
-    cap.close()
+    try:
+        for _ in range(10):
+            frame = cap.get_frame()
+            if frame is not None:
+                break
+    finally:
+        cap.close()
     return frame
 
 

@@ -43,7 +43,7 @@ sys.path.insert(0, ROOT)
 
 from tools.abs_mouse import (click_client, ensure_foreground,  # noqa: E402
                              find_game_hwnd, move_to_screen)
-from tools.wgc_capture import MockWindow  # noqa: E402
+from tools.wgc_capture import make_capture  # noqa: E402
 from tools._roster_json import merge_and_save  # noqa: E402
 
 POSITIONS = ("分卫", "控卫", "小前", "大前", "中锋")
@@ -51,16 +51,17 @@ OUT_JSON = os.path.join(ROOT, "docs", "roster", "ssr_roster.json")
 
 
 class Screen:
-    """持续抓帧 + OCR（复用 ok-script 的 WGC 实现，跟 wgc_capture.py 一致）。"""
+    """持续抓帧 + OCR（复用 wgc_capture.make_capture：WGC 优先，Win10 回退）。"""
 
     def __init__(self, hwnd):
         # 2026-11-01：删掉没用过的 `ocr_every` 参数（vulture 唯一一处真死参数：
         # 构造时存进 self 都没做，全仓也没有调用点传它）。要加节流就该真实现，
         # 而不是留一个「看着像能配」的空参数。
-        from ok.device.capture_methods.windows_graphics import (
-            WindowsGraphicsCaptureMethod)
         self.hwnd = hwnd
-        self.cap = WindowsGraphicsCaptureMethod(MockWindow(hwnd))
+        self.cap = make_capture(hwnd)
+        from onnxocr.onnx_paddleocr import ONNXPaddleOcr
+        self.ocr = ONNXPaddleOcr(use_angle_cls=False, use_openvino=True,
+                                 show_log=False)
         from onnxocr.onnx_paddleocr import ONNXPaddleOcr
         self.ocr = ONNXPaddleOcr(use_angle_cls=False, use_openvino=True,
                                  show_log=False)

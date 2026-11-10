@@ -47,19 +47,19 @@ def locate_start_button(ok):
     找不到就返回 None，交给固定候选坐标兜底。
     """
     try:
-        from ok.device.capture_methods.windows_graphics import (  # noqa: PLC0415
-            WindowsGraphicsCaptureMethod)
         from onnxocr.onnx_paddleocr import ONNXPaddleOcr  # noqa: PLC0415
 
-        from tools.wgc_capture import MockWindow  # noqa: PLC0415
+        from tools.wgc_capture import make_capture  # noqa: PLC0415
 
-        cap = WindowsGraphicsCaptureMethod(MockWindow(ok))
+        cap = make_capture(ok)
         frame = None
-        for _ in range(10):
-            frame = cap.get_frame()
-            if frame is not None:
-                break
-        cap.close()
+        try:
+            for _ in range(10):
+                frame = cap.get_frame()
+                if frame is not None:
+                    break
+        finally:
+            cap.close()
         if frame is None:
             return None
         ocr = ONNXPaddleOcr(use_angle_cls=False, use_openvino=True, show_log=False)

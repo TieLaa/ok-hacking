@@ -1,4 +1,4 @@
-"""抓一帧游戏画面（WGC），给离线核对脚本用。
+"""抓一帧游戏画面（WGC 优先，Win10 回退 BitBlt_RenderFull），给离线核对脚本用。
 
 为什么独立：`ocr_dump.py` / `probe_gacha.py` / `probe_history.py` / `probe_topbar.py`
 各自抄了一份「WindowsGraphicsCaptureMethod + 等帧 + close」
@@ -15,11 +15,12 @@ DEFAULT_KEYWORD = "篮球少女：飞跃巅峰"
 
 def grab_hwnd(hwnd, tries=10, delay=0.1):
     """按已知 hwnd 抓一帧（等帧重试）。抓不到返回 None。"""
-    from ok.device.capture_methods.windows_graphics import WindowsGraphicsCaptureMethod
+    from tools.wgc_capture import make_capture
 
-    from tools.wgc_capture import MockWindow
-
-    cap = WindowsGraphicsCaptureMethod(MockWindow(hwnd))
+    try:
+        cap = make_capture(hwnd)
+    except SystemExit:
+        return None
     frame = None
     try:
         for _ in range(tries):

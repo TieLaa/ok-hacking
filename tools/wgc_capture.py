@@ -1,7 +1,11 @@
-"""Standalone WGC frame grab for a window, reusing ok-script's capture implementation.
+"""Standalone frame grab for a window, reusing ok-script's capture implementation.
 
 Usage: python wgc_capture.py <out.jpg|out.png> [title_keyword] [quality]
 Works from a non-elevated process even when the target window is occluded.
+
+抓帧后端按 config 同样的顺序选：WGC 优先，Win10（build < 20348）上 ok-script
+直接判 WGC 不可用，自动回退 BitBlt_RenderFull。文件名保留 wgc_capture 是因为
+tools 里多处引用，别重命名（要抓帧就 `from tools.wgc_capture import make_capture`）。
 
 输出格式按扩展名决定：.jpg/.jpeg 用 JPEG（默认 q95 + 4:4:4），其他走 cv2 默认。
 截图给 agent 读时优先用 .jpg —— 1080p PNG 约 2.4 MB、q95 约 0.48 MB，
@@ -18,7 +22,6 @@ import cv2
 import win32gui
 
 user32 = ctypes.windll.user32
-user32.GetClientRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long * 4)]
 user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # PER_MONITOR_AWARE_V2
 
 JPEG_QUALITY = 95
@@ -74,22 +77,26 @@ class MockWindow:
         self.visible = True
         self.hwnds = []
         self.app_exit_event = threading.Event()
-        rect = ctypes.c_long * 4
-        cr = rect()
-        user32.GetClientRect(hwnd, cr)
-        self.width = cr[2] - cr[0]
-        self.height = cr[3] - cr[1]
-        self.client_width = self.width
-        self.client_height = self.height
-        self.real_width = self.width
-        self.real_height = self.height
+        # 几何必须同时给出 DWM 外框和客户区：BitBlt 系按两者的差算裁剪点
+        # （get_crop_point 顶部多裁一条标题栏）。只填客户区会多抓 31px
+        # 标题栏、让 OCR 坐标整体偏移（2026-11-10 实测 absdiff 26.97）。
+        from ok.util.window import get_window_bounds
+
+        x, y, window_width, window_height, width, height, scaling = get_window_bounds(hwnd)
+        self.x = x
+        self.y = y
+        self.window_width = window_width
+        self.window_height = window_height
+        self.width = width
+        self.height = height
+        self.client_width = width
+        self.client_height = height
+        self.real_width = width
+        self.real_height = height
         self.real_x_offset = 0
         self.real_y_offset = 0
-        self.scaling = 1.0
-        self.frame_aspect_ratio = self.width / self.height if self.height else 0
-        self.x = self.y = 0
-        self.window_width = self.width
-        self.window_height = self.height
+        self.scaling = scaling or 1.0
+        self.frame_aspect_ratio = width / height if height else 0
 
     @property
     def capture_target_signature(self):
@@ -107,26 +114,70 @@ class MockWindow:
         return x, y
 
 
-def grab(out_path, keyword="篮球少女：飞跃巅峰", quality=JPEG_QUALITY):
-    from ok.device.capture_methods.windows_graphics import WindowsGraphicsCaptureMethod
+CAPTURE_PREFERENCE = ("WGC", "BitBlt_RenderFull")
 
+
+def _usable(cap, tries=6, delay=0.15):
+    for _ in range(tries):
+        try:
+            if cap.get_frame() is not None:
+                return True
+        except Exception:  # noqa: BLE001 - 选型阶段任何失败都只是"这个后端不行"
+            pass
+        time.sleep(delay)
+    return False
+
+
+def make_capture(hwnd, preference=CAPTURE_PREFERENCE):
+    """按 config 同样的优先级建一个真能出帧的 capture 方法。
+
+    WGC 在 Win10（build < 20348）上被 ok-script 的 windows_graphics_available()
+    直接判不可用；回退 BitBlt_RenderFull 走 PrintWindow + PW_RENDERFULLCONTENT，
+    实测与 WGC 逐像素一致、完全遮挡也能抓。tools 里的抓帧脚本统一走这里，
+    不要再各抄一份 WindowsGraphicsCaptureMethod。
+    """
+    from ok.device.capture_methods.windows_graphics import WindowsGraphicsCaptureMethod
+    from ok.util.window import windows_graphics_available
+
+    window = MockWindow(hwnd)
+    for name in preference:
+        if name == "WGC":
+            if not windows_graphics_available():
+                continue
+            cap = WindowsGraphicsCaptureMethod(window)
+        elif name in ("BitBlt_RenderFull", "BitBlt"):
+            import ok.device.capture_methods.bitblt as bitblt
+            from ok.device.capture_methods.bitblt import BitBltCaptureMethod
+
+            bitblt.render_full = name != "BitBlt"
+            cap = BitBltCaptureMethod(window)
+            cap.exit_event = threading.Event()
+        else:
+            continue
+        if _usable(cap):
+            return cap
+        cap.close()
+    raise SystemExit(f"no usable capture method: {preference}, hwnd={hwnd}")
+
+
+def grab(out_path, keyword="篮球少女：飞跃巅峰", quality=JPEG_QUALITY):
     hwnd = find_hwnd(keyword)
     if not hwnd:
         raise SystemExit(f"window not found: {keyword}")
-    mock = MockWindow(hwnd)
-    cap = WindowsGraphicsCaptureMethod(mock)
+    cap = make_capture(hwnd)
     frame = None
-    for _ in range(10):
-        frame = cap.get_frame()
-        if frame is not None:
-            break
-        time.sleep(0.3)
-    if frame is None:
+    try:
+        for _ in range(10):
+            frame = cap.get_frame()
+            if frame is not None:
+                break
+            time.sleep(0.3)
+        if frame is None:
+            raise SystemExit("no frame captured")
+        imwrite_auto(out_path, frame, quality)
+        print(f"hwnd={hwnd} method={cap.get_name()} frame={frame.shape[1]}x{frame.shape[0]} saved={out_path}")
+    finally:
         cap.close()
-        raise SystemExit("no frame captured")
-    imwrite_auto(out_path, frame, quality)
-    print(f"hwnd={hwnd} frame={frame.shape[1]}x{frame.shape[0]} saved={out_path}")
-    cap.close()
 
 
 if __name__ == "__main__":
