@@ -30,9 +30,10 @@
 「名字像局ID + 里面确实有那四个子目录之一」的目录，`reports/`、
 `mcp/connections/`、`docs/shots/` 都不在扫描范围内。
 
-`clicks.jsonl` 是唯一的例外处理：它在 `logs/` 根、不在任何局目录里，
-所以**按同一保留期裁行**（`trim_clicks`：文件永不删，只删过期行）——
-不裁的话它无界增长（实测 14 天 10.5 万行 / 15 MB）。
+`clicks.jsonl` 和框架按天日志（`ok-script.YYYY-MM-DD.log`）是两处例外：
+它们不在局目录里，所以**按同一保留期单独处理**：
+  - `trim_clicks`：裁行，文件永不删（实测 14 天 10.5 万行 / 15 MB）；
+  - `trim_daily_logs`：删超期的整天日志（一天一份，没人清就无界增长）。
 
 用户 2026-11-10 口径：**不做 jpg 开关** —— 真需要调试时没有图更麻烦，
 靠按局清理控制体积。
@@ -57,6 +58,8 @@ CLICK_LOG = os.path.join(LOG_ROOT, "clicks.jsonl")
 ROUND_RE = re.compile(r"^\d{4}-\d{6}_")
 #: 局目录里必然存在的子目录（清理时的安全阀：没有就绝不删）
 ROUND_SUBS = ("events", "unknown", "unmark", "debug")
+#: 框架按天日志的文件名日期：ok-script.2026-11-03.log
+DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 #: 局还没开始时的存证落点
 PRE_DIR = "pre"
 
@@ -126,6 +129,65 @@ def trim_clicks(keep_days=3, log_path=None):
             pass
         return (0, len(lines))
     return (len(lines) - len(kept), len(kept))
+
+
+def daily_logs_to_delete(keep_days=3, log_dir=None):
+    """列出超期的框架按天日志：[(路径, 字节数), …]。
+
+    三处安全：
+      - 只认文件名里**带 `YYYY-MM-DD`** 的 `ok-script*.log`：`ok-script.log`（当前
+        活跃文件，没有日期）和 `run.log*` 都不在名单里；
+      - 日期解析不出来就跳过（不拿 mtime 兜底 —— 活跃文件的 mtime 可能很老）；
+      - 只列不删（调用方决定；`trim_daily_logs` 负责删）。
+    """
+    keep_days = int(keep_days or 0)
+    if keep_days <= 0:
+        return []
+    log_dir = log_dir or LOG_ROOT
+    cutoff = time.time() - keep_days * 86400
+    out = []
+    try:
+        names = os.listdir(log_dir)
+    except OSError:
+        return []
+    for name in names:
+        if not (name.startswith("ok-script") and name.endswith(".log")):
+            continue
+        m = DATE_RE.search(name)
+        if not m:
+            continue                      # ok-script.log = 当前活跃文件，永不删
+        try:
+            stamp = time.mktime(time.strptime(m.group(1), "%Y-%m-%d"))
+        except ValueError:
+            continue
+        if stamp >= cutoff:
+            continue
+        path = os.path.join(log_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            out.append((path, os.path.getsize(path)))
+        except OSError:
+            continue
+    return out
+
+
+def trim_daily_logs(keep_days=3, log_dir=None):
+    """删掉 `keep_days` 天之前的框架按天日志（`ok-script.YYYY-MM-DD.log`）。
+
+    为什么它也要管：这套文件是框架每天新建一份、**只追加没人删**，
+    实测重的一天 5.9 MB，一个月就是几十 MB。唯一读它的是
+    `tools/check_training_gain.py`（属性增益复盘），而复盘只对最近几局有意义。
+    删不掉（文件被占用/权限）就跳过，不抛异常。返回删掉的文件路径列表。
+    """
+    removed = []
+    for path, _size in daily_logs_to_delete(keep_days, log_dir):
+        try:
+            os.remove(path)
+            removed.append(path)
+        except OSError:
+            continue
+    return removed
 
 
 def write_jpg(path, frame):
@@ -372,7 +434,7 @@ class EvidenceSink:
     # ---------- 保留期 ----------
 
     def prune(self, keep_days=3):
-        """删掉 `keep_days` 天之前的**整局目录**，并裁掉点击流水里的过期行。
+        """删掉 `keep_days` 天之前的**整局目录**，并裁掉点击流水 / 按天框架日志。
 
         0 = 不清理。
         安全阀有三道：名字必须像局ID、里面必须有 `events|unknown|unmark|debug`
@@ -405,6 +467,7 @@ class EvidenceSink:
                 except OSError:
                     continue
         trim_clicks(keep_days=keep_days)
+        trim_daily_logs(keep_days=keep_days)
         return removed
 
     def _round_parents(self):

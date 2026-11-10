@@ -215,5 +215,48 @@ class ClickRetention(unittest.TestCase):
         self.assertIn("这不是 JSON", "".join(self._lines()))
 
 
+class DailyLogRetention(unittest.TestCase):
+    """框架按天日志 `ok-script.YYYY-MM-DD.log` 按同一保留期删整天文件。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="ok-daily-")
+        self._log_root = evidence.LOG_ROOT
+        evidence.LOG_ROOT = self.tmp
+
+    def tearDown(self):
+        evidence.LOG_ROOT = self._log_root
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _touch(self, name):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("x")
+        return path
+
+    def test_old_day_deleted_recent_kept(self):
+        old = self._touch("ok-script.2020-01-01.log")
+        today = time.strftime("ok-script.%Y-%m-%d.log")
+        recent = self._touch(today)
+        gone = evidence.trim_daily_logs(3, self.tmp)
+        self.assertIn(old, gone)
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(recent))
+
+    def test_current_and_run_log_untouched(self):
+        current = self._touch("ok-script.log")
+        run = self._touch("run.log")
+        run1 = self._touch("run.log.1")
+        for path in (current, run, run1):
+            os.utime(path, (time.time() - 90 * 86400,) * 2)
+        self.assertEqual(evidence.trim_daily_logs(3, self.tmp), [])
+        for path in (current, run, run1):
+            self.assertTrue(os.path.exists(path), path)
+
+    def test_zero_days_keeps_everything(self):
+        old = self._touch("ok-script.2020-01-01.log")
+        self.assertEqual(evidence.trim_daily_logs(0, self.tmp), [])
+        self.assertTrue(os.path.exists(old))
+
+
 if __name__ == "__main__":
     unittest.main()

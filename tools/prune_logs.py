@@ -19,10 +19,11 @@
     3. debug：handler 判据的调试帧，保留最近 --days 天。
     4. 局目录（新结构）：超过 --days 天的**整个目录**删掉。
     5. 点击流水 clicks.jsonl：按同一 --days **裁行**（文件本身永不删）。
-    6. mcp/<run_id>：最近 --keep-runs 次运行的 run.log / status.json 全留（那是运行
+    6. 框架按天日志 ok-script.YYYY-MM-DD.log：按同一 --days 删整天文件。
+    7. mcp/<run_id>：最近 --keep-runs 次运行的 run.log / status.json 全留（那是运行
        记录的证据链），frames/ 按天数删。
-    7. 总量兜底：清完仍超过 --max-gb，就从最老的 jpg 开始删到低于上限。
-    8. **永不删**：docs/shots（判据回归语料）、logs/reports、
+    8. 总量兜底：清完仍超过 --max-gb，就从最老的 jpg 开始删到低于上限。
+    9. **永不删**：docs/shots（判据回归语料）、logs/reports、
        logs/mcp/connections、局目录的 meta.json。
 
 安全阀：
@@ -45,7 +46,8 @@ LOG_DIR = os.path.join(ROOT, "logs")
 
 sys.path.insert(0, ROOT)
 # 落盘口径的唯一来源：点击流水的路径与裁行规则都在这里（2026-11-10 归口）
-from src.tasks.evidence import CLICK_LOG, trim_clicks  # noqa: E402
+from src.tasks.evidence import (CLICK_LOG, daily_logs_to_delete, trim_clicks,
+                                trim_daily_logs)  # noqa: E402
 #: 局目录名：`1110-091635[_接手][_第N局][_队长]`
 ROUND_RE = re.compile(r"^\d{4}-\d{6}_")
 #: 局目录里必然存在的子目录（安全阀：没有就绝不整目录删）
@@ -284,6 +286,11 @@ def main():
     if n_clicks:
         print(f"  点击流水   {n_clicks:>6} 行  {human(clicks_size):>10}（只裁行，文件保留）")
         freed += clicks_size
+    daily = daily_logs_to_delete(keep_days, LOG_DIR)
+    if daily:
+        print(f"  按天日志   {len(daily):>6} 个  "
+              f"{human(sum(s for _p, s in daily)):>10}（ok-script.YYYY-MM-DD.log）")
+        freed += sum(s for _p, s in daily)
     print(f"预计清理后：{human(max(before - freed, 0))}")
 
     if not args.apply:
@@ -309,6 +316,9 @@ def main():
     trimmed, kept = trim_clicks(keep_days)
     if trimmed:
         print(f"点击流水裁掉 {trimmed} 行（保留 {kept} 行），现在 {human(total_size())}")
+    gone = trim_daily_logs(keep_days, LOG_DIR)
+    if gone:
+        print(f"删掉 {len(gone)} 个超期按天日志，现在 {human(total_size())}")
     return 0
 
 
