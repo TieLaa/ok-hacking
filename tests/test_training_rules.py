@@ -6172,17 +6172,12 @@ class MonitorQuickMatchSwitch(unittest.TestCase):
         ok.og.app = _App()
         self.addCleanup(lambda: setattr(ok.og, "app", old))
 
-    def test_switch_on_enables_quick_match_only(self):
-        """拨到「开」：只 enable 快速比赛，不碰自动训练。"""
-        tab, quick, train, executor = self._tab(connected=True)
-        self._forbid_start_controller()
-        tab.set_quick_match(True)
-        self.assertIn("enable", quick.calls)
-        self.assertEqual(train.calls, [])
-        self.assertEqual(executor.calls, [])   # 执行器在跑，不用动
-
     def test_switch_on_does_not_wake_paused_executor(self):
-        """执行器停着时拨「开」也不许启动它（2026-11-10 用户口径，替代旧的「顺手唤醒」）。"""
+        """执行器停着时拨「开」也不许启动它（2026-11-10 用户口径，替代旧的「顺手唤醒」）。
+
+        只测「执行器停着」这个状态：它是唯一能让旧实现（`_wake_executor`）暴露的状态；
+        「执行器在跑」时 `executor.calls == []` 恒真，测了也抓不到回归。
+        """
         tab, quick, train, executor = self._tab(connected=False)
         self._forbid_start_controller()
         tab.set_quick_match(True)
