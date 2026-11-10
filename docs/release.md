@@ -10,6 +10,38 @@
 | `requirements.txt` / `requirements-docs.txt` | pip-compile 生成的锁定文件（运行时 / 文档） |
 | `pyproject.toml` | 定义 `qt` / `docs` 两个依赖 profile，是锁定文件的来源 |
 
+## 应用图标（`icons/`）
+
+`pyappify.yml` 的 `icon:` 指向 `icons/icon.png`，安装包、快捷方式、窗口图标都吃这一个源；
+`icons/icon.ico` 是同一张图的多尺寸版（16/32/48/64/128/256），给 Windows 壳用。
+
+**换图流程**（不要在画图软件里手工裁，圆形遮罩和 ico 尺寸会不一致）：
+
+```powershell
+# 1) 抓帧：游戏停在有立绘的页面（时装选择 / 卡面 / 图鉴），存成 jpg
+.venv\Scripts\python.exe tools\wgc_capture.py "$env:TEMP\opencode\icon_shots\icon_src_06.jpg"
+
+# 2) 拖框：左边整帧、右边实时预览 256/64/32px 成品
+.venv\Scripts\python.exe tools\pick_icon_box.py
+#    默认读 %TEMP%\opencode\icon_shots\*.jpg|png，也可以把文件夹路径当第一个参数传进去
+#    左键拖动圆心 / 滚轮或 +/- 改大小 / WASD 大调 / 方向键微调 / n·p 换帧 / Enter 保存 / Esc 放弃
+#    无头自检：加 --check，只验证「读帧 → 裁剪 → 遮罩 → 预览」链路，不写文件
+
+# 3) 存盘后 tools/pick_icon_box.py 会打印取景参数，抄进提交信息
+#    BOX frame=icon_src_01.jpg x=388 y=23 side=320
+```
+
+存盘规则：框内裁正方形 → 缩到 320px → 圆形遮罩（外圈透明）→ 落 256px PNG + 六尺寸 ICO。
+之所以是 256 而不是更大：launcher 和资源管理器最大只用到 256，再大只是白占体积。
+
+要点：
+
+- **右侧 32px 预览必须能认出是谁**。换成半身/全身构图时尤其要看这一格——细节在 32px 会糊成一团。
+- **改完必须重新打包才生效**（`deploy` 出安装包）；已经装好的 `ok-hacking` 进程还是旧图标。
+- 取景参数只是**记录**用的，不参与生成：下次想复现同一版，照着 `frame / x / y / side` 重新拖即可。
+- 拖不动、鼠标没反应，先怀疑窗口工具链而不是坐标：v1（拖边）和 v2（HighGUI 整块跟鼠标）都栽在
+  OpenCV 的鼠标回调收不到事件上，v3 换成 PySide6 才稳。
+
 ## 当前发布链路（2026-11-09 状态）
 
 ```
