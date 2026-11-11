@@ -5872,6 +5872,143 @@ class MonitorCaptainLogic(unittest.TestCase):
         self.assertEqual(task.config["指定队长"], "真崎辉世")
         self.assertEqual(task.reset_calls, 0)
 
+    def test_clear_captain_keeps_score_stop(self):
+        """取消队长**不清**「刷到目标分」（用户 2026-11-11 口径）。
+
+        取消队长 = 接手模式；刷分设置保留，接手局日历认出队长后继续用。
+        旧版在这里写成 False，用户会以为「界面把我的设置吃了」。
+        """
+        from unittest import mock
+
+        tab, task = self._tab("野上泷")
+        task.config["刷到目标分"] = True
+        task.config["目标分"] = 7500
+        with mock.patch("ok.core.notifications.alert_info"):
+            tab.set_captain("")
+        self.assertTrue(task.config["刷到目标分"])
+        self.assertEqual(task.config["目标分"], 7500)
+
+
+    def test_running_uncheck_keeps_style(self):
+        """运行中取消队长不清流派：本局按内存里的队长继续跑（用户 2026-11-11 口径）。"""
+        from unittest import mock
+
+        tab, task = self._tab("野上泷")
+        task.running = True
+        task.config["刷到目标分"] = True
+        with mock.patch("ok.core.notifications.alert_info"):
+            tab.set_captain("")
+        self.assertEqual(task.config["指定队长"], "")
+        self.assertEqual(task.reset_calls, 0)
+
+
+class TrainingCaptainAdoption(unittest.TestCase):
+    """接手局认出队长：勾了刷分才写回「指定队长」并补建队列（用户 2026-11-11 口径）。"""
+
+    @staticmethod
+    def _fake(captain="", score_stop=True, target=0, launch=None):
+        from src.tasks.training.flow import TrainingFlowMixin
+        from src.tasks.training.queue import CaptainQueue
+
+        class _Fake(TrainingFlowMixin):
+            def __init__(self):
+                self.config = {"指定队长": captain, "刷到目标分": score_stop,
+                               "目标分": target, "队长下拉选择": ""}
+                self._launch_queue = launch
+                self._queue = None
+                self.logs = []
+                self.queue_built = 0
+
+            def log_info(self, message="", **kwargs):
+                self.logs.append(message)
+
+            def init_captain_queue(self):
+                self.queue_built += 1
+                spec = self.captain_queue_spec()
+                self._queue = CaptainQueue(spec) if spec else None
+                return self._queue
+
+        return _Fake()
+
+    def test_adopt_writes_captain_and_builds_queue(self):
+        task = self._fake(target=7500)
+        self.assertTrue(task.adopt_calendar_captain("野上泷"))
+        self.assertEqual(task.config["指定队长"], "野上泷")
+        self.assertEqual(task.config["队长下拉选择"], "野上泷")
+        self.assertEqual(task.queue_built, 1)
+        self.assertIsNotNone(task._queue)
+        self.assertEqual(task._queue.captain, "野上泷")
+        self.assertEqual(task._queue.target, 7500)
+
+    def test_adopt_skipped_when_user_specified(self):
+        """用户自己指定过队长 → 日历不抢，配置和队列都不动。"""
+        task = self._fake(captain="近江奏")
+        self.assertFalse(task.adopt_calendar_captain("野上泷"))
+        self.assertEqual(task.config["指定队长"], "近江奏")
+        self.assertEqual(task.queue_built, 0)
+
+    def test_adopt_skipped_without_score_stop(self):
+        """没勾刷分 → 保持接手模式，不把「不指定队长」改成指定队长。"""
+        task = self._fake(score_stop=False)
+        self.assertFalse(task.adopt_calendar_captain("野上泷"))
+        self.assertEqual(task.config["指定队长"], "")
+        self.assertEqual(task.queue_built, 0)
+
+    def test_cancel_score_stop_stops_next_round(self):
+        """一局结束读勾选：取消了就这局结束，不再开新局。"""
+        from src.tasks.training.queue import CaptainQueue
+
+        task = self._fake(captain="野上泷", score_stop=False, target=7500)
+        task._queue = CaptainQueue("野上泷:7500")
+        self.assertFalse(task.advance_queue_after_round())
+        self.assertIsNone(task._queue)
+
+    def test_score_stop_on_continues_after_round(self):
+        """勾着且没达标 → 继续练同一个人。"""
+        from src.tasks.training.queue import CaptainQueue
+
+        task = self._fake(captain="野上泷", score_stop=True, target=7500)
+        task._queue = CaptainQueue("野上泷:7500")
+        task._run_score = 7000
+        task.switch_captain = lambda name: None
+        self.assertTrue(task.advance_queue_after_round())
+
+    def test_change_captain_between_rounds(self):
+        """局末发现界面换了队长 → 本局按旧队长记分，下一局按新队长。"""
+        from src.tasks.training.queue import CaptainQueue
+
+        task = self._fake(captain="野上泷", score_stop=True, target=7500)
+        task._queue = CaptainQueue("野上泷:7500")
+        task._run_score = 7000
+        task.config["指定队长"] = "近江奏"
+        task.switch_captain = lambda name: setattr(task, "_switched", name)
+        self.assertTrue(task.advance_queue_after_round())
+        self.assertEqual(task._queue.captain, "近江奏")
+        self.assertEqual(task._queue.target, 7500)
+        self.assertEqual(task._switched, "近江奏")
+
+    def test_change_target_between_rounds(self):
+        """局末改了目标分 → 下一局按新目标分。"""
+        from src.tasks.training.queue import CaptainQueue
+
+        task = self._fake(captain="野上泷", score_stop=True, target=7500)
+        task._queue = CaptainQueue("野上泷:7500")
+        task._run_score = 7000
+        task.config["目标分"] = 8000
+        task.switch_captain = lambda name: None
+        self.assertTrue(task.advance_queue_after_round())
+        self.assertEqual(task._queue.target, 8000)
+
+    def test_clear_captain_between_rounds_stops(self):
+        """局末发现队长已取消 → 这局跑完就停，不再按旧队长续跑。"""
+        from src.tasks.training.queue import CaptainQueue
+
+        task = self._fake(captain="", score_stop=True, target=7500)
+        task._queue = CaptainQueue("野上泷:7500")
+        task._run_score = 7000
+        self.assertFalse(task.advance_queue_after_round())
+        self.assertIsNone(task._queue)
+
 
 class MonitorButtonActions(unittest.TestCase):
     """监控页两栏按钮的**动作**（不只是文案）—— 用户 2026-11-01/02 口径。
@@ -6075,12 +6212,12 @@ class MonitorButtonActions(unittest.TestCase):
         self.assertEqual(TrainingFlowMixin.captain_queue_spec(task),
                          "近江奏:8000")                        # 派生值换成新队长
 
-    def test_score_stop_without_captain_tells_the_user(self):
-        """没指定队长就勾「刷到目标分」→ **界面上要看得见**，不能只写日志。
+    def test_score_stop_without_captain_waits_for_calendar(self):
+        """没指定队长（接手模式）勾「刷到目标分」→ **允许**，等日历认出队长后生效。
 
-        2026-11-08 实测：原来那句是 `logger.warning(..., notify=True)`，
-        而 `ok.Logger` 只收一个 message → TypeError 被 Qt 槽吞掉 →
-        用户看到的只是「勾选框自己弹回去了」，以为界面坏了。
+        用户 2026-11-11 口径：不选队长 = 接手一局没打完的训练；勾了刷分
+        就要接到日历认出的那个人身上继续练到分停。旧版直接拒绝 + 弹回去，
+        等于把「接手 + 刷分」这条路封死。
         """
         from unittest import mock
         from src.ui.MonitorTab import MonitorTab
@@ -6099,11 +6236,10 @@ class MonitorButtonActions(unittest.TestCase):
         with mock.patch("ok.core.notifications.alert_error") as alert_error, \
                 mock.patch("ok.core.notifications.alert_info") as alert_info:
             tab.set_score_stop(True)
-        self.assertFalse(task.config["刷到目标分"])     # 没勾上（配置也没脏写）
-        self.assertEqual(task.config["目标分"], 0)
-        self.assertEqual(alert_error.call_count, 1)     # 但用户看到了原因
-        self.assertIn("队长", alert_error.call_args[0][0])
-        alert_info.assert_not_called()
+        self.assertTrue(task.config["刷到目标分"])        # 允许勾上
+        alert_error.assert_not_called()
+        self.assertEqual(alert_info.call_count, 1)        # 但要说明「接手后生效」
+        self.assertIn("接手", alert_info.call_args[0][0])
 
     def test_notify_never_raises(self):
         """提示通道炸了也不能连累主流程（比如没 QApplication 的 headless 场景）。"""
@@ -6300,6 +6436,9 @@ class MonitorButtons(unittest.TestCase):
                 if memory:
                     self.log.append(("captain_memory", memory))
 
+            def set_score_target(self, target):
+                self.log.append(("target", target))
+
         actions = _Actions()
         return MonitorView(layout, actions, captains=caps), actions
 
@@ -6330,6 +6469,28 @@ class MonitorButtons(unittest.TestCase):
         self.assertEqual(view._btn_train.text(), "开始")
         view.update_data(self._data(training_active=True))
         self.assertEqual(view._btn_train.text(), "暂停")
+
+    def test_captain_combo_disabled_before_checked(self):
+        """未勾「指定队长」时下拉禁用 —— 构建后立刻如此，不等第一次刷新。"""
+        view, _ = self._view()
+        self.assertFalse(view._captain_combo.isEnabled())
+        view.update_data(self._data(captain="真崎辉世"))
+        self.assertTrue(view._captain_combo.isEnabled())
+
+    def test_score_target_editable_without_check(self):
+        """目标分输入框始终可编辑：允许先填分、后勾「刷到目标分」。"""
+        view, _ = self._view()
+        self.assertTrue(view._edit_target.isEnabled())
+        view.update_data(self._data(score_stop=False, score_target=""))
+        self.assertTrue(view._edit_target.isEnabled())
+
+    def test_score_target_saved_while_typing(self):
+        """打字停 0.5 秒就落盘，不用等输入框失焦。"""
+        view, actions = self._view()
+        view._edit_target.setText("8000")
+        view._on_target_typed("8000")
+        view._target_timer.timeout.emit()
+        self.assertIn(("target", 8000), actions.log)
 
     def test_second_bar_queued_is_still_start(self):
         """只是排上队（enabled 但没 running）不算在跑 —— 按钮显示【开始】。
