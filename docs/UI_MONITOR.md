@@ -33,7 +33,7 @@
 | type | 键 |
 | --- | --- |
 | `connection` | `height` `title` `meta` `show_run` `run_text` `stop_text`（`starting_text` 已是遗留键，不再使用） |
-| `captain` | `height` `label` `hint` `show_quick_match` `show_auto_training` `start_text` `pause_text` `show_stop` `stop_size` |
+| `captain` | `height` `label` `hint` `show_quick_match` `quick_label` `show_auto_training` `start_text` `pause_text` `show_stop` `stop_size` `show_score_stop` `show_stamina_toggle` `target_width` `combo_width` |
 | `hero` | `height` `kicker` `title` `fallback` `right_ratio` `stats[]`（`label`/`value`/`suffix`/`bar`/`bar_key`/`bar_width`） |
 | `cards` | `height` `items[]`（`id`/`title`/`rows[]`，每行 `[标签, 模板]`） |
 | `timeline` | `title` `max_rows` `time_width` `event_width` |
