@@ -991,14 +991,14 @@ class EventRules(unittest.TestCase):
         self.assertEqual(FakeTask(texts).choice_candidates(texts), [])
 
     def test_weekend_visited_not_reentered(self):
-        """游戏厅已经去过（没有可跳过的游戏）→ 不再进，改去公园。"""
+        """餐厅已经去过 → 不再进，改去公园兜底（训练流缺口读不到）。"""
         texts = [
             box(900, 250, "游戏厅", 200, 60),
             box(900, 350, "公园", 200, 60),
             box(900, 450, "餐厅", 200, 60),
         ]
         task = FakeTask(texts)
-        task._weekend = {"date": (None, None), "visited": {"游戏厅"},
+        task._weekend = {"date": (None, None), "visited": {"餐厅"},
                          "shop_checked": False, "bought": False, "park_choice": None}
         self.assertTrue(task.handle_weekend(texts))
         self.assertEqual(task.actions[0], ("click_box", "公园", 1000, 380))
@@ -2357,7 +2357,6 @@ class ConfigSpecRules(unittest.TestCase):
         self.assertEqual(task.config["扭蛋清空精力阈值"], 30)
         self.assertEqual(task.config["周末野餐阈值"], 70)
         self.assertEqual(task.config["周末划船缺口"], 30)
-        self.assertEqual(task.config["训练流消费门槛"], 110)
         self.assertEqual(len(task.config), len(config_spec.ALL))
 
     def test_json_and_spec_agree(self):
@@ -2969,8 +2968,8 @@ class WeekendMapRules(unittest.TestCase):
         self.assertEqual(task.actions[-1][1], "餐厅")
 
     def test_sunday_place_by_style(self):
-        """周日地点：训练流→公园、商店流→餐厅、扭蛋流→步行街、小游戏流→游戏厅。"""
-        want = {"训练流": "公园", "商店流": "餐厅", "扭蛋流": "步行街",
+        """周日地点：训练流（缺口读不到）→餐厅、商店流→餐厅、扭蛋流→步行街、小游戏流→游戏厅。"""
+        want = {"训练流": "餐厅", "商店流": "餐厅", "扭蛋流": "步行街",
                 "小游戏流": "游戏厅"}
         for style, place in want.items():
             task = self.styled(style, self._map("星期日"))
@@ -3119,17 +3118,18 @@ class WeekendMapRules(unittest.TestCase):
         st["gacha_spent"] = True
         self.assertEqual(task.today_places("六", st), ["步行街"])
 
-    def test_friday_row_is_explicit_for_every_style(self):
+    def test_friday_row_is_explicit_for_shop_style(self):
         """周五（野上泷「额外周末」）在 WEEKEND_PLAN 里**显式**有行。
 
         2026-11-03：以前表里只有 ("五","扭蛋流")，其它流派靠 `today_places`
         的「读不到星期 → 按周六兜底」隐式拿到周六那行 —— 改周六会顺手改掉周五，
-        从表里也看不出周五到底去哪。现在周五三行与周六一致（行为不变）。
-        2026-11-10：扭蛋流 / 小游戏流已不看表（固定主地点 + 餐厅），
-        训练流 / 商店流仍按表走，所以这条继续守着。
+        从表里也看不出周五到底去哪。现在周五各行与周六一致（行为不变）。
+        2026-11-10：扭蛋流 / 小游戏流已不看表（固定主地点 + 餐厅）。
+        2026-11-11：训练流也退出这张表（按缺口决策），表里只剩商店流按星期走；
+        但四条流派「周五 = 周六」仍要守住。
         """
+        self.assertIn(("五", "商店流"), WEEKEND_PLAN)
         for style in ("训练流", "商店流", "扭蛋流", "小游戏流"):
-            self.assertIn(("五", style), WEEKEND_PLAN, style)
             task = self.styled(style, self._map("星期五"))
             st = task.weekend_state()
             self.assertEqual(task.today_places("五", st),
@@ -3141,11 +3141,11 @@ class WeekendMapRules(unittest.TestCase):
         return task
 
     def test_both_venue_switches_off_uses_stamina_gap(self):
-        """训练流缺口规则：缺口 ≥30 公园（≥70 野餐，否则划船）；<30 打工/消费。"""
+        """训练流缺口规则：缺口 ≥30 公园（≥70 野餐，否则划船）；<30 餐厅打工。"""
         cases = (
             ("100/130", ["公园"]),           # 缺口 30 → 公园划船
             ("60/130", ["公园"]),            # 缺口 70 → 公园野餐
-            ("110/130", ["餐厅", "公园"]),   # 缺口 20 + 两开关都关 → 打工，公园兜底
+            ("110/130", ["餐厅", "公园"]),   # 缺口 20 → 打工，公园兜底
         )
         for stamina, want in cases:
             task = self.styled("训练流",
@@ -3155,19 +3155,23 @@ class WeekendMapRules(unittest.TestCase):
             self.assertEqual(task.today_places("六", st, task._texts), want, stamina)
 
     def test_both_venue_switches_off_without_stamina_goes_park(self):
-        """读不到体力（精力/上限）→ 不赌「够用」，仍去公园（原行为）。"""
+        """读不到体力（精力/上限）→ 不赌消费，回退「餐厅 → 公园」。"""
         task = self.styled("训练流", self._map("星期六"))
         st = task.weekend_state()
         self._both_venue_switches_off(task)
-        self.assertEqual(task.today_places("六", st), ["公园"])
+        self.assertEqual(task.today_places("六", st), ["餐厅", "公园"])
 
-    def test_venue_switches_only_affect_days_with_venues(self):
-        """周日训练流只有公园：两个开关跟它无关，仍然是公园（不是餐厅）。"""
-        task = self.styled("训练流", self._map("星期日"))
-        st = task.weekend_state()
-        task.config["允许进步行街"] = False
-        task.config["允许进游戏厅"] = False
-        self.assertEqual(task.today_places("日", st), ["公园"])
+    def test_training_style_ignores_venue_switches(self):
+        """训练流候选里没有步行街/游戏厅：两个开关关不关，结果一样。"""
+        for switches in (True, False):
+            task = self.styled("训练流",
+                               self._map("星期六") + [box(380, 16, "110/130", 210, 53)])
+            st = task.weekend_state()
+            task.config["允许进步行街"] = switches
+            task.config["允许进游戏厅"] = switches
+            for day in ("六", "日"):
+                self.assertEqual(task.today_places(day, st, task._texts),
+                                 ["餐厅", "公园"], (switches, day))
 
     def test_map_entry_marks_outing_used(self):
         """**进了地图**才记「今天的出行机会用掉了」（记账点在 handle_weekend）。"""
@@ -3307,19 +3311,13 @@ class WeekendMapRules(unittest.TestCase):
         self.assertFalse(task.late_shop_step(texts))
         self.assertEqual(task.actions, [])
 
-    def test_saturday_training_style_keeps_old_route(self):
-        """缺口读不到时回退旧行程：步行街 → 游戏厅 → 公园。"""
-        task = self.styled("训练流", self._map("星期六"))
-        task.weekend_state()
-        self.assertTrue(task.handle_weekend(task._texts))
-        self.assertEqual(task.actions[-1][1], "步行街")
-
-    def test_sunday_training_style_is_park(self):
-        """缺口读不到时回退旧表：训练流周日公园。"""
-        task = self.styled("训练流", self._map("星期日"))
-        task.weekend_state()
-        self.assertTrue(task.handle_weekend(task._texts))
-        self.assertEqual(task.actions[-1][1], "公园")
+    def test_training_style_gap_unknown_falls_back_to_work(self):
+        """缺口读不到时回退「餐厅 → 公园」：不再去步行街/游戏厅（2026-11-11）。"""
+        for day in ("星期六", "星期日", "星期五"):
+            task = self.styled("训练流", self._map(day))
+            task.weekend_state()
+            self.assertTrue(task.handle_weekend(task._texts), day)
+            self.assertEqual(task.actions[-1][1], "餐厅", day)
 
     def test_training_gap_unknown_money_works(self):
         """训练流缺口 20、零用钱读不到 → 不赌消费，去餐厅打工（公园兜底）。"""
@@ -3329,13 +3327,13 @@ class WeekendMapRules(unittest.TestCase):
         self.assertEqual(task.today_places("六", st, texts), ["餐厅", "公园"])
 
     def test_training_gap_drives_weekend_action(self):
-        """2026-11-11：训练流按缺口选动作，不再固定周六步行街/周日公园。"""
+        """2026-11-11：训练流按缺口选动作，不看星期、也不看零用钱。"""
         cases = (
             ("星期六", "70/130", None, "公园"),      # 缺口 60 → 公园
             ("星期六", "90/130", None, "公园"),      # 缺口 40 → 公园（划船）
-            ("星期六", "110/130", "200", "步行街"),  # 缺口 20 + 钱够 → 消费
-            ("星期六", "110/130", "80", "餐厅"),     # 缺口 20 + 钱不够 → 打工
-            ("星期日", "110/130", "200", "步行街"),  # 同一条规则，不分星期
+            ("星期六", "110/130", "200", "餐厅"),    # 缺口 20：有钱也只打工
+            ("星期六", "110/130", "80", "餐厅"),     # 缺口 20 → 打工
+            ("星期日", "110/130", "200", "餐厅"),    # 同一条规则，不分星期
         )
         for day, stamina, money, want in cases:
             texts = self._map(day) + [box(380, 16, stamina, 210, 53)]
@@ -3355,7 +3353,7 @@ class WeekendMapRules(unittest.TestCase):
     def test_all_places_visited_exits_map(self):
         task = FakeTask(list(self.MAP))
         task.weekend_state()                      # 先固定 date，避免 handle_weekend 清空 visited
-        task._weekend["visited"] = {"公园", "步行街", "游戏厅"}
+        task._weekend["visited"] = {"餐厅", "公园"}   # 训练流的两个候选都走完
         self.assertTrue(task.handle_weekend(task._texts))
         self.assertEqual(task.actions[-1][0], "click")
         self.assertGreaterEqual(task.actions[-1][1], int(task.width * 0.9))   # 右上角返回

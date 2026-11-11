@@ -56,36 +56,25 @@ class MapPlace:
 
             缺口 ≥ 周末划船缺口（默认 30） → 公园
                 公园内再按「周末野餐阈值」（默认 70）分野餐/划船；
-            缺口 < 周末划船缺口（30）：
-                零用钱 ≥ 训练流消费门槛（110）→ 步行街/游戏厅消费
-                否则（钱不够/读不到）→ 餐厅打工
+            缺口 < 周末划船缺口（30） → 餐厅打工
 
-        消费/打工后面都跟「公园」兜底：这一站买不到/打不了工时，
-        公园划船还能拿属性，不至于把一天空掉。读不到精力时返回 None，
-        由调用方回退旧的行程表（接手局/OCR 抖动不崩）。
+        打工后面跟「公园」兜底：这一站打不了工时，公园划船还能拿属性，
+        不至于把一天空掉。读不到精力时返回 None，由调用方回退「餐厅 → 公园」。
+
+        为什么缺口小也不去步行街/游戏厅（2026-11-11 用户口径）：
+        那两处都是**花掉一天 + 花掉零用钱**，只换一张卡；打工是**花掉一天 +
+        赚 240~420 零用钱**，而商店买牛奶/秘籍不占日期 —— 特训牛奶 50 币
+        能让 3 天训练少耗 40% 精力（约 1 个训练日），对训练流严格更划算。
         """
         gap = self.weekend_gap(texts)
         if gap is None:
             return None
         row_gap = int(self.config.get("周末划船缺口"))
-        spend_money = int(self.config.get("训练流消费门槛"))
         if gap >= row_gap:
             return ["公园"]
-
-        money = self.read_money(texts)
-        venues = []
-        if self.config.get("允许进步行街"):
-            venues.append("步行街")
-        if self.config.get("允许进游戏厅"):
-            venues.append("游戏厅")
-        if venues and money is not None and money >= spend_money:
-            self.log_info(
-                f"周末缺口 {gap} < {row_gap}，零用钱 {money} ≥ {spend_money}"
-                f" → 消费（{venues}）")
-            return venues + ["公园"]
         self.log_info(
-            f"周末缺口 {gap} < {row_gap}，零用钱 {money}"
-            f"（< {spend_money} 或读不到）→ 餐厅打工")
+            f"周末缺口 {gap} < {row_gap} → 餐厅打工"
+            "（零用钱留给商店的牛奶/秘籍，周末不去步行街/游戏厅）")
         return ["餐厅", "公园"]
 
     # ---------- 今天去哪几个地点 ----------
@@ -96,6 +85,7 @@ class MapPlace:
         判据来自 `constants.WEEKEND_PLAN`（星期 + 流派 → 地点列表），
         **训练流 / 扭蛋流 / 小游戏流除外**：
         - 训练流：按精力缺口选动作（见 `training_weekend_places`）；
+          读不到缺口时回退「餐厅 → 公园」，**不再回退步行街/游戏厅**；
         - 扭蛋流 / 小游戏流：候选固定是「主地点 + 餐厅」，与星期无关
           （2026-11-10 用户口径）。这样训练日的额外出行日
           （二星野上泷第 9/16/30 天）也走同一条门槛，不再靠「读不到星期 →
@@ -111,6 +101,10 @@ class MapPlace:
             gap_places = self.training_weekend_places(texts, day, st)
             if gap_places is not None:
                 return gap_places
+            # 缺口读不到：也不回退旧的「步行街 → 游戏厅」（训练流不再消费），
+            # 餐厅打不了工还有公园兜底。
+            self.log_info("周末：训练流读不到精力缺口 → 回退「餐厅 → 公园」")
+            return ["餐厅", "公园"]
         main = WEEKEND_MAIN_PLACE.get(self.style)
         if main is not None:
             # 买成扭蛋当天就结束，不用再去餐厅（小游戏流由 visited 过滤）。
@@ -180,10 +174,11 @@ class MapPlace:
         理由（一次步行街期望 3.3 颗、4 颗金 = 360 覆盖 78% 的触发轮次）见
         `constants.WEEKEND_WORK_MONEY_GATE` 的注释。
 
-        **训练流周六**（步行街 / 游戏厅 二选一，买扭蛋/玩小游戏当天就结束）：
+        **训练流**（2026-11-11 起）**不再经过这里**：缺口 < 30 固定去餐厅打工，
+        候选里已经没有步行街/游戏厅。下面这条「只有一边打折就先去那边」
+        只留给仍带这两个候选的旧行程（防御性兜底，以后加流派时不用重写）。
         1. **只有一个在打折** → 去打折的那个；
-        2. 其他情况（都打折 / 都不打折）→ 保持原顺序
-           （步行街 → 游戏厅 → 公园）。
+        2. 其他情况（都打折 / 都不打折）→ 保持原顺序。
 
         队友气泡（`venue_has_mate`）**不参与任何一条**（2026-11-10 用户口径）：
         它看不到品质（带队友的可能是根本不买的蓝卡），也看不到刷新后的批次
