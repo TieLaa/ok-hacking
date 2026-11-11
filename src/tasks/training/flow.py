@@ -1106,14 +1106,14 @@ class TrainingFlowMixin:
         self.log_info(f"流派：{style}（配置指定队长「{name}」，跳过日历）")
         return True
 
-    def weekend_priority(self, day=None, st=None):
+    def weekend_priority(self, day=None, st=None, texts=None):
         """今天该去的地点（有序）。
 
         **判断已搬到 `training/places/map.py`**（地图 = 决策模块）：
-        行程表、扭蛋流的「先抽扭蛋再打工」、两个开关过滤都在那里。
+        训练流按缺口选动作、扭蛋流的「先抽扭蛋再打工」、两个开关过滤都在那里。
         这里保留旧名，让现有调用点不用改。
         """
-        return self.today_places(day, st)
+        return self.today_places(day, st, texts)
 
     def rest_threshold(self, day=None):
         """今天「精力低于多少就休息」。

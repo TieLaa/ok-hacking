@@ -66,7 +66,7 @@ DEFAULT_LAYOUT = {
             {"id": "today", "title": "今日计划", "rows": [
                 ["比赛倒计时", "{match_countdown}"],
                 ["周末去处", "{weekend_plan}"],
-                ["野餐阈值", "精力 < {picnic_threshold}"],
+                ["野餐阈值", "缺口 ≥ {picnic_threshold}"],
             ]},
             {"id": "shop", "title": "商店", "rows": [
                 ["商店购买策略", "{buy_strategy}"],

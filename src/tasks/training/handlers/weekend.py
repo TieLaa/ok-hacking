@@ -598,17 +598,17 @@ class WeekendHandlers:
     def handle_weekend(self, texts):
         """出行地图（周末 + 训练日的额外出行）：去今天该去的地点。
 
-        用户 2026-10-29 / 2026-11-10 口径（见 constants.WEEKEND_PLAN /
-        WEEKEND_MAIN_PLACE）：
-        - 周六：训练流原设定（步行街 → 游戏厅 → 公园）；商店流去餐厅打工；
-        - 周日：训练流→公园、商店流→餐厅；
+        用户 2026-10-29 / 2026-11-10 / 2026-11-11 口径
+        （见 constants.WEEKEND_PLAN / WEEKEND_MAIN_PLACE 和
+        `places/map.py: training_weekend_places`）：
+        - **训练流**：按精力缺口选动作 ——
+          缺口 ≥ 周末划船缺口（30）→ 公园（缺口 ≥ 周末野餐阈值 70 野餐，
+          否则划船）；缺口 < 30 → 零用钱 ≥ 110 消费，否则餐厅打工；
+        - **商店流**：周六/周日去餐厅打工；
         - **扭蛋流 / 小游戏流**：候选固定「主地点 + 餐厅」，**与星期无关**
           （2026-11-10：训练日的额外出行日也走同一条门槛）——
           零用钱 ≥ 360 → 主地点，< 360 → 餐厅打工，队友和标签都不参与
           （`places/map.py: prefer_venue`）。
-        `允许进步行街 / 允许进游戏厅` 没开时对应地点会被过滤掉；
-        两个都关掉时按**体力缺口**（上限−当前 > 60 → 公园，否则餐厅）二选一，
-        零花钱不参与判断（2026-11-10 用户口径：训练流精力优先）。
         """
         # 周末首页有「出行」大按钮，地图上没有（2026-10-27 核对 run2 地图页三帧 OCR：
         # 地图只有「公园/公园+」「游戏厅/属性+」「步行街/零用钱+」，无「出行」）。
@@ -626,8 +626,9 @@ class WeekendHandlers:
         visited = st.setdefault("visited", set())
         day = st["date"][1] if st["date"] else None
 
-        # 今天去哪几个地点：**判断在 `training/places/map.py`**（决策模块）
-        places = self.today_places(day, st)
+        # 今天去哪几个地点：**判断在 `training/places/map.py`**（决策模块）。
+        # 训练流要读当前精力/零用钱算缺口，所以把 texts 一起传进去。
+        places = self.today_places(day, st, texts)
 
         # 今天已经去过的地方不再进：游戏厅没有可跳过的小游戏时会退回地图，
         # 不记录「已去过」就会来回进出游戏厅（2026-10-26 实训）。

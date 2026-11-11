@@ -2170,6 +2170,16 @@ class DayCycleRules(unittest.TestCase):
         action, _ = task.training_day_action(task._texts)
         self.assertEqual(action, "训练")
 
+    def test_training_day_action_rest_threshold_is_50(self):
+        """2026-11-11：训练流休息阈值 50（50+ 失败率 0%，47/49 已 11%/27%）。"""
+        cases = (("45/130", "休息"), ("50/130", "训练"))
+        for stamina, want in cases:
+            task = FakeTask([box(30, 20, "第1周", 120, 40),
+                             box(200, 20, "星期五", 130, 40),
+                             box(380, 16, stamina, 210, 53)])
+            action, reason = task.training_day_action(task._texts)
+            self.assertEqual(action, want, (stamina, reason))
+
     def test_outing_offer_requires_button_not_dialogue(self):
         """出行入口②：只有**按钮**才算，台词不算。"""
         texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
@@ -2343,8 +2353,11 @@ class ConfigSpecRules(unittest.TestCase):
         from src.tasks.training import config_spec
         task = FakeTask([])
         self.assertEqual(task.config["允许进步行街"], True)
-        self.assertEqual(task.config["休息精力阈值"], 40)
+        self.assertEqual(task.config["休息精力阈值"], 50)
         self.assertEqual(task.config["扭蛋清空精力阈值"], 30)
+        self.assertEqual(task.config["周末野餐阈值"], 70)
+        self.assertEqual(task.config["周末划船缺口"], 30)
+        self.assertEqual(task.config["训练流消费门槛"], 110)
         self.assertEqual(len(task.config), len(config_spec.ALL))
 
     def test_json_and_spec_agree(self):
@@ -2456,8 +2469,19 @@ class PlaceModulesRules(unittest.TestCase):
         self.assertEqual(arcade.PLACE, "游戏厅")
         self.assertEqual(shop.PLACE, "商店")
 
+    def test_training_park_pick_by_gap(self):
+        """训练流公园：缺口 ≥70 野餐；缺口 <70 划船（2026-11-11）。"""
+        cases = (("60/130", "野餐"),     # 缺口 70
+                 ("70/130", "划船"),     # 缺口 60
+                 ("90/130", "划船"),     # 缺口 40
+                 ("110/130", "划船"))    # 缺口 20
+        for stamina, want in cases:
+            task = self._park_task(stamina=stamina)
+            self.assertEqual(
+                task.park_order(task._texts, "训练流", day="日")[0], want, stamina)
+
     def test_park_order_by_style_and_day(self):
-        """公园：训练流周日看精力，其它流派用配置项。"""
+        """公园：训练流按缺口，其它流派用配置项。"""
         task = FakeTask([box(30, 20, "第1周", 120, 40), box(200, 20, "星期日", 130, 40),
                          box(380, 16, "20/130", 210, 53)])
         task._style = "训练流"
@@ -2500,23 +2524,32 @@ class PlaceModulesRules(unittest.TestCase):
         task.mate_face_count = lambda b, **k: counts.get(b.name.strip(), 0)
         return task
 
-    def test_park_boat_with_two_more_teammates_wins(self):
-        """划船 2 人 / 野餐 0 人（多两个）→ 划船，哪怕精力 20 < 周末野餐阈值 60。"""
-        task = self._park_task(mates={"划船": 2, "野餐": 0})
-        self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "划船")
+    def test_park_boat_with_two_more_teammates_wins_other_styles(self):
+        """其它流派：划船 2 人 / 野餐 0 人（多两个）→ 划船。
 
-    def test_park_boat_with_three_more_teammates_wins(self):
-        """多三个也一样（口径是「多两个及以上」）。"""
-        task = self._park_task(mates={"划船": 3, "野餐": 1})
-        self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "划船")
+        训练流 2026-11-11 起按缺口选，队友改判不再抢野餐（见下面
+        `test_training_gap_beats_boat_mate`）。
+        """
+        task = self._park_task(mates={"划船": 2, "野餐": 0}, style="扭蛋流")
+        self.assertEqual(task.park_order(task._texts, "扭蛋流", day="日")[0], "划船")
+
+    def test_park_boat_with_three_more_teammates_wins_other_styles(self):
+        """其它流派多三个也一样（口径是「多两个及以上」）。"""
+        task = self._park_task(mates={"划船": 3, "野餐": 1}, style="扭蛋流")
+        self.assertEqual(task.park_order(task._texts, "扭蛋流", day="日")[0], "划船")
+
+    def test_training_gap_beats_boat_mate(self):
+        """训练流缺口 110 ≥ 70 → 野餐；划船队友多 2 个也不改（缺口规则优先）。"""
+        task = self._park_task(mates={"划船": 2, "野餐": 0})
+        self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "野餐")
 
     def test_park_boat_with_one_more_teammate_still_picnic(self):
-        """只多一个不够 —— 低精力仍然野餐（和餐厅「差 1 个不算」同一口径）。"""
+        """训练流缺口 110 ≥70 → 野餐；划船只多 1 个也不改（缺口规则优先）。"""
         task = self._park_task(mates={"划船": 1, "野餐": 0})
         self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "野餐")
 
     def test_park_boat_two_but_picnic_one_still_picnic(self):
-        """2 人 vs 1 人只差 1 个 → 仍然野餐。"""
+        """训练流缺口 110 ≥70 → 野餐；2 人 vs 1 人也不改。"""
         task = self._park_task(mates={"划船": 2, "野餐": 1})
         self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "野餐")
 
@@ -2525,10 +2558,10 @@ class PlaceModulesRules(unittest.TestCase):
         task = self._park_task(mates={"划船": 2, "野餐": 0}, style="扭蛋流")
         self.assertEqual(task.park_order(task._texts, "扭蛋流", day="日")[0], "划船")
 
-    def test_park_picnic_with_more_teammates_keeps_boat(self):
-        """反方向不改：野餐多两个也不影响周六固定划船（用户只要求划船这一侧）。"""
+    def test_training_gap_picnic_with_more_picnic_teammates(self):
+        """训练流缺口 110 ≥ 70 → 野餐；野餐队友多也不改成划船。"""
         task = self._park_task(mates={"划船": 0, "野餐": 2})
-        self.assertEqual(task.park_order(task._texts, "训练流", day="六")[0], "划船")
+        self.assertEqual(task.park_order(task._texts, "训练流", day="六")[0], "野餐")
 
     def test_park_keeps_configured_walk(self):
         """配置里明确要「散步」的流派不受队友口径影响（只仲裁「野餐 vs 划船」）。"""
@@ -2539,8 +2572,9 @@ class PlaceModulesRules(unittest.TestCase):
     def test_park_counts_faces_on_real_frame(self):
         """真帧（docs/shots/park_boat_mates.png，1549x871，第1周周日 40/130）：
 
-        划船头顶 3 个 chibi（数到 2~3 个）、野餐 0 个 —— 用户要的就是这一页：
-        「划船的队友比野餐多 2 个 → 优先划船」，旧规则会按精力 40 < 60 去野餐。
+        划船头顶 3 个 chibi（数到 2~3 个）、野餐 0 个 —— 数脸判据要对。
+        选择按其它流派的队友规则验证（训练流 2026-11-11 起改按缺口，
+        缺口 90 ≥ 70 会直接野餐，不再由队友改判）。
         """
         path = os.path.join(ROOT, "docs", "shots", "park_boat_mates.png")
         if cv2 is None or not os.path.exists(path):
@@ -2554,12 +2588,12 @@ class PlaceModulesRules(unittest.TestCase):
                  box(200, 20, "星期日", 130, 40),
                  box(380, 16, "40/130", 210, 53)]
         task = DryRunTask(frame, texts)
-        task._style = "训练流"
+        task._style = "扭蛋流"
         task.weekend_state()
         boat, picnic = box(740, 455, "划船", 100, 40), box(1045, 455, "野餐", 100, 40)
         self.assertGreaterEqual(task.mate_face_count(boat), 2)
         self.assertEqual(task.mate_face_count(picnic), 0)
-        self.assertEqual(task.park_order(texts, "训练流", day="日")[0], "划船")
+        self.assertEqual(task.park_order(texts, "扭蛋流", day="日")[0], "划船")
 
 
     def test_arcade_picks_free_card_first(self):
@@ -3107,18 +3141,18 @@ class WeekendMapRules(unittest.TestCase):
         return task
 
     def test_both_venue_switches_off_uses_stamina_gap(self):
-        """2026-11-10 用户口径：两个地点开关都关掉 → **按体力缺口**选公园/餐厅。
-
-        缺口（上限 − 当前）> 60 → 公园（周六 + 周日两次划船正好回 60，还各拿一次属性）；
-        缺口 ≤ 60 → 餐厅打工。训练流精力优先，零花钱不参与这个判断。
-        """
-        for stamina, want in (("100/130", ["餐厅"]),     # 缺口 30 → 体力够，去打工
-                              ("60/130", ["公园"])):      # 缺口 70 → 去公园回精力
+        """训练流缺口规则：缺口 ≥30 公园（≥70 野餐，否则划船）；<30 打工/消费。"""
+        cases = (
+            ("100/130", ["公园"]),           # 缺口 30 → 公园划船
+            ("60/130", ["公园"]),            # 缺口 70 → 公园野餐
+            ("110/130", ["餐厅", "公园"]),   # 缺口 20 + 两开关都关 → 打工，公园兜底
+        )
+        for stamina, want in cases:
             task = self.styled("训练流",
                                self._map("星期六") + [box(380, 16, stamina, 210, 53)])
             st = task.weekend_state()
             self._both_venue_switches_off(task)
-            self.assertEqual(task.today_places("六", st), want, stamina)
+            self.assertEqual(task.today_places("六", st, task._texts), want, stamina)
 
     def test_both_venue_switches_off_without_stamina_goes_park(self):
         """读不到体力（精力/上限）→ 不赌「够用」，仍去公园（原行为）。"""
@@ -3274,18 +3308,43 @@ class WeekendMapRules(unittest.TestCase):
         self.assertEqual(task.actions, [])
 
     def test_saturday_training_style_keeps_old_route(self):
-        """训练流周六原设定不变：步行街 → 游戏厅 → 公园。"""
+        """缺口读不到时回退旧行程：步行街 → 游戏厅 → 公园。"""
         task = self.styled("训练流", self._map("星期六"))
         task.weekend_state()
         self.assertTrue(task.handle_weekend(task._texts))
         self.assertEqual(task.actions[-1][1], "步行街")
 
     def test_sunday_training_style_is_park(self):
-        """训练流周日就是公园（地点表说了算，没有额外开关）。"""
+        """缺口读不到时回退旧表：训练流周日公园。"""
         task = self.styled("训练流", self._map("星期日"))
         task.weekend_state()
         self.assertTrue(task.handle_weekend(task._texts))
         self.assertEqual(task.actions[-1][1], "公园")
+
+    def test_training_gap_unknown_money_works(self):
+        """训练流缺口 20、零用钱读不到 → 不赌消费，去餐厅打工（公园兜底）。"""
+        texts = self._map("星期六") + [box(380, 16, "110/130", 210, 53)]
+        task = self.styled("训练流", texts)
+        st = task.weekend_state()
+        self.assertEqual(task.today_places("六", st, texts), ["餐厅", "公园"])
+
+    def test_training_gap_drives_weekend_action(self):
+        """2026-11-11：训练流按缺口选动作，不再固定周六步行街/周日公园。"""
+        cases = (
+            ("星期六", "70/130", None, "公园"),      # 缺口 60 → 公园
+            ("星期六", "90/130", None, "公园"),      # 缺口 40 → 公园（划船）
+            ("星期六", "110/130", "200", "步行街"),  # 缺口 20 + 钱够 → 消费
+            ("星期六", "110/130", "80", "餐厅"),     # 缺口 20 + 钱不够 → 打工
+            ("星期日", "110/130", "200", "步行街"),  # 同一条规则，不分星期
+        )
+        for day, stamina, money, want in cases:
+            texts = self._map(day) + [box(380, 16, stamina, 210, 53)]
+            if money is not None:
+                texts.append(box(1000, 20, money, 120, 45))
+            task = self.styled("训练流", texts)
+            task.weekend_state()
+            self.assertTrue(task.handle_weekend(texts), (day, stamina))
+            self.assertEqual(task.actions[-1][1], want, (day, stamina, money))
 
     def test_training_style_never_enters_shop_on_saturday(self):
         """训练流周六不逛商店（钱优先换步行街/游戏厅的黄道具）。"""
@@ -3552,7 +3611,7 @@ class StylePlanRules(unittest.TestCase):
         「周二的 65 改成周四精力低于 60 就休息」，流派白名单不变
         （扭蛋流 / 小游戏流）。**周二现在没有任何特殊阈值。**
         """
-        base = {"休息精力阈值": 40}
+        base = {"休息精力阈值": 50}
 
         def limit(style, day):
             task = FakeTask([], config=dict(base))
@@ -3562,11 +3621,11 @@ class StylePlanRules(unittest.TestCase):
         for style in ("扭蛋流", "小游戏流"):
             self.assertEqual(limit(style, "四"), 60, style)
         for style in ("训练流", "商店流"):
-            self.assertEqual(limit(style, "四"), 40, style)
+            self.assertEqual(limit(style, "四"), 50, style)
         for style in ("训练流", "商店流", "扭蛋流", "小游戏流"):
-            self.assertEqual(limit(style, "二"), 40, style)
-            self.assertEqual(limit(style, "五"), 40, style)
-            self.assertEqual(limit(style, "一"), 40, style)
+            self.assertEqual(limit(style, "二"), 50, style)
+            self.assertEqual(limit(style, "五"), 50, style)
+            self.assertEqual(limit(style, "一"), 50, style)
         # 配置里的阈值更高时以配置为准（取 max，不能因为周四就下调）
         for style in ("扭蛋流", "小游戏流", "训练流"):
             task = FakeTask([], config={"休息精力阈值": 80})
