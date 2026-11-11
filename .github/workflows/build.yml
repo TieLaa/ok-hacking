@@ -34,6 +34,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: true
+          # Release 说明要按「上一个 tag..当前 tag」生成，必须拉全历史和 tag；
+          # 默认 fetch-depth: 1 会让 git log 只剩 tag 那一个 commit。
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -85,23 +89,52 @@ jobs:
         with:
           version: 'v1.2.4'
 
+      # Release 正文 = 安装说明模板 + 「上一个 tag..当前 tag」里用户可见的提交。
+      # 提交信息按 AGENTS.md 的「写给用户看」口径写；这里再兜底过滤内部前缀，
+      # 并去掉 feat(ui): / fix(training): 这类前缀，避免原样漏到用户面前。
+      - name: Generate release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $prev = git describe --tags --abbrev=0 "$tag^" 2>$null
+          if (-not $prev) { $prev = git rev-list --max-parents=0 HEAD }
+          # 先让 git 直接写 UTF-8 文件，再用 Get-Content -Encoding utf8 读；
+          # 不要用管道接 git 输出：PowerShell 会按控制台码页解码，中文会被改写成乱码。
+          $raw = Join-Path $env:RUNNER_TEMP 'raw_changes.txt'
+          git log --no-merges --pretty=format:'- %s' "$prev..$tag" "--output=$raw"
+          $changes = Get-Content -LiteralPath $raw -Encoding utf8
+          $changes = $changes | Where-Object {
+            $_ -notmatch '^- (tests?|ci|refactor|chore|build|docs)(\(|:)' -and
+            $_ -notmatch '^- [a-z]+\((tools|evidence|release|tests?|ci|build|docs)\)' -and
+            $_ -notmatch '(README|Clean up duplicate|补充文档|发版后|发版说明|补充开发约定)'
+          }
+          $changes = $changes -replace '^- [a-z]+(\([^)]+\))?: ', '- '
+          if (-not $changes) { $changes = @('- 本次以内部修复和打包调整为主') }
+          $lines = @(
+            "### 版本 $tag",
+            "",
+            "### 本次更新"
+          ) + @($changes) + @(
+            "",
+            '本页下方的安装包按更新源分两个 profile：',
+            '* `China` —— 依赖走国内镜像，国内用户用这个',
+            '* `Global` —— 依赖走 PyPI 官方源，海外用户用这个',
+            "",
+            '### 安装前请确认',
+            '* **以管理员身份安装并运行**（游戏进程是管理员权限，非管理员发不进输入）',
+            '* **安装路径必须是纯英文**（ok-script 拒绝非 ASCII 路径）',
+            '* **游戏窗口必须保持可见**（完全遮挡或最小化时截图后端拿不到新帧）',
+            "",
+            '### 免责声明',
+            '本项目与游戏官方无关，仅供学习交流。使用自动化工具可能违反游戏用户服务条款，存在封号风险，后果自负。'
+          )
+          $lines | Out-File -FilePath release_notes.md -Encoding utf8
+
       - name: Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           draft: false
-          body: |
-            ### 版本 ${{ github.ref_name }}
-
-            本页下方的安装包按更新源分两个 profile：
-            * `China` —— 依赖走国内镜像，国内用户用这个
-            * `Global` —— 依赖走 PyPI 官方源，海外用户用这个
-
-            ### 安装前请确认
-            * **以管理员身份安装并运行**（游戏进程是管理员权限，非管理员发不进输入）
-            * **安装路径必须是纯英文**（ok-script 拒绝非 ASCII 路径）
-            * **游戏窗口必须保持可见**（完全遮挡或最小化时截图后端拿不到新帧）
-
-            ### 免责声明
-            本项目与游戏官方无关，仅供学习交流。使用自动化工具可能违反游戏用户服务条款，存在封号风险，后果自负。
+          body_path: release_notes.md
           files: pyappify_dist/*
