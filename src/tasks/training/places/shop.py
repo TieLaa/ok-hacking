@@ -17,25 +17,29 @@
 
 2026-11-05 用户口径：进了店就按「商店购买策略」正常顺序买，**不清空**。
 
-2026-11-08 用户口径（**取代**之前的四选项策略）：
-- **第 7 周之前只买 0 元商品（红包）**，非 0 一律不买；
-- 第 7 周以后按 **红包 → 彩 → 金 → 紫** 的顺序买；
-- 精力类商品仍按之前的逻辑：**垫底** + 三类门槛（见 `shop_stamina_gate`），
-  只买符合条件的；免费的照样优先拿。
-
-2026-11-07 用户口径：**恢复精力的商品购买优先级最低**——彩金紫里先挑非恢复的
-（品质 → 价格），池里只剩恢复的才买它；免费的（0 元）不受影响，照样优先拿。
-
-2026-11-08 用户口径：**恢复精力商品过三类门槛**（登记过恢复量的才拦）：
-① 立刻恢复 N：当前+N > 上限 → 溢出拒买；② 全部恢复：上限−当前 ≤100 → 拒；
-③ 接下来几日恢复：当前/上限 ≥ 1/2 → 拒。登记表是
-`constants.SHOP_STAMINA_ITEMS`（列表卡没有效果文本，只能按名字认；
-用户实跑看到就报，会话里加一行；恢复量 None = 只垫底、不拦）。
+2026-11-11 用户口径（**取代**「第 7 周前只买 0 元」和「彩金紫」两套旧规则）：
+- 商店内顺序**对所有流派相同**：现金 → 牛奶 → 精力 → 教科书 → 器材 → 属性
+  （`constants.SHOP_PRIORITY`）。流派只决定「进不进店、带多少钱」，不决定买什么；
+- **训练流 / 商店流**：进店就按顺序买，不设周数限制；
+- **扭蛋流 / 小游戏流**：前 6 周零花钱留给周末的步行街/游戏厅，只拿必拿；
+- 现金类（老板的馈赠 / 大乐透）永远最先，纯赚档不看余额；
+- 苦味/怪味、神之庇佑、同心护符：当前策略下不买；
+- 精力商品仍过三类门槛（见 `shop_stamina_gate`）。
 """
 
 from src.tasks.ui import labels
-from src.tasks.training.constants import (LATE_SHOP_FROM_WEEK, SHOP_MUST_TAKE,
-                                          SHOP_NEVER_BUY, SHOP_STAMINA_ITEMS)
+from src.tasks.training.constants import (LATE_SHOP_FROM_WEEK, SHOP_ITEMS,
+                                          SHOP_ITEM_PREFIX,
+                                          SHOP_NEVER_BUY, SHOP_PRIORITY,
+                                          SHOP_SEASON_WEEKS, SHOP_STAMINA_ITEMS,
+                                          SHOP_TRAINING_WEEKDAYS)
+
+# 星期 → 数字（用来算剩余训练日）
+WEEKDAY_INDEX = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+                 "六": 6, "日": 7, "天": 7}
+
+# 时限商品至少还要有这么多训练日才值得买（兑现不了就不买）
+SHOP_MIN_DAYS_LEFT = {"milk": 3, "textbook": 2, "equipment_boost": 2}
 
 # 地点名（地图上的按钮文字 / 状态里的键）
 PLACE = "商店"
@@ -120,18 +124,6 @@ class ShopPlace:
         """读出商品列表（`read_shop_items` 的封装）。"""
         return self.read_shop_items(texts)
 
-    @staticmethod
-    def _is_stamina_drink(item):
-        """这件商品是不是恢复精力的（垫底 + 可能过门槛）。
-
-        2026-11-07 用户口径：恢复精力的商品优先级最低（垫底顺序在外层）。
-        2026-11-08 用户口径：登记过恢复量的还要过三类门槛（见 `stamina_gate`）。
-        判据 = `constants.SHOP_STAMINA_ITEMS` 登记表（列表卡只有名字 + 价格，
-        没有效果文本，只能按名字认；用户实跑采集、会话里加行）。
-        """
-        name = item.get("name") or ""
-        return any(word in name for word in SHOP_STAMINA_ITEMS)
-
     def shop_stamina_gate(self, item, stamina, stamina_max):
         """这件恢复精力商品过不过三类门槛？返回拒因字符串，None = 能买。
 
@@ -170,107 +162,185 @@ class ShopPlace:
             return None
         return None
 
+    # ---------- 商品表 / 流派优先级 ----------
+
+    def shop_category(self, name):
+        """商品类别：先查表，查不到按名字前缀兜底，再不认识归「属性」。
+
+        归「属性」是保守兜底：它仍然受周数、余额、上限余量约束，
+        不会像 `never` 那样被无条件丢掉，也不会像 `cash` 那样无条件优先。
+        """
+        hit = SHOP_ITEMS.get(name)
+        if hit is not None:
+            return hit[0]
+        for prefix, cat in SHOP_ITEM_PREFIX:
+            if prefix in name:
+                return cat
+        return "attribute"
+
+    def shop_tier(self, category):
+        """该类商品在商店里的档位；不在表里返回 None（不参与购买）。
+
+        2026-11-11 用户口径：**所有流派共用同一条顺序**，商店里不按流派筛选。
+        """
+        try:
+            return SHOP_PRIORITY.index(category)
+        except ValueError:
+            return None
+
+    def shop_value(self, item):
+        """同档内比大小用的数值；表外商品按品质色兜底（彩75/金50/紫25）。"""
+        hit = SHOP_ITEMS.get(item["name"])
+        if hit is None:
+            return {"彩": 75, "金": 50, "紫": 25}.get(
+                item.get("quality"), 0)
+        cat, _price, val = hit
+        if val is None:
+            return 0
+        if cat == "milk":
+            return val[0] * 10 + val[1]
+        if cat == "textbook":
+            return val[1]
+        if cat == "equipment_boost":
+            return val[1] if isinstance(val, tuple) else 0
+        if cat == "stamina" and isinstance(val, tuple):
+            return val[0]
+        return val if isinstance(val, (int, float)) else 0
+
+    def save_money_for_weekend(self):
+        """这个流派的零花钱要留给周末自己的场所吗？
+
+        2026-11-11 用户口径：
+        - 扭蛋流（步行街）/ 小游戏流（游戏厅）要留 360，前 6 周只拿必拿；
+        - 训练流 / 商店流不设这道限制，进店就按顺序买；
+        - 流派未知时按保守处理（当作要留钱）。
+        """
+        if not self.style_known:
+            return True
+        return self.style in ("扭蛋流", "小游戏流")
+
+    def shop_targets(self):
+        """本局要重点买的科目/属性集合；None = 不筛选（目前默认）。
+
+        将来按队长定位算：
+          队长名 → `constants.POSITION_BY_NAME` → 位置/推荐属性 → 科目集合
+        返回集合后，非目标科目的教科书/属性商品会降一个子档（不剔除，
+        避免刷不出目标时什么都不买）。
+        """
+        return None
+
+    def _target_penalty(self, item):
+        """非目标科目的教科书/属性商品 → 1；其余或未指定目标 → 0。"""
+        targets = self.shop_targets()
+        if not targets:
+            return 0
+        if self.shop_category(item["name"]) not in ("textbook", "attribute"):
+            return 0
+        return 0 if any(t in item["name"] for t in targets) else 1
+
+    def training_days_left(self):
+        """本局剩余训练日（周一~周五）；读不到日期返回 None（不拦）。"""
+        week, day = self.current_day()
+        idx = WEEKDAY_INDEX.get(day or "")
+        if week is None or idx is None:
+            return None
+        this_week = max(0, SHOP_TRAINING_WEEKDAYS - idx + 1) if idx <= 5 else 0
+        full_weeks = max(0, SHOP_SEASON_WEEKS - week)
+        return this_week + full_weeks * SHOP_TRAINING_WEEKDAYS
+
     def pick_shop_item(self, items, money, policy, stamina=None, stamina_max=None):
         """选哪件商品？返回 (商品, 原因) 或 (None, 原因)。
 
-        `policy` = 配置项「商店购买策略」：红包→彩→金→紫 / 不买。
-        `stamina` / `stamina_max` = 当前精力 / 上限（顶栏读，可能 None）——
-        给恢复精力商品的三类门槛用（2026-11-08 用户口径）。
+        2026-11-11 重构（用户口径）：**一条管道** admit → tier → rank，
+        不再有「彩金紫」和「精力垫底」的硬编码分支。
 
-        2026-11-08 用户口径（**取代**之前的「购买策略」四选项）：
-          - **第 7 周之前只买 0 元商品（红包）**，非 0 一律不买；
-          - 第 7 周以后按 **红包 → 彩 → 金 → 紫** 的顺序买；
-          - 精力类商品仍按之前的逻辑：**垫底**（先买非恢复的），并先过三类门槛
-            （溢出 / 缺口 ≤ 100 / 精力过半都拒买，见 `shop_stamina_gate`），
-            **只买符合条件的**；免费的精力商品不受门槛影响。
-          - 周数读不到时按第 7 周以后处理（OCR 抖一帧不能把采购整拍废掉）。
+        顺序：
+          1. 永不买（苦味/怪味/庇佑/护符）直接剔；
+          2. 「不买」策略总否决；
+          3. 现金类（老板的馈赠/大乐透）无条件优先；
+          4. 第 7 周前只买 0 元；
+          5. 精力类过三类门槛；
+          6. 余额不够的不买；
+          7. 时限商品要剩余训练日够；
+          8. 按 `constants.SHOP_PRIORITY` 的档位排序：同档比数值、再比价格。
 
-        以下两条口径**不受周数影响**，继续生效：
-          - `constants.SHOP_MUST_TAKE` 里的商品必定优先拿（2026-11-08「老板的馈赠」、
-            2026-11-11「大乐透」）——不看周数、不看品质；纯赚档连余额都不看，
-            花钱档要求余额读得到且够价格。「不买」策略仍是否决开关；
-          - 苦味/怪味饮料系（带负面或随机效果）一律从候选整体剔除（含免费）。
-
-        2026-11-05 用户口径：任何日子都不清空，只按策略买合适的
-        （所以这里没有「把钱花光」分支）。
+        流派差异**只体现在 `SHOP_PRIORITY` 那张表里**，代码不分叉：
+        训练流 cash→milk→stamina→textbook→equipment→attribute；
+        其他流派 cash→attribute→stamina，牛奶/教科书/器材不在它们的考虑范围。
         """
         week = self.current_day()[0]
-        # 2026-11-08 用户口径：苦味/怪味饮料带负面或随机效果（苦味+ = 精力+120、
-        # 随机属性-10；怪味 = 精力+30 或什么都没发生），**一律不买**——
-        # 从候选整体剔除，连免费/0 元也不拿（负面效果不因免费就值得拿）。
         items = [i for i in items
-                 if not any(w in i["name"] for w in SHOP_NEVER_BUY)]
+                 if self.shop_category(i["name"]) != "never"
+                 and not any(w in i["name"] for w in SHOP_NEVER_BUY)]
         if policy == "不买":
             return None, "策略是只逛不买"
 
-        # 2026-11-08 / 2026-11-11 用户口径：见到必拿（`constants.SHOP_MUST_TAKE`）
-        # **插在免费分支、周数和品质判断之前**——不看周数、不看品质；余额按表里的
-        # 「要不要看余额」分两档：
-        #   - 纯赚档（老板的馈赠：0 元 +50 零用钱）→ 不看余额，价格读错也照拿；
-        #   - 花钱档（大乐透：60 元换 20~200 零用钱）→ 同样优先，但余额读不到
-        #     或不够价格时不盲买（点不动会撞看门狗，把这一天整店关掉）。
-        # 「商店购买策略 = 不买」这句在上面已经提前返回，仍是否决开关。
-        free_must, paid_must = [], []
-        for i in items:
-            hit = None
-            for word, spec in SHOP_MUST_TAKE.items():
-                if word in i["name"] and (hit is None or len(word) > len(hit[0])):
-                    hit = (word, spec)
-            if hit is None:
-                continue
-            need_money, why = hit[1]
-            i["must_why"] = why
-            if need_money and (money is None or i["price"] > money):
-                continue
-            (paid_must if need_money else free_must).append(i)
-        if free_must or paid_must:
-            # 纯赚的（不花钱）先拿，省下的钱还能再买别的东西；同档多张时取最上面那张
-            pick = max(free_must or paid_must, key=lambda i: -i["y"])
-            return pick, f"必定优先拿（{pick['must_why']}）"
+        # 现金类：必拿。价格以**表里登记的售价**为准（OCR 把 0 元读成 200
+        # 也照拿）；表里没有的才看 OCR 价格。
+        cash = [i for i in items if self.shop_category(i["name"]) == "cash"]
+        for i in cash:
+            hit = SHOP_ITEMS.get(i["name"])
+            if hit is not None:
+                i["table_price"] = hit[1]
+        free_cash = [i for i in cash
+                     if i.get("table_price", i["price"]) == 0]
+        paid_cash = [i for i in cash
+                     if i.get("table_price", i["price"]) > 0
+                     and money is not None
+                     and i.get("table_price", i["price"]) <= money]
+        if free_cash or paid_cash:
+            pick = max(free_cash or paid_cash, key=lambda i: -i["y"])
+            return pick, "必定优先拿（%s）" % pick["name"]
 
-        # 0 元商品（红包）：不花零用钱，余额不够、甚至钱读不到时都应该拿。
-        free = [i for i in items if i["price"] == 0]
-        if free:
-            # 免费优先：0 元不花钱，品质只影响先拿哪张
-            order = {"彩": 3, "金": 2, "紫": 1}
-            pick = max(free, key=lambda i: (order.get(i["quality"], 0), -i["y"]))
-            return pick, "0 元红包优先"
+        # 扭蛋流 / 小游戏流：前 6 周零花钱要留周末，只拿必拿（现金类，
+        # 上面已经返回）；训练流 / 商店流不设周数限制，进店就按顺序买。
+        if (week is not None and week < LATE_SHOP_FROM_WEEK
+                and self.save_money_for_weekend()):
+            return None, "第 7 周前扭蛋/小游戏只买必拿（零花钱留周末）"
 
-        # 2026-11-08 用户口径：第 7 周之前**只买 0 元商品**（上面没有 free 就关店）。
-        if week is not None and week < LATE_SHOP_FROM_WEEK:
-            return None, "第 7 周之前只买 0 元红包（没有免费商品）"
-
-        # 第 7 周以后：红包 → 彩 → 金 → 紫
-        pool = [i for i in items
-                if i["quality"] in ("彩", "金", "紫")
-                and i["price"] > 0 and money is not None
-                and i["price"] <= money]
-        if not pool:
-            return None, ("没有买得起的商品了（只买彩/金/紫"
-                          + ("；零用钱读不到，不盲买" if money is None else "")
-                          + "）")
-
-        # 2026-11-08 用户口径：恢复精力商品先过三类门槛 —— 拒买的从候选剔除
-        #（免费的不拦：0 元不花钱，照样优先拿）。全被门槛拦掉才关店，
-        # 日志里带上每家被拒的原因，方便复盘时核对登记表数值。
+        # 精力门槛：按 `SHOP_STAMINA_ITEMS` 登记表判（不是按类别），
+        # 免费的不拦；登记表外的商品 `shop_stamina_gate` 直接返回 None。
         kept, rejected = [], []
-        for i in pool:
+        for i in items:
+            if i["price"] == 0:
+                kept.append(i)
+                continue
             why = self.shop_stamina_gate(i, stamina, stamina_max)
             if why:
                 i["reject"] = why
-                rejected.append(f"{i['name']}（{why}）")
+                rejected.append("%s（%s）" % (i["name"], why))
             else:
                 kept.append(i)
         if not kept:
-            return None, ("恢复精力商品不满足门槛，关店："
-                          + "、".join(rejected))
+            return None, "恢复精力商品不满足门槛，关店：" + "、".join(rejected)
 
-        # 2026-11-07 用户口径：恢复精力的垫底——先买非恢复的，
-        # 只剩恢复的（其他彩金紫都买不动了）才轮到它（不是不买）。
-        drink_only = all(self._is_stamina_drink(i) for i in kept)
-        picks = kept if drink_only else [i for i in kept
-                                         if not self._is_stamina_drink(i)]
-        pick = max(picks, key=lambda i: ({"彩": 3, "金": 2, "紫": 1}[i["quality"]],
-                                         i["price"]))
-        return pick, ("彩金紫只剩恢复精力的商品，垫底购买" if drink_only
-                      else "红包→彩→金→紫")
+        # 余额
+        affordable = [i for i in kept
+                      if i["price"] == 0
+                      or (money is not None and i["price"] <= money)]
+        if not affordable:
+            return None, ("没有买得起的商品了"
+                          + ("；零用钱读不到，不盲买" if money is None else ""))
+
+        # 时限商品：剩余训练日不够就不买
+        days_left = self.training_days_left()
+        if days_left is not None:
+            affordable = [
+                i for i in affordable
+                if days_left >= SHOP_MIN_DAYS_LEFT.get(
+                    self.shop_category(i["name"]), 0)]
+
+        # 排序：档位 → 数值 → 价格 → 屏幕靠上
+        ranked = []
+        for i in affordable:
+            cat = self.shop_category(i["name"])
+            tier = self.shop_tier(cat)
+            if tier is None:
+                continue
+            ranked.append((tier, self._target_penalty(i),
+                           -self.shop_value(i), i["price"], i["y"], i))
+        if not ranked:
+            return None, "当前流派不买这些商品"
+        ranked.sort(key=lambda r: r[:5])
+        pick = ranked[0][5]
+        return pick, "按流派优先级购买（%s）" % self.shop_category(pick["name"])

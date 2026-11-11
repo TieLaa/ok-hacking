@@ -2669,7 +2669,7 @@ class PlaceModulesRules(unittest.TestCase):
         self.assertEqual(pick["attr"], "弹跳")     # 队友优先（尽管奖励上限低）
 
     def test_shop_pick_by_policy(self):
-        """商店：按「商店购买策略」选（红包→彩→金→紫 / 不买）。"""
+        """商店：按类别/档位选 —— 器材类（T4）排在属性类（T5）前面。"""
         items = [
             {"name": "器材手册", "price": 60, "quality": "紫", "x": 100, "y": 100},
             {"name": "训练手册", "price": 100, "quality": "金", "x": 100, "y": 200},
@@ -2677,7 +2677,7 @@ class PlaceModulesRules(unittest.TestCase):
         ]
         task = FakeTask([])
         pick, _ = task.pick_shop_item(items, 500, "红包→彩→金→紫")
-        self.assertEqual(pick["quality"], "金")
+        self.assertEqual(pick["name"], "器材手册")
         pick3, reason3 = task.pick_shop_item(items, 500, "不买")
         self.assertIsNone(pick3)
         self.assertIn("不买", reason3)
@@ -2695,19 +2695,16 @@ class PlaceModulesRules(unittest.TestCase):
     def test_shop_never_spends_all(self):
         """2026-11-05：**任何日子都不清空**（比赛日也不清空）。
 
-        只有蓝卡时「只买彩金紫」必须停手 —— 旧版这条会被「赛前清空余额」
-        变成「金紫买完继续买别的」，钱被花光。现在没有那个分支了。
-        2026-11-06：策略改名「只买金和紫」→「只买彩金紫」，白名单补上彩
-        （商店目前没有彩卡，留缺口，解锁后自动生效）。
+        没有「把钱花光」分支：钱不够就停手，不会为了清空去买买不起的东西。
         """
-        only_blue = [
+        items = [
             {"name": "旧货", "price": 45, "quality": "蓝", "x": 100, "y": 100},
             {"name": "废纸", "price": 30, "quality": "白", "x": 100, "y": 200},
         ]
         task = FakeTask([])
-        pick, reason = task.pick_shop_item(only_blue, 500, "红包→彩→金→紫")
+        pick, reason = task.pick_shop_item(items, 0, "红包→彩→金→紫")
         self.assertIsNone(pick)
-        self.assertIn("彩/金/紫", reason)
+        self.assertIn("没有买得起", reason)
         # 签名里不许再出现「把钱花光」的那个开关
         import inspect
         params = inspect.signature(task.pick_shop_item).parameters
@@ -4534,11 +4531,13 @@ class PurchaseRules(unittest.TestCase):
 
     COLS = (0.223, 0.357, 0.490)
 
-    def _shop(self, items, money=80, quality="金", week=None, stamina=None):
+    def _shop(self, items, money=80, quality="金", week=None, stamina=None,
+              style="商店流"):
         """items = [(名字, 价格)]，价格写 "免费" 表示 0 元卡。
 
         `week` 给了就把「第N周 星期一」写进顶栏（测第 7 周之前只买 0 元）。
         `stamina` 给了就把「当前/上限」写进顶栏（测恢复精力商品的三类门槛）。
+        `style` 是流派：默认「商店流」（属性优先、精力 T5），测训练流时显式传。
         """
         texts = [box(760, 60, "商店", 160, 40),
                  box(1200, 60, "上新时间", 200, 30)]
@@ -4555,6 +4554,8 @@ class PurchaseRules(unittest.TestCase):
             texts.append(box(int(1920 * cx) - 35, int(1080 * 0.45) - 18,
                              str(price), 70, 36))
         task = FakeTask(texts, config={"商店购买策略": "红包→彩→金→紫"})
+        task._style = style
+        task._style_name = "测试队长"
         task.read_money = lambda texts=None: money
         task.card_quality = lambda name, pt: (quality, 30, 150)
         return task, texts
@@ -4579,29 +4580,38 @@ class PurchaseRules(unittest.TestCase):
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「精力饮料」", "".join(task.logs))
 
-    def test_shop_before_week7_only_takes_free_items(self):
-        """2026-11-08 用户口径：第 7 周之前只买 0 元商品，非 0 的一律不买。"""
-        task, texts = self._shop([("精力饮料", 30)], money=120, week=6)
-        self.assertTrue(task.handle_shop(texts))
-        self.assertNotIn("买「精力饮料」", "".join(task.logs))
-        self.assertIn("第 7 周之前只买 0 元红包", "".join(task.logs))
-        # 同样是第 6 周，0 元商品照拿
-        task, texts = self._shop([("器材手册+", 150), ("赠品", 0)],
-                                 money=0, week=6)
-        self.assertTrue(task.handle_shop(texts))
-        self.assertIn("买「赠品」", "".join(task.logs))
+    def test_shop_week6_nugget_style_only_must_take(self):
+        """2026-11-11 用户口径：扭蛋流/小游戏流前 6 周只拿必拿，钱留周末。"""
+        for style in ("扭蛋流", "小游戏流"):
+            task, texts = self._shop([("精力饮料", 30)], money=120, week=6,
+                                     style=style)
+            self.assertTrue(task.handle_shop(texts))
+            self.assertNotIn("买「精力饮料」", "".join(task.logs))
+            self.assertIn("只买必拿", "".join(task.logs))
+            # 必拿（老板的馈赠）照拿
+            task, texts = self._shop([("老板的馈赠", 0)], money=0, week=6,
+                                     style=style)
+            self.assertTrue(task.handle_shop(texts))
+            self.assertIn("买「老板的馈赠」", "".join(task.logs))
+
+    def test_shop_week6_training_style_buys_normally(self):
+        """2026-11-11 用户口径：训练流/商店流前 6 周不设限制，进店按顺序买。"""
+        for style in ("训练流", "商店流"):
+            task, texts = self._shop([("弹跳秘籍++", 130)], money=200,
+                                     week=6, style=style)
+            self.assertTrue(task.handle_shop(texts))
+            self.assertIn("买「弹跳秘籍++」", "".join(task.logs))
 
     def test_shop_week7_drink_only_deprioritized(self):
-        """2026-11-08 用户口径：第 7 周以后精力类只垫底、只买过门槛的。
+        """2026-11-11 用户口径：第 7 周以后精力（T2）仍排在属性（T5）前面。
 
-        登记表里恢复量还没采集（None）→ 只垫底、不拦：同屏有非恢复商品时
-        先买非恢复的；只剩精力饮料时照买。
+        登记表里恢复量还没采集（None）→ 不拦门槛；
+        精力饮料和属性货同屏时先买饮料。
         """
-        task, texts = self._shop([("精力饮料", 30), ("训练手册", 100)],
-                                 money=120, week=7, quality="金")
+        task, texts = self._shop([("精力饮料", 30), ("弹跳秘籍++", 100)],
+                                 money=120, week=7)
         self.assertTrue(task.handle_shop(texts))
-        self.assertIn("买「训练手册」", "".join(task.logs))
-        self.assertNotIn("买「精力饮料」", "".join(task.logs))
+        self.assertIn("买「精力饮料」", "".join(task.logs))
         task, texts = self._shop([("精力饮料", 30)], money=120, week=7)
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「精力饮料」", "".join(task.logs))
@@ -4619,24 +4629,22 @@ class PurchaseRules(unittest.TestCase):
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「精力饮料」", "".join(task.logs))
 
-    def test_shop_stamina_drink_loses_to_other_cards(self):
-        """2026-11-07 用户口径：恢复精力的商品优先级最低——金训练手册压过紫饮料。"""
-        task, texts = self._shop([("精力饮料+", 50), ("训练手册", 100)],
-                                 money=200, quality="金")
+    def test_shop_stamina_drink_beats_attribute(self):
+        """2026-11-11 用户口径：精力 T2，排在属性商品 T5 前面。"""
+        task, texts = self._shop([("精力饮料+", 50), ("弹跳秘籍++", 130)],
+                                 money=200)
         self.assertTrue(task.handle_shop(texts))
-        self.assertIn("买「训练手册」", "".join(task.logs))
+        self.assertIn("买「精力饮料+」", "".join(task.logs))
 
-    def test_shop_buys_stamina_drink_when_only_option(self):
-        """恢复精力垫底是「排最后」，不是「不买」：池里只剩它就买。"""
+    def test_shop_stamina_drink_preferred_when_affordable(self):
+        """精力 T2：同屏有买得起的属性货时也先买饮料。"""
         task, texts = self._shop([("精力饮料+", 50), ("旧货", 45)],
                                  money=50, quality="紫")
-        # 旧货品质仍是注入的金（card_quality 被 stub），但名字无关；金旧货 45
-        # 和饮料 50 都买得起 → 先买非恢复的旧货
         self.assertTrue(task.handle_shop(texts))
-        self.assertIn("买「旧货」", "".join(task.logs))
+        self.assertIn("买「精力饮料+」", "".join(task.logs))
+        # 只剩饮料时照样买
         task, texts = self._shop([("精力饮料+", 35), ("旧货", 45)],
                                  money=40, quality="紫")
-        # 旧货 45 > 零用钱 40 买不起 → 彩金紫池里只剩饮料（35 ≤ 40）→ 垫底购买
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「精力饮料+」", "".join(task.logs))
 
@@ -4721,29 +4729,50 @@ class PurchaseRules(unittest.TestCase):
         self.assertTrue(task.handle_shop(texts))
         self.assertNotIn("买「苦味饮料」", "".join(task.logs))
         # 同屏有正常商品 → 买正常的，不买苦味
-        task, texts = self._shop([("苦味饮料+", 100), ("器材手册", 80)],
+        task, texts = self._shop([("苦味饮料+", 100), ("弹跳秘籍", 60)],
                                  money=500)
         self.assertTrue(task.handle_shop(texts))
-        self.assertIn("买「器材手册」", "".join(task.logs))
+        self.assertIn("买「弹跳秘籍」", "".join(task.logs))
         self.assertNotIn("苦味饮料", "".join(task.logs).split("商店：买")[-1])
 
-    def test_shop_only_stamina_drinks_bought(self):
-        """2026-11-08 用户口径：**只有精力饮料和酸奶值得买**，其余饮料一律不买。"""
-        for name in ("全能饮料", "全能饮料+", "专属饮料", "专属饮料++",
-                     "偶然饮料", "偶然饮料++", "特训牛奶", "特训牛奶+"):
+    def test_shop_attribute_drinks_are_buyable(self):
+        """2026-11-11 用户口径：全能/专属/偶然是属性类，不再是永不买。"""
+        for name in ("全能饮料+", "专属饮料+", "偶然饮料+"):
             task, texts = self._shop([(name, 60)], money=500)
             self.assertTrue(task.handle_shop(texts))
-            self.assertNotIn(f"买「{name}」", "".join(task.logs))
-        # 酸奶值得买（恢复量未登记 → 只垫底、不拦）
-        task, texts = self._shop([("酸奶", 60)], money=500)
+            self.assertIn(f"买「{name}」", "".join(task.logs))
+        # 牛奶对所有流派都参与排序（商店内顺序统一）
+        task, texts = self._shop([("特训牛奶+", 60)], money=500)
         self.assertTrue(task.handle_shop(texts))
-        self.assertIn("买「酸奶」", "".join(task.logs))
+        self.assertIn("买「特训牛奶+」", "".join(task.logs))
 
-    def test_shop_yogurt_is_deprioritized(self):
-        """酸奶和精力饮料一样垫底：同屏有属性类商品时先买属性类。"""
+    def test_shop_priority_order_is_style_independent(self):
+        """商店内顺序不吃流派：牛奶 > 精力 > 教科书 > 属性。
+
+        2026-11-11 用户口径：商店里同一件商品的相对价值与流派无关，
+        流派只决定「进不进店、带多少钱」。
+        """
+        for style in ("训练流", "商店流", "扭蛋流", "小游戏流"):
+            task, texts = self._shop([("特训牛奶+", 60), ("弹跳秘籍++", 130)],
+                                     money=500, style=style)
+            self.assertTrue(task.handle_shop(texts))
+            self.assertIn("买「特训牛奶+」", "".join(task.logs))
+
+            task, texts = self._shop([("精力饮料++", 70), ("弹跳秘籍++", 130)],
+                                     money=500, style=style, stamina="40/130")
+            self.assertTrue(task.handle_shop(texts))
+            self.assertIn("买「精力饮料++」", "".join(task.logs))
+
+            task, texts = self._shop([("投射教科书", 100), ("弹跳秘籍++", 130)],
+                                     money=500, style=style)
+            self.assertTrue(task.handle_shop(texts))
+            self.assertIn("买「投射教科书」", "".join(task.logs))
+
+    def test_shop_yogurt_beats_attribute(self):
+        """2026-11-11 用户口径：酸奶（精力 T2）排在属性商品（T5）前面。"""
         task, texts = self._shop([("酸奶", 60), ("弹跳秘籍", 60)], money=500)
         self.assertTrue(task.handle_shop(texts))
-        self.assertIn("买「弹跳秘籍」", "".join(task.logs))
+        self.assertIn("买「酸奶」", "".join(task.logs))
 
     def test_shop_stamina_gate_blocks_overflow(self):
         """2026-11-08 用户口径①：登记了恢复量的饮料，当前+恢复量超上限不买。"""
@@ -4797,7 +4826,8 @@ class PurchaseRules(unittest.TestCase):
 
     def test_shop_buys_affordable_purple_without_gate(self):
         """2026-10-29 实跑回归：零用钱 120、紫卡 100 —— 钱够就买，不再看 300 门槛。"""
-        task, texts = self._shop([("弹跳教科书", 100)], money=120, quality="紫")
+        task, texts = self._shop([("弹跳教科书", 100)], money=120, quality="紫",
+                                 style="训练流")
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「弹跳教科书」", "".join(task.logs))
 
