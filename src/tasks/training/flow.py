@@ -447,6 +447,7 @@ class TrainingFlowMixin:
         self._shop_try_key = None
         self._shop_try_count = 0
         self._shop_seen = False
+        self._shop_unmark_seen = set()      # 未登记商品一局只存一次样本
         self._arcade_wait_since = 0.0
         self._no_change = 0
         self._sig_after_click = None

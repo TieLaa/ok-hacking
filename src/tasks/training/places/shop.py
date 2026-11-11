@@ -188,8 +188,16 @@ class ShopPlace:
         except ValueError:
             return None
 
+    def shop_known(self, name):
+        """这个名字在商品表或前缀表里登记过吗？"""
+        return name in SHOP_ITEMS or any(p in name for p, _c in SHOP_ITEM_PREFIX)
+
     def shop_value(self, item):
-        """同档内比大小用的数值；表外商品按品质色兜底（彩75/金50/紫25）。"""
+        """同档内比大小用的数值。
+
+        未登记商品按品质色给个估值（彩75/金50/紫25），但它带 `unknown=1`
+        子键，排在所有已登记商品之后，不会用估值压过真实的点数。
+        """
         hit = SHOP_ITEMS.get(item["name"])
         if hit is None:
             return {"彩": 75, "金": 50, "紫": 25}.get(
@@ -337,10 +345,11 @@ class ShopPlace:
             tier = self.shop_tier(cat)
             if tier is None:
                 continue
-            ranked.append((tier, self._target_penalty(i),
+            ranked.append((tier, 0 if self.shop_known(i["name"]) else 1,
+                           self._target_penalty(i),
                            -self.shop_value(i), i["price"], i["y"], i))
         if not ranked:
             return None, "当前流派不买这些商品"
-        ranked.sort(key=lambda r: r[:5])
-        pick = ranked[0][5]
+        ranked.sort(key=lambda r: r[:6])
+        pick = ranked[0][6]
         return pick, "按流派优先级购买（%s）" % self.shop_category(pick["name"])

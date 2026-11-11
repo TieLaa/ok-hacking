@@ -4746,6 +4746,18 @@ class PurchaseRules(unittest.TestCase):
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「特训牛奶+」", "".join(task.logs))
 
+    def test_shop_unknown_item_goes_last(self):
+        """未登记商品（不在表里、不匹配前缀）排最后，不抢已知商品的位。"""
+        task, texts = self._shop([("弹跳秘籍++", 130), ("神秘手册", 150)],
+                                 money=500)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「弹跳秘籍++」", "".join(task.logs))
+        self.assertIn("未登记商品", "".join(task.logs))
+        # 只剩未登记商品时照买（属性类兜底）
+        task, texts = self._shop([("神秘手册", 60)], money=500)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「神秘手册」", "".join(task.logs))
+
     def test_shop_priority_order_is_style_independent(self):
         """商店内顺序不吃流派：牛奶 > 精力 > 教科书 > 属性。
 

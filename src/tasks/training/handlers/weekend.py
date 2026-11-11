@@ -219,6 +219,25 @@ class WeekendHandlers:
             f"{i['name']}({i['price']}/{i['quality']})" for i in items)
             + f"｜零用钱 {money}｜策略 {policy}")
 
+        # 未登记商品：按品质色兜底的同时留一份 unmark 样本（一局每个名字只存一次），
+        # 人工看 json/txt 就能往 `constants.SHOP_ITEMS` 补一行。
+        fresh = [i for i in items if not self.shop_known(i["name"])]
+        seen = getattr(self, "_shop_unmark_seen", None)
+        if seen is None:
+            seen = self._shop_unmark_seen = set()
+        fresh = [i for i in fresh if i["name"] not in seen]
+        if fresh:
+            seen.update(i["name"] for i in fresh)
+            self.log_info("商店：未登记商品 " + "、".join(
+                "%s(%s/%s)" % (i["name"], i["price"], i["quality"])
+                for i in fresh))
+            if hasattr(self, "dump_unmark"):
+                self.dump_unmark(
+                    texts, "shop_item",
+                    cards=[{"name": i["name"], "price": i["price"],
+                            "quality": i["quality"]} for i in fresh],
+                    note="商店未登记商品")
+
         pick, reason = self.pick_shop_item(
             items, money, policy, stamina=bar.get("stamina"),
             stamina_max=bar.get("stamina_max"))
