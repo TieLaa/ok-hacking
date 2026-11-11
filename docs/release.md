@@ -132,30 +132,46 @@ cnb 仓库里的 `.cnb.yml` 已清空（2026-11-10）：早先那版是 cnb 定�
 不要在那里再放 crontab，两套机制同时写同一个 main 会互相覆盖。
 
 免费额度（`https://docs.cnb.cool/zh/pricing.md`）：仓库存储 100 GiB、构建 160 核时/月。
-只当镜像仓库基本用不到。不要把 `*-setup.exe` 提交进 git —— 安装包走 Release，
-仓库里只放 `deploy.txt` 列的运行时文件。
+只当镜像仓库基本用不到。更新仓库里只放 `deploy.txt` 列的运行时文件，**不要放安装包**。
 
-::: warning 当前卡点
-同步链路要能跑，前提是**源仓库 `TieLaa/ok-hacking` 是 public**。它现在还是 private，
-`sync.yml` 里匿名 `curl` 源仓库的 tag 列表会 404，整个 Run 在第一步就挂 —— 这一步与 cnb 无关，
-是 GitHub 更新仓库自己的老问题。
+### 安装包镜像（`TieLaa/ok-hacking-dist`，2026-11-10 建）
 
-给 `sync.yml` 里的 `actions/checkout` / `curl` 加 `Authorization` 头（PAT）也能绕过，
-但那又回到「要维护一个会过期的 PAT」；按原计划把源仓库转 public 更省事（玩家也才下得了 Release 附件）。
+安装包不放更新仓库，单独放 cnb 仓库 `https://cnb.cool/TieLaa/ok-hacking-dist` 的
+`dist` 分支，由 `export-to-cnb.yml` 推送。
+
+为什么必须分开（v0.1.10 事故）：pyappify 打包时会**整仓克隆更新仓库**，dist 分支里的
+安装包会被一起塞进下一版安装器 —— v0.1.9 的 211 MB 让 v0.1.10 的 setup.exe 涨到 425 MB，
+超过 cnb 单文件 256 MiB 的 blob 上限，`export-to-cnb.yml` 直接被 pre-receive hook 拒掉。
+搬走后安装包回到 ~211 MB。更新仓库里遗留的 dist 分支用 `Cleanup cnb update-repo dist`
+工作流删除。
+
+::: tip 同步链路的前提
+`sync.yml` 靠匿名 `curl` 读源仓库的 tag 列表，所以**源仓库必须是 public**（2026-11-10 已转）。
+另外 `Check out this repo` 那步必须 `fetch-depth: 0` —— 浅克隆推 cnb 会被
+`shallow update not allowed` 拒掉。
 :::
+
 
 ## 发版
 
+顺序不能反（v0.1.10 第一次就是这么挂的）：**pyappify 打包时要从更新仓库 checkout 同一个
+tag，更新仓库里没有这个 tag，构建就失败**。
+
 ```powershell
-git tag -a v0.1.8 -m "v0.1.8"
-git push origin v0.1.8      # 只推 tag，CI 自动出包并建 Release
+git tag -a v0.1.11 -m "v0.1.11"
+git push origin v0.1.11     # 触发 Build
 ```
 
-推完 tag 还要做**第二步**：到 https://github.com/TieLaa/ok-hacking-update/actions
-点 **Sync from source**，填同一个 tag。漏了这步，已安装用户的更新源会停在旧版本。
+推完 tag **立刻**去 https://github.com/TieLaa/ok-hacking-update/actions 跑
+**Sync from source**（填同一个 tag）。它 20 秒就完事，而 Build 走到打包步骤要 10 分钟，
+赶得上。
 
-同一次 Run 里，GitHub 更新仓库推完会立刻把 main + tags 推给 cnb 镜像，国内用户不用等第二次。
-想确认就去 https://cnb.cool/TieLaa/ok-hacking-update 看有没有同名 tag。
+如果 Build 已经失败（日志里是 `Tag 'vX.Y.Z' not found locally after fetch`），
+**不用重新打 tag**：`gh run rerun <run-id> --failed` 重跑失败的 job 就行。
+
+出包成功后，再跑 `Export release to cnb`（填同一个 tag），把 China 包装到
+cnb 的 dist 仓库；`Sync from source` 同一次 Run 里已经把 main + tags 推给 cnb 镜像，
+国内更新源不会停在旧版本。
 
 `v0.1.0` / `v0.1.1` 是发布链路修好之前的旧 tag，**不要推它们** —— 那时的 `build.yml` 还指向模板作者的仓库。
 

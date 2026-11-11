@@ -29,6 +29,9 @@ jobs:
             -p "*-China-setup.exe" -p "win32_sha256.txt" -D out
           ls -l out
 
+      # 安装包必须放在独立仓库：更新仓库（ok-hacking-update）会被 pyappify 在打包时
+      # 整仓克隆，dist 分支里的大文件会被一起打进下一版安装包（v0.1.9 的 211MB
+      # 让 v0.1.10 涨到 425MB，超过 cnb 单文件 256MiB 直接推不上去）。
       - name: Push to cnb dist branch
         env:
           CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
@@ -39,13 +42,15 @@ jobs:
             echo "::error::CNB_TOKEN 未配置，无法导出到 cnb"
             exit 1
           fi
-          git clone --depth=1 "https://cnb:${CNB_TOKEN}@cnb.cool/TieLaa/ok-hacking-update.git" tmp
+          # 新建的空仓库也能用：git init + 首个 dist 提交，不依赖已有历史
+          git init tmp
           cd tmp
-          git checkout --orphan dist
-          git rm -rf . >/dev/null 2>&1 || true
+          git remote add origin "https://cnb:${CNB_TOKEN}@cnb.cool/TieLaa/ok-hacking-dist.git"
+          git checkout -b dist
           cp -v ../out/* .
           git config user.name "cnb-export"
           git config user.email "cnb-export@local"
           git add -A
           git commit -m "dist ${TAG}"
+          # 安装包只保留当前版本，强推避免仓库无限增长
           git push -f origin dist

@@ -1,0 +1,33 @@
+name: Cleanup cnb update-repo dist
+
+# 运维用：安装包已经挪到独立仓库 TieLaa/ok-hacking-dist，更新仓库（ok-hacking-update）
+# 里遗留的 dist 分支要删掉 —— pyappify 打包时会整仓克隆更新仓库，dist 里的大文件
+# 会被打进下一版安装包（v0.1.9 留的 211MB 让 v0.1.10 涨到 425MB）。
+# 用法：Actions → Cleanup cnb update-repo dist → Run workflow。
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  delete-dist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete dist branch on cnb update repo
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CNB_TOKEN:-}" ]; then
+            echo "::error::CNB_TOKEN 未配置，无法清理 cnb"
+            exit 1
+          fi
+          git init --quiet repo
+          cd repo
+          if git push "https://cnb:${CNB_TOKEN}@cnb.cool/TieLaa/ok-hacking-update.git" --delete dist; then
+            echo "已删除 dist 分支"
+          else
+            echo "dist 分支不存在或已被删除，跳过"
+          fi
