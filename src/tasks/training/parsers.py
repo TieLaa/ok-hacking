@@ -661,8 +661,12 @@ class TrainingParsersMixin:
 
         band_y1 = y1 + int((y2 - y1) * 0.45)
         band_y2 = y2 - int((y2 - y1) * 0.15)
-        strips = [frame[band_y1:band_y2, x1 + 4:x1 + 16],
-                  frame[band_y1:band_y2, x2 - 16:x2 - 4]]
+        # 2026-11-12：取样点往里收 —— 选中的卡片有一圈亮黄高亮框，旧版从
+        # x1+4 起取，高亮色会被算进中位数：同一件「器材指导教程+」在一帧
+        # 判「其他」、下一帧判「金」（logs/run.log 00:51:41 vs 00:52:28）。
+        inset = max(6, int(w * 0.006))
+        strips = [frame[band_y1:band_y2, x1 + inset:x1 + inset + 12],
+                  frame[band_y1:band_y2, x2 - inset - 12:x2 - inset]]
         pixels = [s.reshape(-1, 3) for s in strips if s.size]
         if not pixels:
             return "其他", -1, -1

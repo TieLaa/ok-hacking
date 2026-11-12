@@ -2669,7 +2669,11 @@ class PlaceModulesRules(unittest.TestCase):
         self.assertEqual(pick["attr"], "弹跳")     # 队友优先（尽管奖励上限低）
 
     def test_shop_pick_by_policy(self):
-        """商店：按类别/档位选 —— 器材类（T4）排在属性类（T5）前面。"""
+        """商店：分组（牛奶→精力）之后才排品质 彩→金→紫，同品质比类别（2026-11-12）。
+
+        2026-11-11 那版只有类别档位、没有品质筛；11-12 用户口径是
+        **现金 → 牛奶 → 精力 → 彩/金/紫 → 同品质 教科书→器材→属性**。
+        """
         items = [
             {"name": "器材手册", "price": 60, "quality": "紫", "x": 100, "y": 100},
             {"name": "训练手册", "price": 100, "quality": "金", "x": 100, "y": 200},
@@ -2677,10 +2681,154 @@ class PlaceModulesRules(unittest.TestCase):
         ]
         task = FakeTask([])
         pick, _ = task.pick_shop_item(items, 500, "红包→彩→金→紫")
-        self.assertEqual(pick["name"], "器材手册")
+        self.assertEqual(pick["name"], "训练手册")      # 金 > 紫；蓝卡直接不买
         pick3, reason3 = task.pick_shop_item(items, 500, "不买")
         self.assertIsNone(pick3)
         self.assertIn("不买", reason3)
+
+    def test_shop_milk_beats_crit(self):
+        """2026-11-12 用户口径：牛奶排在品质之前 —— 金牛奶 > 彩属性。"""
+        items = [
+            {"name": "特训牛奶", "price": 50, "quality": "金", "x": 100, "y": 100},
+            {"name": "投射秘籍++", "price": 130, "quality": "彩", "x": 100, "y": 200},
+        ]
+        task = FakeTask([])
+        pick, _ = task.pick_shop_item(items, 500, "红包→彩→金→紫")
+        self.assertEqual(pick["name"], "特训牛奶")
+
+    def test_shop_stamina_beats_crit_attribute(self):
+        """2026-11-12 用户口径：精力商品排在品质之前 —— 紫精力 > 彩属性。"""
+        items = [
+            {"name": "精力饮料++", "price": 70, "quality": "紫", "x": 100, "y": 100},
+            {"name": "投射秘籍++", "price": 130, "quality": "彩", "x": 100, "y": 200},
+        ]
+        task = FakeTask([])
+        pick, _ = task.pick_shop_item(items, 500, "红包→彩→金→紫")
+        self.assertEqual(pick["name"], "精力饮料++")
+
+    def test_shop_unknown_quality_known_name_still_buys(self):
+        """2026-11-12 方案 A：品质读成「其他」，名字认得出就照类别买。
+
+        实跑证据：同一件「器材指导教程+」一帧判「其他」、一帧判「金」
+        （logs/run.log 00:51:41 vs 00:52:28，选中黄框污染了采样）。
+        旧逻辑会把整件商品跳过，用户口径「没识别过的名字不要直接跳过」。
+        """
+        items = [{"name": "器材指导教程+", "price": 120,
+                  "quality": "其他", "x": 100, "y": 100}]
+        task = FakeTask([])
+        pick, _ = task.pick_shop_item(items, 500, "红包→彩→金→紫")
+        self.assertIsNotNone(pick)
+        self.assertEqual(pick["name"], "器材指导教程+")
+
+    def test_shop_unknown_quality_unregistered_name_still_buys(self):
+        """2026-11-12：品质未知 + 名字完全没登记 → **照买**。
+
+        「有没有登记」不能当购买前提：那等于要求把整个图鉴人工补一遍。
+        取色失败只让它排序垫底（`SHOP_QUALITY_RANK` 给 9），不是不买的理由。
+        """
+        items = [{"name": "神秘道具", "price": 120,
+                  "quality": "其他", "x": 100, "y": 100}]
+        task = FakeTask([])
+        pick, _ = task.pick_shop_item(items, 500, "红包→彩→金→紫")
+        self.assertIsNotNone(pick)
+        self.assertEqual(pick["name"], "神秘道具")
+
+    def test_shop_base_name_covers_variants(self):
+        """2026-11-12 用户口径：只认**基础名**，+/++ 变体不用单独登记。
+
+        老板的馈赠 / 大乐透 / 特训牛奶 / 精力饮料 / 酸奶 各一个基础名；
+        六个属性 × 教科书 = 18 种 → 6 个基础名；
+        器材指导书 / 器材指导教程 / 器材手册 = 9 种 → 3 个基础名。
+        """
+        task = FakeTask([])
+        cases = {
+            "老板的馈赠": "cash", "老板的馈赠+": "cash", "老板的馈赠++": "cash",
+            "大乐透": "cash", "大乐透++": "cash",
+            "特训牛奶++": "milk",
+            "精力饮料++": "stamina", "酸奶++": "stamina",
+            "投射教科书++": "textbook", "意识教科书": "textbook",
+            "器材指导书++": "equipment_boost",
+            "器材指导教程+": "equipment_boost",
+            "器材手册++": "equipment_boost",
+            "奇妙防守秘籍+": "attribute",
+            "全能饮料++": "attribute",
+            "苦味饮料++": "never",
+            "神之庇佑++": "never",
+        }
+        for name, want in cases.items():
+            self.assertEqual(task.shop_category(name), want, name)
+            self.assertTrue(task.shop_known(name), name)
+        self.assertEqual(task.shop_base_name("酸奶＋"), "酸奶")
+        self.assertEqual(task.shop_base_name("  大乐透+  "), "大乐透")
+
+    def test_shop_parse_detail_effect(self):
+        """详情面板效果文本 → 类别（2026-11-12：不依赖图鉴点亮）。
+
+        文案取自 `logs/captures/codex/codex_items.tsv` 的真实效果行。
+        """
+        task = FakeTask([])
+        cases = {
+            "精力+60，随机属性+10": "stamina",       # 酸奶
+            "精力+100，随机属性+20": "stamina",      # 酸奶+
+            "全部器材熟练度+10": "equipment_boost",  # 器材手册+
+            "投射训练等级+1": "textbook",
+            "训练消耗精力-40%": "milk",              # 特训牛奶
+            "随机获得20~200零用钱": "cash",
+            "全属性+6": "attribute",
+            "两个推荐属性+10": "attribute",
+            "随机一个属性+20": "attribute",
+            "精力+80，随机属性-10": "never",         # 苦味饮料
+            "精力+60，或是什么都没发生": "never",     # 怪味饮料
+            "3天内，训练精力消耗+10%，器材暴击训练收益+40%": "equipment_boost",
+        }
+        for text, want in cases.items():
+            self.assertEqual(task.parse_shop_detail(text), want, text)
+
+    def test_shop_parse_stamina_amount(self):
+        """详情里的恢复量优先于登记表（溢出判断用真值）。"""
+        task = FakeTask([])
+        self.assertEqual(task.parse_shop_stamina("精力+60，随机属性+10"), 60)
+        self.assertEqual(task.parse_shop_stamina("精力+100，随机属性+20"), 100)
+        self.assertIsNone(task.parse_shop_stamina("全部器材熟练度+10"))
+
+    def test_shop_detail_beats_name_table(self):
+        """详情读到的类别优先于名字表 —— 新商品/OCR 错字都不怕。"""
+        items = [{"name": "神秘道具", "price": 120, "quality": "金",
+                  "x": 100, "y": 100, "detail_category": "milk"}]
+        task = FakeTask([])
+        pick, _ = task.pick_shop_item(items, 500, "红包→彩→金→紫")
+        self.assertEqual(pick["name"], "神秘道具")
+        self.assertEqual(task.item_category(pick), "milk")
+
+    def test_shop_stamina_gate_blocks_overflow(self):
+        """2026-11-12：满精力不买酸奶/精力饮料。
+
+        实跑事故：130/130 买了酸奶+（+100）和精力饮料（未知量），一直溢出。
+        根因是登记表把这两样写成 `("immediate", None)`，而旧 gate 对 None
+        直接放行。现在酸奶系补实了恢复量，未知量按 45 保守估算。
+        """
+        task = FakeTask([])
+        yogurt_plus = {"name": "酸奶+", "price": 130, "quality": "金"}
+        self.assertIn("溢出", task.shop_stamina_gate(yogurt_plus, 130, 130))
+        # 基础款精力饮料：图鉴没数据 → 按 SHOP_STAMINA_UNKNOWN_ASSUME(45) 估
+        unknown = {"name": "精力饮料", "price": 30, "quality": "蓝"}
+        self.assertIn("溢出", task.shop_stamina_gate(unknown, 100, 130))
+        self.assertIsNone(task.shop_stamina_gate(unknown, 80, 130))
+        # 酸奶 +60：缺口 50 会溢出，缺口 60 刚好不溢出
+        yogurt = {"name": "酸奶", "price": 100, "quality": "紫"}
+        self.assertIn("溢出", task.shop_stamina_gate(yogurt, 80, 130))
+        self.assertIsNone(task.shop_stamina_gate(yogurt, 70, 130))
+
+    def test_shop_skips_blue_when_only_blue(self):
+        """2026-11-12 用户口径：默认不买蓝色 —— 店里只剩蓝/白就关店。"""
+        items = [
+            {"name": "全能饮料", "price": 70, "quality": "蓝", "x": 100, "y": 100},
+            {"name": "意识秘籍", "price": 60, "quality": "蓝", "x": 100, "y": 200},
+        ]
+        task = FakeTask([])
+        pick, reason = task.pick_shop_item(items, 500, "红包→彩→金→紫")
+        self.assertIsNone(pick)
+        self.assertIn("蓝/白", reason)
 
     def test_shop_free_item_first(self):
         """商店：免费商品优先拿（钱读不到也能拿）。"""
@@ -4827,12 +4975,17 @@ class PurchaseRules(unittest.TestCase):
             del SHOP_STAMINA_ITEMS["测试回满"]
             del SHOP_STAMINA_ITEMS["测试持续"]
 
-    def test_shop_stamina_unregistered_amount_only_deprioritized(self):
-        """登记表恢复量还没采集（None）：只垫底，不参与门槛——满精力也照买。
+    def test_shop_stamina_unregistered_amount_is_estimated(self):
+        """2026-11-12 用户口径：恢复量未登记的精力商品**不再直接放行**。
 
-        这是「手动采集 → 会话登记」期间的安全态：数值未知就不瞎拦。
+        旧版「数值未知就不瞎拦」实跑代价太大：130/130 连买酸奶+ 和精力饮料，
+        白白溢出。现在按 `SHOP_STAMINA_UNKNOWN_ASSUME`(45) 保守估算 ——
+        满精力拒买，缺口 ≥ 45 才买。
         """
         task, texts = self._shop([("精力饮料", 50)], money=200, stamina="130/130")
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("恢复量未登记按 45 估", "".join(task.logs))
+        task, texts = self._shop([("精力饮料", 50)], money=200, stamina="70/130")
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「精力饮料」", "".join(task.logs))
 

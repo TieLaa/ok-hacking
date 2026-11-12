@@ -28,10 +28,13 @@
 """
 
 from src.tasks.ui import labels
-from src.tasks.training.constants import (LATE_SHOP_FROM_WEEK, SHOP_ITEMS,
+from src.tasks.training.constants import (LATE_SHOP_FROM_WEEK,
+                                          SHOP_BASE_CATEGORY, SHOP_ITEMS,
                                           SHOP_ITEM_PREFIX,
                                           SHOP_NEVER_BUY, SHOP_PRIORITY,
-                                          SHOP_SEASON_WEEKS, SHOP_STAMINA_ITEMS,
+                                          SHOP_SEASON_WEEKS,
+                                          SHOP_STAMINA_ITEMS,
+                                          SHOP_STAMINA_UNKNOWN_ASSUME,
                                           SHOP_TRAINING_WEEKDAYS)
 
 # 星期 → 数字（用来算剩余训练日）
@@ -51,6 +54,74 @@ EXIT_COORDS = (0.94, 0.11)
 
 class ShopPlace:
     """商店的判断与状态。**不点击**，只给判断。"""
+
+    # 2026-11-12 用户口径（合并 11-11 的类别优先 + 11-08 的品质判断）：
+    # 顺序 = 现金 → 牛奶 → 精力 → 其余按 **彩/金/紫**（蓝/白不买）
+    # → 同品质内 教科书 → 器材 → 属性。
+    # 牛奶/精力是功能性商品（用户口径里排在品质之前），不按颜色筛。
+    SHOP_BUY_QUALITIES = ("彩", "金", "紫")
+    SHOP_QUALITY_RANK = {"彩": 0, "金": 1, "紫": 2}
+    SHOP_GROUP = {"milk": 0, "stamina": 1}   # 不在表里的进第 2 组（按品质）
+    # 只挡**明确取色到**的蓝/白；"其他"=取色失败，不等于蓝卡，照买。
+    SHOP_SKIP_QUALITIES = ("蓝", "白")
+
+    # ---------- 详情面板效果文本（2026-11-12） ----------
+    # 商品卡只显示「名字 + 价格 + 品质底色」，**效果要选中卡片后看右侧详情**。
+    # 靠 `SHOP_ITEMS` 推类别必须图鉴点亮，而每个账号点亮进度不同 → 不成立。
+    # 所以改成「点卡选中（不花钱）→ OCR 右侧 → 按游戏给的效果文案判类别」，
+    # 商品表降级成缓存/兜底。效果文案来自 `logs/captures/codex/codex_items.tsv`。
+    #
+    # 顺序有意义：先否后肯、先具体后宽泛。
+    #   - 「随机属性-10」（苦味）必须排在「随机属性」（属性）之前；
+    #   - 「训练等级」（教科书）必须排在「投射」之前；
+    #   - 「训练消耗精力-40%」（牛奶）不能命中「训练精力消耗+10%」（器材教程）。
+    SHOP_EFFECT_RULES = (
+        ("零用钱", "cash"),
+        ("必定成功", "never"),            # 神之庇佑
+        ("队友训练", "never"),            # 同心护符
+        ("随机属性-", "never"),           # 苦味饮料：拿属性换精力
+        ("什么都没发生", "never"),        # 怪味饮料：可能白花钱
+        ("训练消耗精力-", "milk"),        # 特训牛奶：训练消耗精力-40%
+        ("训练等级", "textbook"),         # 投射训练等级+1
+        ("器材熟练度", "equipment_boost"),  # 全部器材熟练度+10
+        ("器材暴击训练收益", "equipment_boost"),
+        ("精力+", "stamina"),
+        ("全属性", "attribute"),
+        ("推荐属性", "attribute"),
+        ("随机一个属性", "attribute"),
+        ("随机属性", "attribute"),
+        ("随机获得", "attribute"),
+        ("投射", "attribute"),
+        ("弹跳", "attribute"),
+        ("防守", "attribute"),
+        ("运控", "attribute"),
+        ("体能", "attribute"),
+        ("意识", "attribute"),
+    )
+
+    def parse_shop_detail(self, text):
+        """详情面板的效果文本 → 类别；认不出返回 None（调用方退回名字表）。"""
+        clean = (text or "").replace(" ", "").replace("\n", "")
+        if not clean:
+            return None
+        for word, category in self.SHOP_EFFECT_RULES:
+            if word in clean:
+                return category
+        return None
+
+    def parse_shop_stamina(self, text):
+        """详情文本里的精力恢复量：`精力+60，随机属性+10` → 60；读不到 None。"""
+        clean = (text or "").replace(" ", "")
+        start = clean.find("精力+")
+        if start < 0:
+            return None
+        digits = ""
+        for ch in clean[start + 3:]:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        return int(digits) if digits else None
 
     # ---------- 页面判据 ----------
 
@@ -132,17 +203,23 @@ class ShopPlace:
           ① 立刻恢复 N：当前 + N > 上限 → 溢出，拒买
           ② 全部恢复：上限 − 当前 ≤ 100 → 缺口太小，拒买
           ③ 接下来几日恢复：当前 / 上限 ≥ 1/2 → 精力还够，拒买
-        登记表里恢复量是 None（还没采集到）→ **不拦，只垫底**；读不到
-        精力/上限 → 不拦（同「周数读不到不过滤」口径，OCR 抖一帧不罢工）。
+        登记表里恢复量是 None（还没采集到）→ 按 `SHOP_STAMINA_UNKNOWN_ASSUME`
+        保守估算（2026-11-12：满精力照买过一瓶酸奶+，溢出 100 点）；
+        读不到精力/上限 → 不拦（同「周数读不到不过滤」口径，OCR 抖一帧不罢工）。
         """
         name = item.get("name") or ""
-        hit = None
-        for word, effect in SHOP_STAMINA_ITEMS.items():
-            if word in name and (hit is None or len(word) > len(hit[0])):
-                hit = (word, effect)
-        if hit is None:
-            return None
-        kind, amount = hit[1]
+        # 详情面板读到的恢复量优先（2026-11-12）：它是游戏当前版本的真值，
+        # 不受「图鉴没点亮 / 名字是 OCR 错字」影响；读不到才查登记表。
+        if item.get("detail_category") == "stamina" and item.get("stamina_amount"):
+            kind, amount = "immediate", item["stamina_amount"]
+        else:
+            hit = None
+            for word, effect in SHOP_STAMINA_ITEMS.items():
+                if word in name and (hit is None or len(word) > len(hit[0])):
+                    hit = (word, effect)
+            if hit is None:
+                return None
+            kind, amount = hit[1]
         if stamina is None or stamina_max is None or stamina_max <= 0:
             return None
         room = max(stamina_max - stamina, 0)
@@ -151,10 +228,13 @@ class ShopPlace:
                 return f"缺口 {room} ≤ 100"
             return None
         if kind == "immediate":
-            if amount is None:
-                return None                    # 恢复量未登记：只垫底，不拦
+            assumed = amount is None
+            if assumed:
+                amount = SHOP_STAMINA_UNKNOWN_ASSUME
             if stamina + amount > stamina_max:
-                return f"立刻 {amount} 会溢出（{stamina}+{amount}>{stamina_max}）"
+                note = "，恢复量未登记按 %d 估" % amount if assumed else ""
+                return (f"立刻 {amount} 会溢出"
+                        f"（{stamina}+{amount}>{stamina_max}{note}）")
             return None
         if kind == "daily":
             if stamina / stamina_max >= 0.5:
@@ -164,19 +244,49 @@ class ShopPlace:
 
     # ---------- 商品表 / 流派优先级 ----------
 
+    def shop_base_name(self, name):
+        """商品基础名：去掉尾部 `+ / ++ / ＋` 和空白（2026-11-12 用户口径）。
+
+        「老板的馈赠++」「大乐透+」这类后缀只影响售价/数值，类别不变；
+        识别只认基础名，图鉴没点亮变体也能归类。
+        """
+        base = (name or "").strip()
+        while base and base[-1] in "+＋":
+            base = base[:-1].strip()
+        return base
+
     def shop_category(self, name):
-        """商品类别：先查表，查不到按名字前缀兜底，再不认识归「属性」。
+        """商品类别：精确表 → **基础名** → 名字前缀 → 默认属性。
+
+        2026-11-12 用户口径：名字只认基础名 ——
+          老板的馈赠 / + / ++  → 一个基础名全覆盖；
+          六个属性 × 教科书（18 种）→ 6 个基础名；
+          器材指导书 / 器材指导教程 / 器材手册（9 种）→ 3 个基础名。
+        精确表 `SHOP_ITEMS` 仍保留（带售价/数值，做排序缓存），但**不再是前提**。
 
         归「属性」是保守兜底：它仍然受周数、余额、上限余量约束，
         不会像 `never` 那样被无条件丢掉，也不会像 `cash` 那样无条件优先。
         """
+        name = (name or "").strip()
         hit = SHOP_ITEMS.get(name)
         if hit is not None:
             return hit[0]
+        base = self.shop_base_name(name)
+        cat = SHOP_BASE_CATEGORY.get(base)
+        if cat is not None:
+            return cat
         for prefix, cat in SHOP_ITEM_PREFIX:
             if prefix in name:
                 return cat
         return "attribute"
+
+    def item_category(self, item):
+        """商品类别：**详情面板读到的优先**，读不到才退回名字表/前缀。
+
+        2026-11-12：名字表要求图鉴点亮，各账号进度不同；详情面板是游戏自己
+        给的效果文案，选中即可读，才是权威来源。
+        """
+        return item.get("detail_category") or self.shop_category(item["name"])
 
     def shop_tier(self, category):
         """该类商品在商店里的档位；不在表里返回 None（不参与购买）。
@@ -189,8 +299,10 @@ class ShopPlace:
             return None
 
     def shop_known(self, name):
-        """这个名字在商品表或前缀表里登记过吗？"""
-        return name in SHOP_ITEMS or any(p in name for p, _c in SHOP_ITEM_PREFIX)
+        """这个名字认得出来吗？精确表 → 基础名 → 前缀，任一层命中就算。"""
+        return (name in SHOP_ITEMS
+                or self.shop_base_name(name) in SHOP_BASE_CATEGORY
+                or any(p in (name or "") for p, _c in SHOP_ITEM_PREFIX))
 
     def shop_value(self, item):
         """同档内比大小用的数值。
@@ -199,6 +311,9 @@ class ShopPlace:
         子键，排在所有已登记商品之后，不会用估值压过真实的点数。
         """
         hit = SHOP_ITEMS.get(item["name"])
+        if hit is None:
+            # 变体（+ / ++）没单独登记时，用基础款的数值当参考
+            hit = SHOP_ITEMS.get(self.shop_base_name(item["name"]))
         if hit is None:
             return {"彩": 75, "金": 50, "紫": 25}.get(
                 item.get("quality"), 0)
@@ -266,11 +381,19 @@ class ShopPlace:
           1. 永不买（苦味/怪味/庇佑/护符）直接剔；
           2. 「不买」策略总否决；
           3. 现金类（老板的馈赠/大乐透）无条件优先；
-          4. 第 7 周前只买 0 元；
+          4. 扭蛋流/小游戏流第 7 周前只买 0 元；
           5. 精力类过三类门槛；
           6. 余额不够的不买；
-          7. 时限商品要剩余训练日够；
-          8. 按 `constants.SHOP_PRIORITY` 的档位排序：同档比数值、再比价格。
+          7. 排序分组：**牛奶 → 精力 → 其余**；牛奶/精力不按颜色筛（功能性商品），
+             其余**只挡明确的蓝/白**，取色失败（其他）照买（0 元商品不受限）；
+          8. 时限商品要剩余训练日够；
+          9. 排序：分组 → 其余组的品质 彩→金→紫 → `SHOP_PRIORITY` 档位
+             （教科书→器材→属性）→ 数值 → 价格。
+
+        2026-11-12 用户口径（对 11-11 的补充，不是回退）：
+        现金、牛奶依然最先，接着各种精力商品，然后才按 彩→金→紫 挑；
+        同品质内再按 教科书 → 器材 → 属性。11-11 的「牛奶/精力优先」保留。
+        「默认不买蓝色」只作用于最后一组 —— 蓝色属性饮料不再被买走。
 
         流派差异**只体现在 `SHOP_PRIORITY` 那张表里**，代码不分叉：
         训练流 cash→milk→stamina→textbook→equipment→attribute；
@@ -336,20 +459,50 @@ class ShopPlace:
             affordable = [
                 i for i in affordable
                 if days_left >= SHOP_MIN_DAYS_LEFT.get(
-                    self.shop_category(i["name"]), 0)]
+                    self.item_category(i), 0)]
 
-        # 排序：档位 → 数值 → 价格 → 屏幕靠上
+        # 2026-11-12 用户口径（对 11-11 的补充，不是回退）：
+        #   现金 → 牛奶 → 精力 → 其余按 彩/金/紫 → 同品质 教科书→器材→属性。
+        # 牛奶/精力是功能性商品（用户把它们的优先级排在品质之前），**不按颜色筛**；
+        # 其余（教科书/器材/属性）默认只买 彩/金/紫 —— 蓝/白不买。
+        #
+        # 2026-11-12 用户口径（品质没认出来时）：**只挡明确的蓝/白**。
+        #   - 牛奶/精力不按颜色筛（功能性商品，优先级本来就在品质之前）；
+        #   - 其余只要不是明确读到「蓝/白」就参与购买 —— **不再要求名字已登记**。
+        #     未登记的新商品、彩卡本来就可能取色失败（实跑「器材指导教程+」
+        #     一帧判其他、一帧判金；选中的黄框会污染采样，见
+        #     `parsers.card_quality`）。拿「有没有登记」当购买前提，等于要求
+        #     把整个图鉴人工补一遍 —— 用户 2026-11-12 明确否掉。
+        premium = []
+        for i in affordable:
+            cat = self.item_category(i)
+            quality = i.get("quality")
+            if i["price"] == 0 or cat in self.SHOP_GROUP:
+                premium.append(i)
+            elif quality not in ("蓝", "白"):
+                premium.append(i)
+        if not premium:
+            return None, "只剩蓝/白商品了（默认不买蓝色）"
+        affordable = premium
+
+        # 排序：分组（牛奶→精力→其余）→ 其余组的品质 彩→金→紫
+        #       → 0 元 → 档位（教科书→器材→属性）→ 数值 → 价格 → 屏幕靠上
         ranked = []
         for i in affordable:
-            cat = self.shop_category(i["name"])
+            cat = self.item_category(i)
             tier = self.shop_tier(cat)
             if tier is None:
                 continue
-            ranked.append((tier, 0 if self.shop_known(i["name"]) else 1,
+            group = self.SHOP_GROUP.get(cat, 2)
+            quality = (self.SHOP_QUALITY_RANK.get(i.get("quality"), 9)
+                       if group == 2 else 0)
+            ranked.append((group, quality, 0 if i["price"] == 0 else 1, tier,
+                           0 if self.shop_known(i["name"]) else 1,
                            self._target_penalty(i),
                            -self.shop_value(i), i["price"], i["y"], i))
         if not ranked:
             return None, "当前流派不买这些商品"
-        ranked.sort(key=lambda r: r[:6])
-        pick = ranked[0][6]
-        return pick, "按流派优先级购买（%s）" % self.shop_category(pick["name"])
+        ranked.sort(key=lambda r: r[:9])
+        pick = ranked[0][9]
+        return pick, "按顺序购买（%s/%s）" % (
+            pick.get("quality"), self.item_category(pick))
