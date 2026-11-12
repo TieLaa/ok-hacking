@@ -20,7 +20,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from tools.abs_mouse import find_game_hwnd  # noqa: E402
-from tools.collect_ssr import Screen, joined  # noqa: E402
+from tools.collect_ssr import Screen, joined, preferred_of  # noqa: E402
 from tools._roster_json import merge_and_save  # noqa: E402
 
 POSITIONS = ("控卫", "分卫", "中锋", "大前", "小前")
@@ -94,8 +94,8 @@ def scroll_to_top(screen, w, h, limit=8):
     print(f"  ！滚了 {limit} 次还没到顶，继续")
 
 
-def parse_detail(boxes, w, h):
-    """角色详情页：名字/稀有度/位置/流派/六维。"""
+def parse_detail(boxes, frame, w, h):
+    """角色详情页：名字/稀有度/位置/流派/六维/推荐属性（黄色大拇指）。"""
     import re
     name_box = None
     rarity = "?"
@@ -152,7 +152,8 @@ def parse_detail(boxes, w, h):
                 and not b["text"].isdigit() and b["x"] > w * 0.55
                 and "流" not in b["text"]), None)
     return {"name": name, "rarity": rarity, "position": pos, "style": style,
-            "stats": stats, "tag": tag}
+            "stats": stats, "tag": tag,
+            "preferred": preferred_of(frame, w, h, boxes) if frame is not None else []}
 
 
 def section_of(headers):
@@ -177,13 +178,25 @@ def goto_row(screen, w, h, row_offset):
 
 
 def find_section_row(screen, w, h, rarity, limit=8):
-    """从顶部开始逐行下滚，返回目标分区首次出现时的行偏移。"""
+    """从顶部开始逐行下滚，返回目标分区首次出现时的行偏移。
+
+    2026-11-12：SSR 分区的黄底横幅 OCR 常把「SSR」读成「R」。分区顺序固定
+    SSR→SR→R，所以读到「R…」时，还没找过的分区里第一个就是它 —— 先按 SSR 认，
+    SSR 采完再按 SR，最后才是 R。
+    """
+    order = ("SSR", "SR", "R")
+    idx = order.index(rarity)
     scroll_to_top(screen, w, h, limit=16)
     for k in range(limit):
         boxes, _, _ = read(screen)
         head = section_of(section_headers(boxes))
-        if head and head.startswith(rarity):
-            return k
+        if head:
+            word = head.replace(" ", "")
+            for cand in order[idx:]:
+                if word.startswith(cand) or word.startswith(cand.lower()):
+                    return k
+            if word.startswith("R") and idx < 2:
+                return k
         drag_rows(screen, w, h, 1)
     return None
 
@@ -244,7 +257,7 @@ def main(argv=None):
                 if not ("升星" in joined(b2) and "天赋" in joined(b2)):
                     print(f"    ！第{r}行第{col+1}列 点不开")
                     continue
-                info = parse_detail(b2, w2, h2)
+                info = parse_detail(b2, getattr(screen, "last_frame", None), w2, h2)
                 if info["name"] in seen or info["name"] == "?":
                     print(f"    （{info['name']} 已采/未识别）")
                 else:

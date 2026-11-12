@@ -11,6 +11,7 @@ import re
 import time
 
 from src.tasks.ui import labels
+from src.tasks.training import attributes, roster
 from src.tasks.training.places import activities
 
 
@@ -242,9 +243,15 @@ class WeekendHandlers:
                             "detail": i.get("detail")} for i in fresh],
                     note="商店未登记商品")
 
+        info = roster.lookup(self.configured_captain())
         pick, reason = self.pick_shop_item(
             items, money, policy, stamina=bar.get("stamina"),
-            stamina_max=bar.get("stamina_max"))
+            stamina_max=bar.get("stamina_max"),
+            required=attributes.required_attrs(info.get("position")),
+            attrs=dict(self.info.get("attrs") or {}),
+            caps=getattr(self, "_attr_caps", None) or {},
+            soft_cap=int(self.config.get("属性减半门槛")),
+            gap_limit=int(self.config.get("缺口排除阈值")))
         if pick is None:
             self.log_info(f"商店：{reason}，关店")
             self.finish_shop(texts)
@@ -537,8 +544,13 @@ class WeekendHandlers:
             self.leave_street()
             return True
 
+        info = roster.lookup(self.configured_captain())
         best, detail, _all = self.gacha_candidates(
-            cards, stamina, stamina_max, money)
+            cards, stamina, stamina_max, money,
+            required=attributes.required_attrs(info.get("position")),
+            attrs=dict(self.info.get("attrs") or {}),
+            caps=getattr(self, "_attr_caps", None) or {},
+            gap_limit=int(self.config.get("缺口排除阈值")))
         if best is None:
             self.log_info(f"扭蛋：{detail} → 没有可买的"
                           f"（零用钱 {money}，精力 {stamina}），退出")
@@ -591,7 +603,13 @@ class WeekendHandlers:
 
         money = self.read_money(texts)
         cards = self.arcade_cards(texts)
-        pick, reason = self.pick_arcade_card(cards, money)
+        info = roster.lookup(self.configured_captain())
+        pick, reason = self.pick_arcade_card(
+            cards, money,
+            required=attributes.required_attrs(info.get("position")),
+            attrs=dict(self.info.get("attrs") or {}),
+            caps=getattr(self, "_attr_caps", None) or {},
+            gap_limit=int(self.config.get("缺口排除阈值")))
         if pick is None:
             self.log_warning(f"游戏厅：{reason}，退出")
             self.exit_page()

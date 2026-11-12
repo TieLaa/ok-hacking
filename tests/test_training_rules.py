@@ -31,6 +31,7 @@ from tools.check_handlers import DryRunTask  # noqa: E402
 from src.tasks.training.parsers import (  # noqa: E402
     CRIT_RING_FACTOR, CRIT_RING_MIN, ring_is_border)
 from src.tasks.training.constants import WEEKEND_WORK_MONEY_GATE, WEEKEND_PLAN  # noqa: E402
+from src.tasks.training.attributes import subject_priority  # noqa: E402
 from src.tasks.ui import topbar_day  # noqa: E402
 
 
@@ -2064,19 +2065,49 @@ class LoungeSnapshot(unittest.TestCase):
 
 
 class SubjectRanking(unittest.TestCase):
-    """科目排序：分数 → 数值低的 → 屏幕靠上（2026-10-27：推荐属性已取消）。"""
+    """科目排序：分数 → 数值低的 → 屏幕靠上（2026-11-13 起含缺口/减半）。"""
 
     def test_score_wins_first(self):
-        self.assertGreater(FakeTask.subject_rank(3.0, 999, 900),
-                           FakeTask.subject_rank(2.0, 100, 100))
+        self.assertGreater(subject_priority(3.0, 999, 2000, 900),
+                           subject_priority(2.0, 100, 2000, 100))
 
     def test_lower_value_wins_when_score_tied(self):
-        self.assertGreater(FakeTask.subject_rank(2.0, 400, 900),
-                           FakeTask.subject_rank(2.0, 800, 300))
+        self.assertGreater(subject_priority(2.0, 400, 2000, 900),
+                           subject_priority(2.0, 800, 2000, 300))
 
     def test_unknown_value_loses(self):
-        self.assertGreater(FakeTask.subject_rank(2.0, 900, 900),
-                           FakeTask.subject_rank(2.0, None, 100))
+        self.assertGreater(subject_priority(2.0, 900, 2000, 900),
+                           subject_priority(2.0, None, 2000, 100))
+
+    def test_gap_below_limit_excluded(self):
+        """2026-11-13：缺口 < 100 直接排除（接近上限，再练会溢出）。"""
+        self.assertIsNone(subject_priority(2.0, 1500, 1575, 100))
+        self.assertIsNotNone(subject_priority(2.0, 1400, 1575, 100))
+
+    def test_soft_cap_halves_score(self):
+        """2026-11-13：当前值 >= 1300 → score × 0.5。"""
+        low = subject_priority(2.0, 1200, 1575, 100)
+        high = subject_priority(2.0, 1400, 1575, 100)
+        self.assertEqual(low[0], 2.0)
+        self.assertEqual(high[0], 1.0)
+
+    def test_required_bonus_added_to_score(self):
+        """需求属性 +0.5 在 score 里，且跟着 0.5 折扣一起打折。"""
+        task = FakeTask([])
+        r = {"mates": 2, "equip": 0, "manager": 0, "gold": 0, "color": 0}
+        self.assertEqual(task.subject_score(r), 2.0)
+        self.assertEqual(task.subject_score(r, required=True), 2.5)
+        # 过 1300 后：(2.5) × 0.5 = 1.25
+        key = subject_priority(task.subject_score(r, required=True),
+                               1400, 1575, 100)
+        self.assertEqual(key[0], 1.25)
+
+    def test_position_required_table(self):
+        from src.tasks.training import attributes
+        self.assertEqual(attributes.required_attrs("控卫"), {"运控"})
+        self.assertEqual(attributes.required_attrs("分卫"), {"运控", "防守"})
+        self.assertEqual(attributes.required_attrs("大前"), {"弹跳", "防守"})
+        self.assertEqual(attributes.required_attrs("查无此位"), set())
 
 
 class ResultButtonRules(unittest.TestCase):
@@ -4750,19 +4781,63 @@ class PurchaseRules(unittest.TestCase):
             self.assertTrue(task.handle_shop(texts))
             self.assertIn("买「弹跳秘籍++」", "".join(task.logs))
 
-    def test_shop_week7_drink_only_deprioritized(self):
-        """2026-11-11 用户口径：第 7 周以后精力（T2）仍排在属性（T5）前面。
+    def test_shop_attribute_all_attr_beats_special(self):
+        """2026-11-13：属性类内部 全属性 > 需求专项 > 其他专项。"""
+        task, texts = self._shop(
+            [("全能饮料+", 110), ("弹跳秘籍+", 100), ("意识秘籍+", 100)],
+            money=500, quality="金")
+        task.configured_captain = lambda: "佐久间雨乃"   # 大前 → 弹跳/防守
+        task.info["attrs"] = {"弹跳": 800, "防守": 800, "意识": 800}
+        task._attr_caps = {"弹跳": 1575, "防守": 1575, "意识": 1575}
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「全能饮料+」", "".join(task.logs))
 
-        登记表里恢复量还没采集（None）→ 不拦门槛；
-        精力饮料和属性货同屏时先买饮料。
+    def test_shop_skips_attr_with_small_gap(self):
+        """2026-11-13：属性缺口 < 100 → 不买该属性的商品。"""
+        task, texts = self._shop([("弹跳秘籍+", 100), ("意识秘籍+", 100)],
+                                 money=500, quality="金")
+        task.configured_captain = lambda: "佐久间雨乃"
+        task.info["attrs"] = {"弹跳": 1500, "意识": 800}
+        task._attr_caps = {"弹跳": 1575, "意识": 1575}
+        self.assertTrue(task.handle_shop(texts))
+        self.assertNotIn("买「弹跳秘籍+」", "".join(task.logs))
+        self.assertIn("买「意识秘籍+」", "".join(task.logs))
+
+    def test_arcade_skips_card_with_small_gap(self):
+        """2026-11-13：属性缺口 < 100 → 不买该属性小游戏。"""
+        task, texts = self._arcade()
+        task.configured_captain = lambda: "佐久间雨乃"   # 大前 → 弹跳/防守
+        task.info["attrs"] = {"弹跳": 1500}
+        task._attr_caps = {"弹跳": 1575}
+        self.assertTrue(task.handle_arcade(texts))
+        self.assertIn("没有「自动」", "".join(task.logs))
+
+    def test_gacha_skips_attr_with_small_gap(self):
+        """2026-11-13：属性缺口 < 100 → 不买该属性扭蛋。"""
+        task = FakeTask([])
+        cards = [{"name": "弹跳增加++", "quality": "金", "price": 100,
+                  "mate": False, "enhanced": False, "clear": False,
+                  "effect": "", "recover": 0, "x": 0, "y": 0}]
+        best, _detail, _all = task.gacha_candidates(
+            cards, stamina=100, stamina_max=130, money=500,
+            required={"弹跳"}, attrs={"弹跳": 1500},
+            caps={"弹跳": 1575}, gap_limit=100)
+        self.assertIsNone(best)
+
+    def test_shop_week7_skips_paid_drink(self):
+        """2026-11-13 用户口径：第 7 周（赛季末）不再买付费的牛奶/精力。
+
+        训练增益类在最后一周没价值了；0 元商品不受限（见下一条测试）。
         """
         task, texts = self._shop([("精力饮料", 30), ("弹跳秘籍++", 100)],
                                  money=120, week=7)
         self.assertTrue(task.handle_shop(texts))
-        self.assertIn("买「精力饮料」", "".join(task.logs))
+        self.assertNotIn("买「精力饮料」", "".join(task.logs))
+        self.assertIn("买「弹跳秘籍++」", "".join(task.logs))
+        # 只剩付费饮料 → 关店
         task, texts = self._shop([("精力饮料", 30)], money=120, week=7)
         self.assertTrue(task.handle_shop(texts))
-        self.assertIn("买「精力饮料」", "".join(task.logs))
+        self.assertIn("第 7 周不买牛奶/精力", "".join(task.logs))
 
     def test_shop_still_buys_free_drink_from_week7(self):
         """第 7 周以后：免费的精力饮料照样拿（0 元不花零用钱）。"""

@@ -78,6 +78,7 @@ class Screen:
         frame = self.frame() if frame is None else frame
         if frame is None:
             return [], None, None
+        self.last_frame = frame       # 像素判据（推荐属性）要和 OCR 同一帧
         h, w = frame.shape[:2]
         res = self.ocr.ocr(frame)
         page = res[0] if isinstance(res, list) and len(res) == 1 else res
@@ -170,6 +171,49 @@ def style_of(frame, w, h, name_box):
     if 12 < hmed < 35:
         return "力量"          # 橙红兜底
     return f"?H{int(hmed)}"
+
+
+# 角色详情页六维网格（2026-11-12 用户截图 + 23 个角色手工核对）：
+#   左列 投射 / 弹跳 / 运控，右列 体能 / 防守 / 意识（和训练页底部面板同序）。
+ATTR_GRID = (("投射", "体能"), ("弹跳", "防守"), ("运控", "意识"))
+# 黄色大拇指：H 22~35 避开防守的橙色盾（H≈10~18）；只取数值框左侧一条，
+# 避开六维图标本身。判据已在 23 个角色上逐个核对过。
+THUMB_HUE = (22, 35)
+THUMB_SAT_MIN = 120
+THUMB_VAL_MIN = 150
+THUMB_MIN_PIXELS = 120
+THUMB_DX = (0.085, 0.045)     # 相对数值框左沿：外沿 / 内沿
+
+
+def preferred_of(frame, w, h, boxes):
+    """角色详情页：数值格左侧的黄色大拇指 → 推荐属性列表。"""
+    nums = [b for b in boxes
+            if b['text'].strip().isdigit() and len(b['text'].strip()) <= 3
+            and 0.66 <= (b['x'] + b['w'] / 2) / w <= 0.99
+            and 0.18 <= (b['y'] + b['h'] / 2) / h <= 0.55]
+    if len(nums) < 6:
+        return []                 # 数字没读全，这一帧不判（别硬猜）
+    # 行号按 2% 屏高聚类：同一行两个数字的几像素抖动不会串行
+    nums.sort(key=lambda b: (round((b['y'] + b['h'] / 2) / (h * 0.02)), b['x']))
+    rows = [nums[i:i + 2] for i in range(0, 6, 2)]
+    out = []
+    for ri, row in enumerate(rows):
+        row.sort(key=lambda b: b['x'])
+        for ci, box in enumerate(row):
+            x1 = max(0, int(box['x'] - w * THUMB_DX[0]))
+            x2 = int(box['x'] - w * THUMB_DX[1])
+            y1 = max(0, int(box['y'] - h * 0.004))
+            y2 = min(h, int(box['y'] + box['h'] + h * 0.004))
+            roi = frame[y1:y2, x1:x2]
+            if roi.size == 0:
+                continue
+            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+            hue, sat, val = cv2.split(hsv)
+            yellow = ((hue >= THUMB_HUE[0]) & (hue <= THUMB_HUE[1])
+                      & (sat >= THUMB_SAT_MIN) & (val >= THUMB_VAL_MIN))
+            if int(yellow.sum()) >= THUMB_MIN_PIXELS:
+                out.append(ATTR_GRID[ri][ci])
+    return out
 
 
 def parse_pool_cards(boxes, w, h):
