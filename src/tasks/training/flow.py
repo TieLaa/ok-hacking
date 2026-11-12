@@ -958,6 +958,7 @@ class TrainingFlowMixin:
         # 今天去过的地点：卡住的很可能就是「记成去过了、其实没进去」
         state = self.day_state()
         state["visited"] = set()
+        state["current_step"] = None
         self.log_info("干预纠错：已清掉当天拦路标记（商店试次/出行/笔记/科目/已去地点）")
 
     def _journal_click(self, record):

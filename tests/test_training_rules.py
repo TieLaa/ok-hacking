@@ -32,6 +32,7 @@ from src.tasks.training.parsers import (  # noqa: E402
     CRIT_RING_FACTOR, CRIT_RING_MIN, ring_is_border)
 from src.tasks.training.constants import WEEKEND_WORK_MONEY_GATE, WEEKEND_PLAN  # noqa: E402
 from src.tasks.training.attributes import subject_priority  # noqa: E402
+from src.tasks.training.places.map import WeekendStep  # noqa: E402
 from src.tasks.ui import topbar_day  # noqa: E402
 
 
@@ -3192,6 +3193,8 @@ class WeekendMapRules(unittest.TestCase):
     # 名字左边同一行的「打折」标签（venue_on_discount 判据：tcx < cx、Δcy ≤ 0.12h）
     STREET_DISCOUNT = box(900, 895, "打折", 70, 55)
     RESTAURANT_DISCOUNT = box(150, 750, "打折", 70, 55)
+    # 2026-11-12 实拍：橙色「急招！」贴在餐厅名字左侧、同一水平带内。
+    RESTAURANT_URGENT = box(120, 700, "急招！", 110, 60)
 
     # 星期二 = 训练日的额外出行日（二星野上泷），以前只测五/六/日。
     ALL_DAYS = ("星期五", "星期六", "星期日", "星期二")
@@ -3265,6 +3268,84 @@ class WeekendMapRules(unittest.TestCase):
             task.weekend_state()
             self.assertTrue(task.handle_weekend(texts))
             self.assertEqual(task.actions[-1][1], "餐厅")
+
+    def test_urgent_restaurant_is_detour_for_main_venue_styles(self):
+        """扭蛋/小游戏钱够时，急招是 detour；原主地点还在后面。"""
+        for style, main in (("扭蛋流", "步行街"), ("小游戏流", "游戏厅")):
+            texts = (self._weekend_map("星期日", WEEKEND_WORK_MONEY_GATE)
+                     + [self.RESTAURANT_URGENT])
+            task = self.styled(style, texts)
+            st = task.weekend_state()
+            plan = task.weekend_plan("星期日", st, texts)
+            self.assertEqual(plan, [WeekendStep("餐厅", True),
+                                    WeekendStep(main, False)], style)
+
+            self.assertTrue(task.handle_weekend(texts), style)
+            self.assertEqual(task.actions[-1][1], "餐厅", style)
+            self.assertTrue(task._weekend["current_step"].urgent, style)
+
+            # 餐厅走完后，原主地点仍在计划里。
+            task.actions.clear()
+            task._weekend["visited"] = {"餐厅"}
+            self.assertTrue(task.handle_weekend(texts), style)
+            self.assertEqual(task.actions[-1][1], main, style)
+            self.assertFalse(task._weekend["current_step"].urgent, style)
+
+    def test_urgent_restaurant_is_not_detour_when_planned(self):
+        """商店流 / 扭蛋小游戏钱不够：主计划首选就是餐厅 → urgent=False。"""
+        cases = [("商店流", None), ("扭蛋流", WEEKEND_WORK_MONEY_GATE - 1),
+                 ("小游戏流", WEEKEND_WORK_MONEY_GATE - 1)]
+        for style, money in cases:
+            texts = self._weekend_map("星期日", money) + [self.RESTAURANT_URGENT]
+            task = self.styled(style, texts)
+            st = task.weekend_state()
+            self.assertEqual(task.weekend_plan("星期日", st, texts),
+                             [WeekendStep("餐厅", False)], style)
+            self.assertTrue(task.handle_weekend(texts), style)
+            self.assertFalse(task._weekend["current_step"].urgent, style)
+
+    def test_urgent_restaurant_training_gap(self):
+        """训练流：缺口小本来去餐厅 → 主计划；缺口大只去公园 → 急招 detour。"""
+        for stamina, want in (
+                ("115/130", [WeekendStep("餐厅", False),
+                             WeekendStep("公园", False)]),
+                ("10/130", [WeekendStep("餐厅", True),
+                            WeekendStep("公园", False)])):
+            texts = (self._map("星期日")
+                     + [box(380, 16, stamina, 210, 53),
+                        self.RESTAURANT_URGENT])
+            task = self.styled("训练流", texts)
+            st = task.weekend_state()
+            self.assertEqual(task.weekend_plan("星期日", st, texts), want,
+                             stamina)
+            self.assertTrue(task.handle_weekend(texts), stamina)
+            self.assertEqual(task.actions[-1][1], "餐厅", stamina)
+            self.assertEqual(task._weekend["current_step"].urgent,
+                             want[0].urgent, stamina)
+
+    def test_urgent_detour_skipped_after_restaurant_visited(self):
+        """餐厅今天已经去过 → 急招不再插队，继续原主地点。"""
+        texts = (self._weekend_map("星期日", WEEKEND_WORK_MONEY_GATE)
+                 + [self.RESTAURANT_URGENT])
+        task = self.styled("扭蛋流", texts)
+        st = task.weekend_state()
+        st["visited"] = {"餐厅"}
+        self.assertEqual(task.weekend_plan("星期日", st, texts),
+                         [WeekendStep("步行街", False)])
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertEqual(task.actions[-1][1], "步行街")
+
+    def test_urgent_label_elsewhere_is_not_detour(self):
+        """「急招！」必须在餐厅名字左侧；别处的同字不算数。"""
+        texts = (self._weekend_map("星期日", WEEKEND_WORK_MONEY_GATE)
+                 + [box(1400, 200, "急招！", 110, 60)])
+        task = self.styled("扭蛋流", texts)
+        st = task.weekend_state()
+        self.assertEqual(task.weekend_plan("星期日", st, texts),
+                         [WeekendStep("步行街", False),
+                          WeekendStep("餐厅", False)])
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertEqual(task.actions[-1][1], "步行街")
 
     def test_weekday_unknown_still_uses_main_venue(self):
         """读不到星期也不影响：候选固定是「主地点 + 餐厅」（不再查星期表）。"""
@@ -3860,21 +3941,29 @@ class StylePlanRules(unittest.TestCase):
 
     # ---------- 餐厅：默认当服务员，桌游GM 队友多 2 人才改选左边 ----------
 
-    def _restaurant(self, stamina=None):
+    def _restaurant(self, stamina=None, urgent=None):
         # 真实布局（docs/shots/restaurant_cards.png）：桌游GM 在左、当服务员在右。
         texts = [box(700, 100, "在餐厅", 300, 50),
                  box(600, 500, "桌游GM", 200, 60),
                  box(1000, 500, "当服务员", 200, 60)]
+        # 急招标签在对应卡片的左上（2026-11-12 实拍：桌游GM 卡左侧）。
+        if urgent == "桌游GM":
+            texts.append(box(480, 440, "急招！", 120, 60))
+        elif urgent == "当服务员":
+            texts.append(box(880, 440, "急招！", 120, 60))
         if stamina:
             texts.append(box(380, 16, stamina, 210, 53))
         return texts
 
-    def _restaurant_task(self, stamina=None, mates=None):
+    def _restaurant_task(self, stamina=None, mates=None, urgent=None,
+                         step=None):
         """mates 按选项名给队友个数（覆盖数脸判据，帧是黑的数不出人）。"""
-        task = FakeTask(self._restaurant(stamina))
+        task = FakeTask(self._restaurant(stamina, urgent))
         task._style = "商店流"
         counts = dict(mates or {})
         task.mate_face_count = lambda b, **k: counts.get(b.name.strip(), 0)
+        if step is not None:
+            task._weekend["current_step"] = step
         return task
 
     def test_restaurant_tie_picks_servant(self):
@@ -3882,6 +3971,47 @@ class StylePlanRules(unittest.TestCase):
         task = self._restaurant_task()
         self.assertTrue(task.handle_restaurant(task._texts))
         self.assertEqual(task.actions[-1][1], "当服务员")
+
+    def test_restaurant_gm_urgent_wins(self):
+        """GM急招贴在桌游GM 上 → 优先桌游GM（双倍工资）。"""
+        task = self._restaurant_task(urgent="桌游GM")
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][1], "桌游GM")
+
+    def test_restaurant_servant_urgent_wins(self):
+        """服务员急招 → 优先当服务员，压过「桌游GM 队友多 2 人」的旧规则。"""
+        task = self._restaurant_task(
+            mates={"桌游GM": 2, "当服务员": 0}, urgent="当服务员")
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][1], "当服务员")
+
+    def test_restaurant_urgent_unselectable_planned_falls_back_gm(self):
+        """急招卡精力不够 + 今天主计划就是餐厅 → 改打桌游GM（普通工资）。"""
+        task = self._restaurant_task(
+            stamina="10/130", urgent="当服务员",
+            step=WeekendStep("餐厅", False))
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][1], "桌游GM")
+
+    def test_restaurant_urgent_unselectable_detour_exits(self):
+        """急招卡精力不够 + 餐厅是急招插队 → 不选另一张，退出餐厅。"""
+        task = self._restaurant_task(
+            stamina="10/130", urgent="当服务员",
+            step=WeekendStep("餐厅", True))
+        self.assertEqual(task.restaurant_order(task._texts,
+                                               allow_fallback=False), ())
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][0], "click")      # exit_page 的返回
+
+    def test_restaurant_urgent_unselectable_and_gm_blocked_exits(self):
+        """急招卡和 GM 都不可选 → 退出，不再逐张试。"""
+        task = self._restaurant_task(
+            stamina="10/130", urgent="当服务员",
+            step=WeekendStep("餐厅", False))
+        task.blocked_activities().add("桌游GM")
+        self.assertEqual(task.restaurant_order(task._texts), ())
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][0], "click")      # exit_page 的返回
 
     def test_restaurant_gm_with_two_more_teammates_wins(self):
         """桌游GM 队友 2 个、当服务员 0 个（多两个）→ 选左边的桌游GM。"""
