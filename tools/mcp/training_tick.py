@@ -111,7 +111,7 @@ class Task(BaseTask):
             "run_returned": result,
             "cook_wheel_registered": "handle_spin_wheel" in names,
             "hot_reloaded": bool(patched),
-            "attempt_dir": task.attempt_dir,
+            "attempt_dir": getattr(task, "attempt_dir", None) or task.evidence.root,
         }
         self.log_info(f"接手结果：{report}")
         return report

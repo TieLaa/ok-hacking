@@ -39,7 +39,7 @@ class Task(BaseTask):
             "steps": task._steps,
             "acted": acted,
             "in_lobby": task.is_lobby(),
-            "attempt_dir": task.attempt_dir,
+            "attempt_dir": getattr(task, "attempt_dir", None) or task.evidence.root,
         }
         self.log_info(f"快速比赛结果：{report}")
         return report

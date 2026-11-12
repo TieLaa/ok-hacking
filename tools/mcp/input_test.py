@@ -26,7 +26,7 @@ class Task(BaseTask):
         report = {"worked": bool(result),
                   "target": task.config.get("目标文字"),
                   "expect": task.config.get("期望出现文字"),
-                  "attempt_dir": task.attempt_dir}
+                  "attempt_dir": getattr(task, "attempt_dir", None) or task.evidence.root}
         self.log_info(f"输入测试结果：{report}")
         assert result, f"输入测试失败：点击没有生效（{report}）"
         return report

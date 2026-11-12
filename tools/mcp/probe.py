@@ -39,7 +39,7 @@ class Task(BaseTask):
                 "top_bar": state,
                 "text_count": len(texts),
                 "texts": [t.name.strip() for t in texts if t.name.strip()][:30],
-                "attempt_dir": task.attempt_dir,
+                "attempt_dir": getattr(task, "attempt_dir", None) or task.evidence.root,
             }
             self.log_info("探针结果：" + json.dumps(report, ensure_ascii=False))
             return report

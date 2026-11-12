@@ -71,7 +71,7 @@ class Task(BaseTask):
             "style_known": task.style_known,
             "in_lobby": task.is_lobby(),
             "run_returned": result,
-            "attempt_dir": task.attempt_dir,
+            "attempt_dir": getattr(task, "attempt_dir", None) or task.evidence.root,
         }
         self.log_info(f"训练结果：{report}")
         return report
