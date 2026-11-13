@@ -2701,10 +2701,10 @@ class PlaceModulesRules(unittest.TestCase):
         self.assertEqual(pick["attr"], "弹跳")     # 队友优先（尽管奖励上限低）
 
     def test_shop_pick_by_policy(self):
-        """商店：分组（牛奶→精力）之后才排品质 彩→金→紫，同品质比类别（2026-11-12）。
+        """商店：分组（牛奶→精力）之后才排品质 彩→金→紫（2026-11-12）。
 
-        2026-11-11 那版只有类别档位、没有品质筛；11-12 用户口径是
-        **现金 → 牛奶 → 精力 → 彩/金/紫 → 同品质 教科书→器材→属性**。
+        2026-11-13 起同品质内再按 教程/指导书→手册→教科书→属性
+        （`test_shop_same_color_kind_order` 单独覆盖）。
         """
         items = [
             {"name": "器材手册", "price": 60, "quality": "紫", "x": 100, "y": 100},
@@ -3445,7 +3445,6 @@ class WeekendMapRules(unittest.TestCase):
         if money is not None:
             texts.append(box(1000, 20, str(money), 120, 45))
         return texts
-
 
     # ---------- 第 7 周以后：看到「新品上市」提示才进店（用户 2026-11-05） ----------
     # 判据本体在 `daycycle.late_shop_step`（一天的入口 ③），调用点是 flow.run 主循环里、
@@ -4922,6 +4921,53 @@ class PurchaseRules(unittest.TestCase):
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「全能饮料+」", "".join(task.logs))
 
+    def test_shop_same_color_kind_order(self):
+        """2026-11-13：同品质内 教程/指导书 > 手册 > 教科书；教程与指导书同档按数值分。"""
+        task, texts = self._shop(
+            [("投射教科书", 100), ("器材手册", 100), ("器材指导教程", 100)],
+            money=500, quality="紫")
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「器材指导教程」", "".join(task.logs))
+
+        task, texts = self._shop(
+            [("投射教科书", 100), ("器材手册", 100)], money=500, quality="紫")
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「器材手册」", "".join(task.logs))
+
+        # 同档：教程(40%) 比 指导书(20%) 先
+        task, texts = self._shop(
+            [("器材指导书", 100), ("器材指导教程", 100)], money=500, quality="紫")
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「器材指导教程」", "".join(task.logs))
+
+    def test_shop_quality_still_beats_kind(self):
+        """2026-11-13 用户口径：品类只在同品质内比较（金教科书 > 紫教程）。"""
+        task, texts = self._shop([("投射教科书", 100), ("器材指导教程", 100)],
+                                 money=500)
+        task.card_quality = lambda name, pt: (
+            "金" if "教科书" in name.name else "紫", 30, 150)
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「投射教科书」", "".join(task.logs))
+
+    def test_shop_attribute_sub_order(self):
+        """2026-11-13：属性内 需求属性 > 专属饮料 > 奇妙秘籍 > 其他。"""
+        def task_with(items):
+            task, texts = self._shop(items, money=500, quality="金")
+            task.configured_captain = lambda: "佐久间雨乃"   # 大前 → 弹跳/防守
+            task.info["attrs"] = {"弹跳": 800, "投射": 800}
+            task._attr_caps = {"弹跳": 1575, "投射": 1575}
+            return task, texts
+
+        # 需求属性 > 专属
+        task, texts = task_with([("专属饮料++", 130), ("弹跳秘籍++", 130)])
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「弹跳秘籍++」", "".join(task.logs))
+        # 专属 > 奇妙 > 普通
+        task, texts = task_with(
+            [("投射秘籍++", 130), ("奇妙投射秘籍++", 70), ("专属饮料++", 130)])
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("买「专属饮料++」", "".join(task.logs))
+
     def test_shop_skips_attr_with_small_gap(self):
         """2026-11-13：属性缺口 < 100 → 不买该属性的商品。"""
         task, texts = self._shop([("弹跳秘籍+", 100), ("意识秘籍+", 100)],
@@ -5112,7 +5158,7 @@ class PurchaseRules(unittest.TestCase):
         self.assertIn("买「神秘手册」", "".join(task.logs))
 
     def test_shop_priority_order_is_style_independent(self):
-        """商店内顺序不吃流派：牛奶 > 精力 > 教科书 > 属性。
+        """商店内顺序不吃流派：牛奶 > 精力 > 同品质其余（含教科书/属性）。
 
         2026-11-11 用户口径：商店里同一件商品的相对价值与流派无关，
         流派只决定「进不进店、带多少钱」。
