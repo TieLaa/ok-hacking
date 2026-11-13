@@ -338,6 +338,12 @@ class MatchHandlers:
         同理「关闭」不能交给 handle_popup —— 它会在任何页面上点第一个「关闭」。
         """
         stage = getattr(self, "_register_stage", None)
+        # 活动积分结算页（PT 活动：分数进池换奖品）是正常展示，不是「卡住」：
+        # 这页停留十几拍，旧判据会误报 register_stuck（2026-11-12 17:28 实跑 21 拍）。
+        # 只清计数、不认领页面 —— 这页仍交给 popup / 兜底去点，别在这里抢。
+        if self.match_text(texts, "获得活动积分") is not None:
+            self._reg_tick_stage, self._reg_ticks = None, 0
+            return False
         # 拍数上限：连续 20 拍停在同一 stage 上（页面没推进）就存证 + 放弃，
         # 绝不允许无限重试（2026-10-28 18:17 空烧 890 拍）。
         # 2026-10-29 修正：stage 为 None = **还没进注册流程**（普通训练/剧情页），
