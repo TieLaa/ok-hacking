@@ -340,6 +340,15 @@ class TrainingFlowMixin:
                 self._arcade_wait_since = 0.0
                 last_sig = None
 
+            # 上一拍被暂停/让路拉长（等用户停手、监控页暂停、抢前台失败）→ 这段空转
+            # 里没有点击、界面当然不会变，不能算「点了没反应」。
+            # 2026-11-10 19:10 实跑：让路 13.9 秒被判成 15.8 秒没变化，接管 3 次后停任务。
+            now = time.time()
+            if now - getattr(self, "_tick_at", 0.0) > 5.0:
+                self._sig_changed_at = now
+                self._last_click_at = 0.0
+            self._tick_at = now
+
             # 界面指纹：同一页面每拍都一样；用于 ①「3 秒无响应」判据 ② unknown 存证限流
             sig = self._signature(texts)
             changed = sig != last_sig
@@ -748,7 +757,6 @@ class TrainingFlowMixin:
         handler 里点几次就数几次，不怕漏。
         """
         at = time.time()
-        self._last_click_at = at
         px, py = self._click_point(x, y)
         record = {
             "at": round(at, 3),
@@ -768,16 +776,29 @@ class TrainingFlowMixin:
             record["error"] = f"{type(e).__name__}: {e}"
             raise
         finally:
-            # 点击**完成**时刻才算「最近一次点击」：用户抢鼠标时 interaction 会在
-            # click 里面暂停几秒，用开始时刻计时会让统计把这段让路算成空档。
-            self._last_click_at = time.time()
+            if self._click_skipped(at):
+                # 闸门拦下的点击（暂停/停止/抢不到前台）根本没发出去：
+                # 既不算「最近一次点击」（否则看门狗会以为点过），也不计入当天点击数。
+                # 2026-11-10 19:10 实跑：暂停中点了「安心按摩」，日志里有 left_click，
+                # 实际一下都没发，看门狗照样接管 3 次后停任务。
+                record["ok"] = False
+                record["skipped"] = True
+            else:
+                # 点击**完成**时刻才算「最近一次点击」：用户抢鼠标时 interaction 会在
+                # click 里面暂停几秒，用开始时刻计时会让统计把这段让路算成空档。
+                self._last_click_at = time.time()
+                # 卡住判据②：同一天点击数 +1（`stuck_takeover` 用它判「一天点了多少下」）
+                self.note_click()
             self._journal_click(record)
-            # 卡住判据②：同一天点击数 +1（`stuck_takeover` 用它判「一天点了多少下」）
-            self.note_click()
             # 记进本拍点击列表，snap_event 会把它写进事件 json（报告「内容」列）
             tick_clicks = getattr(self, "_tick_clicks", None)
             if tick_clicks is not None:
                 tick_clicks.append({"name": record["name"], "x": px, "y": py})
+
+    def _click_skipped(self, at):
+        """这次 click 是不是被闸门拦下了（暂停/停止/抢不到前台），没真正发出去。"""
+        interaction = getattr(self, "_gate_interaction", None)
+        return getattr(interaction, "last_skip_at", 0.0) >= at
 
     @staticmethod
     def _click_point(x, y):
