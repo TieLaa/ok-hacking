@@ -450,16 +450,10 @@ class ShopPlace:
             pick = max(free_cash or paid_cash, key=lambda i: -i["y"])
             return pick, "必定优先拿（%s）" % pick["name"]
 
-        # 2026-11-13 用户口径：第 7 周周日是**最后一场比赛**，只买直接加
-        # 六维的属性商品（不分品质，蓝/白也买）；器材/教科书/牛奶/精力都
-        # 不再买（训练类在最后一天兑现不了）。缺口、余额、0 元规则照旧 ——
-        # 所以这里只换「类别」和「品质」两把闸，下面的管道继续走。
+        # 2026-11-14 用户口径：第 7 周周日**购买逻辑跟平时一样**，唯一区别是
+        # 允许买蓝色（白色仍不买）。不再限制「只买属性商品」；第 7 周的
+        # 牛奶/精力规则（LATE_SHOP_FROM_WEEK）照旧生效。
         final_match = week == SHOP_SEASON_WEEKS and day == "日"
-        if final_match:
-            items = [i for i in items
-                     if self.item_category(i) == "attribute"]
-            if not items:
-                return None, "最后一场比赛：店里没有属性商品，关店"
 
         # 扭蛋流 / 小游戏流：前 6 周零花钱要留周末，只拿必拿（现金类，
         # 上面已经返回）；训练流 / 商店流不设周数限制，进店就按顺序买。
@@ -526,7 +520,9 @@ class ShopPlace:
             quality = i.get("quality")
             if i["price"] == 0 or cat in self.SHOP_GROUP:
                 premium.append(i)
-            elif final_match or quality not in ("蓝", "白"):
+            elif final_match and quality != "白":
+                premium.append(i)
+            elif quality not in ("蓝", "白"):
                 premium.append(i)
         if not premium:
             return None, "只剩蓝/白商品了（默认不买蓝色）"
@@ -543,7 +539,7 @@ class ShopPlace:
             cat = self.item_category(i)
             slot = self.shop_slot(i["name"], cat)
             group = self.SHOP_GROUP.get(cat, 2)
-            quality = (0 if group != 2 or final_match
+            quality = (0 if group != 2
                        else self.SHOP_QUALITY_RANK.get(i.get("quality"), 9))
             # 2026-11-13：属性类内部 全属性 > 需求属性 > 专属饮料 > 奇妙秘籍 > 其他；
             # 缺口不足 `gap_limit` 的不买，过 `soft_cap` 的数值减半。

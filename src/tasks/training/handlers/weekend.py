@@ -672,6 +672,12 @@ class WeekendHandlers:
         # 结果首页被判成地图、永远不点「出行」。现在统一用「有出行 = 首页」。
         if self.match_text(texts, "出行") is None:
             return False
+        # 2026-11-14 用户口径（游戏设置）：第 7 周周日不能再出行，只进商店。
+        # 游戏里这页即使还露出「出行」也不点，避免空点。
+        week, day = self.current_day(texts)
+        if week == SHOP_SEASON_WEEKS and day == "日":
+            self.log_info("第7周星期日：不能再出行 → 不点「出行」")
+            return False
 
         # 训练日里的额外出行（野上泷：周五也能出行）：一天只用一次。
         # 用过之后如果又停在一个「有出行」的页面（进地图又退回来的首页），
