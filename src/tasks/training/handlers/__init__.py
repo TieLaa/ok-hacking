@@ -116,6 +116,10 @@ HANDLERS = (
     EntryHandlers.handle_dialog_continue,
     EntryHandlers.handle_lobby,
     EntryHandlers.handle_training_entry,
+    # 选队长前的「显示设定 → 筛选」：重置 → 按稀有度/位置缩池 → 确定。
+    # 必须排在 handle_captain 之前：面板打开时背景仍能读到「训练核心」，
+    # 先让面板 handler 认领，处理完再回到逐张找名字。
+    EntryHandlers.handle_captain_filter,
     EntryHandlers.handle_captain,
     EntryHandlers.handle_team,
     EntryHandlers.handle_note_select,

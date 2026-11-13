@@ -5,6 +5,7 @@
 """
 
 
+from src.tasks.training import roster
 from src.tasks.ui import Defs
 from src.tasks.ui import labels
 
@@ -212,6 +213,16 @@ class EntryHandlers:
             return self.stop_for_no_captain("训练核心（选队长）")
 
         want = self.configured_captain()
+        if want and not getattr(self, "_captain_filter_done", False):
+            # 2026-11-13 用户流程：选队长前先「显示设定 → 筛选」，按稀有度
+            # 和位置把卡池缩小，再走原来的逐张找名字（不在池里才停）。
+            target = self.match_text(texts, "筛选")
+            if target is not None:
+                self.click_box(target, after_sleep=0.5)
+                self._captain_filter_stage = "tab"
+                self.log_info("选队长：打开筛选")
+                return True
+            self.log_warning("选队长：没认出「筛选」按钮 → 直接逐张找")
         if want and self.pick_captain_by_name(want):
             self._captain_matched_config = True
             return True
@@ -237,6 +248,102 @@ class EntryHandlers:
         # 选完队长后按钮可能移动，重新 OCR 再点「下一步」
         ok = self.click_button_and_expect("next", ("选择队友",), timeout=8)
         self.log_info("进入选择队友" if ok else "点「下一步」没反应")
+        return True
+
+    def handle_captain_filter(self, texts):
+        """选队长前的「显示设定 → 筛选」：重置 → 按稀有度/位置缩池 → 确定。
+
+        用户 2026-11-13 流程：启程 → 筛选 → 筛选页签 → 重置 →
+        按队长稀有度点 SR/SSR + 位置 5 选 1 → 确定 → 原来的逐张找名字。
+        分拍执行（每拍一个动作），避免面板动画/OCR 抖动时连点错。
+        """
+        if self.match_text(texts, "显示设定") is None:
+            return False
+        stage = getattr(self, "_captain_filter_stage", None)
+        if stage is None:
+            return False        # 用户手动打开的面板，不碰
+
+        if stage == "tab":
+            if self.match_text(texts, "显示顺序") is not None:
+                tab = self._filter_text(texts, "筛选", region="settings_tabs")
+                if tab is not None:
+                    self.click_box(tab, after_sleep=0.3)
+            self._captain_filter_stage = "reset"
+            return True
+
+        if stage == "reset":
+            reset = self._filter_text(texts, "重置")
+            if reset is not None:
+                self.click_box(reset, after_sleep=0.4)
+            self._captain_filter_stage = "choose"
+            return True
+
+        if stage == "choose":
+            self._choose_captain_filters(texts)
+            self._captain_filter_stage = "confirm"
+            return True
+
+        if stage == "confirm":
+            confirm = self._filter_text(texts, "确定")
+            if confirm is not None:
+                self.click_box(confirm, after_sleep=0.5)
+            else:
+                cancel = self._filter_text(texts, "取消")
+                if cancel is not None:
+                    self.click_box(cancel, after_sleep=0.4)
+                self.log_warning("选队长筛选：没找到「确定」，已取消面板")
+            self._captain_filter_done = True
+            self._captain_filter_stage = None
+            self.log_info("选队长：筛选完成，回训练核心")
+            return True
+        return False
+
+    def _choose_captain_filters(self, texts):
+        """重置后默认全选：保留队长稀有度/位置，取消其余。"""
+        info = roster.lookup(self.configured_captain())
+        rarity = (info.get("rarity") or "").upper()
+        position = info.get("position") or ""
+        if rarity in ("SSR", "SR"):
+            self._click_filter_text(texts, "R")
+        elif rarity == "R":
+            self._click_filter_text(texts, "SR")
+            self._click_filter_text(texts, "SSR")
+        for name in ("控卫", "分卫", "小前", "大前", "中锋"):
+            if position and name != position:
+                self._click_filter_text(texts, name)
+        if not rarity or position not in ("控卫", "分卫", "小前", "大前", "中锋"):
+            self.log_warning(
+                f"选队长筛选：roster 里查不到「{self.configured_captain()}」"
+                f"（rarity={rarity or '?'} position={position or '?'}）"
+                "→ 稀有度/位置保持全选")
+
+    def _filter_text(self, texts, name, region=None):
+        """筛选面板里的文字框；OCR 没认出时用截图实测坐标兜底。"""
+        source = texts if region is None else self.texts_in_region(texts, region)
+        target = self.exact_text(source, (name,))
+        if target is not None:
+            return target
+        coords = None
+        if name in Defs.CAPTAIN_FILTER["rarity"]:
+            coords = Defs.CAPTAIN_FILTER["rarity"][name]
+        elif name in Defs.CAPTAIN_FILTER["position"]:
+            coords = Defs.CAPTAIN_FILTER["position"][name]
+        elif name == "重置":
+            coords = Defs.CAPTAIN_FILTER["reset"]
+        elif name == "确定":
+            coords = Defs.CAPTAIN_FILTER["confirm"]
+        elif name == "筛选":
+            coords = Defs.CAPTAIN_FILTER["tab"]
+        if coords is None:
+            return None
+        return self.box_of_screen(coords[0], coords[1], coords[0], coords[1])
+
+    def _click_filter_text(self, texts, name):
+        box = self._filter_text(texts, name)
+        if box is None:
+            self.log_warning(f"选队长筛选：没找到「{name}」")
+            return False
+        self.click_box(box, after_sleep=0.15)
         return True
 
     def pick_captain_by_name(self, want, pages=4):

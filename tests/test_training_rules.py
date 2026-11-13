@@ -1729,6 +1729,53 @@ class DivinationEvent(unittest.TestCase):
         self.assertFalse(task.handle_divination(task._texts))
 
 
+class CaptainFilterFlow(unittest.TestCase):
+    """选队长前的「显示设定 → 筛选」四步（2026-11-13 用户口径）。"""
+
+    @staticmethod
+    def _texts():
+        return [
+            box(200, 100, "显示设定", 300, 50),
+            box(500, 260, "排序", 200, 40),
+            box(1300, 260, "筛选", 200, 40),
+            box(300, 320, "显示顺序", 300, 40),
+            box(180, 410, "R", 60, 40),
+            box(500, 410, "SR", 80, 40),
+            box(850, 410, "SSR", 100, 40),
+            box(180, 745, "控卫", 100, 40),
+            box(500, 745, "分卫", 100, 40),
+            box(850, 745, "小前", 100, 40),
+            box(1200, 745, "大前", 100, 40),
+            box(1500, 745, "中锋", 100, 40),
+            box(1500, 929, "重置", 100, 40),
+            box(1000, 929, "确定", 100, 40),
+            box(700, 929, "取消", 100, 40),
+        ]
+
+    def test_filter_stages_keep_captain_rarity_and_position(self):
+        """春澄永远 = SR/大前：取消 R 和其余四个位置，保留大前。"""
+        task = FakeTask(self._texts(), config={"指定队长": "春澄永远"})
+        task._captain_filter_stage = "tab"
+        self.assertTrue(task.handle_captain_filter(task._texts))
+        task._texts = self._texts()
+        self.assertTrue(task.handle_captain_filter(task._texts))
+        task._texts = self._texts()
+        self.assertTrue(task.handle_captain_filter(task._texts))
+        task._texts = self._texts()
+        self.assertTrue(task.handle_captain_filter(task._texts))
+        names = [a[1] for a in task.actions if a[0] == "click_box"]
+        self.assertEqual(names, ["筛选", "重置", "R",
+                                 "控卫", "分卫", "小前", "中锋", "确定"])
+        self.assertTrue(task._captain_filter_done)
+        self.assertIsNone(task._captain_filter_stage)
+
+    def test_roster_has_rarity(self):
+        from src.tasks.training import roster
+        info = roster.lookup("春澄永远")
+        self.assertEqual(info.get("rarity"), "SR")
+        self.assertEqual(info.get("position"), "大前")
+
+
 class ResumeTrainingNeverWipes(unittest.TestCase):
     """「训练确认」弹窗只许点「继续训练」，永不删档（2026-11-02 用户口径）。
 

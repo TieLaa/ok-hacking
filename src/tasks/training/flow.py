@@ -480,6 +480,9 @@ class TrainingFlowMixin:
         # 旁路页面分类的缓存：换局重新记录「页面变化」，不要把上一局最后一页带进来
         self._page_id = None
         self._page_conflict = ()
+        # 选队长前的筛选流程（显示设定 → 筛选 → 重置 → 缩池 → 确定）
+        self._captain_filter_done = False
+        self._captain_filter_stage = None
         self._picked_subject = False
         self._picked_index = 0
         self._subject_confirmed_at = 0.0
