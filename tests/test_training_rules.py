@@ -1689,6 +1689,23 @@ class PageRegistry(unittest.TestCase):
         self.assertEqual(classify_page(task2, task2._texts)[0], "game_title")
 
 
+class DivinationEvent(unittest.TestCase):
+    """天赋「占卜」（先斗月绮）结果页：只有「确定」，必须点它，不能落到 unknown。"""
+
+    def test_confirm_button(self):
+        texts = [box(710, 91, "占卜时间", 130, 45),
+                 box(727, 259, "中吉", 91, 61),
+                 box(672, 567, "训练基础值+2", 202, 38),
+                 box(737, 731, "确定", 72, 48)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_divination(texts))
+        self.assertEqual(task.actions[-1][1], "确定")
+
+    def test_does_not_claim_without_title(self):
+        task = FakeTask([box(737, 731, "确定", 72, 48)])
+        self.assertFalse(task.handle_divination(task._texts))
+
+
 class ResumeTrainingNeverWipes(unittest.TestCase):
     """「训练确认」弹窗只许点「继续训练」，永不删档（2026-11-02 用户口径）。
 

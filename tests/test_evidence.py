@@ -100,6 +100,18 @@ class RoundDirs(unittest.TestCase):
         self.assertIn("run_log_end", meta)
 
 
+    def test_dump_unmark_cards_without_box(self):
+        """商店未登记商品只传 name/quality，缺 box 不能让存证整条失败。"""
+        self.sink.begin_round(captain="近江奏")
+        base = self.sink.dump_unmark(
+            [], "shop_item", cards=[{"name": "大师课程", "quality": "蓝"}])
+        self.assertTrue(base)
+        with open(base + ".json", encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data["cards"][0]["name"], "大师课程")
+        self.assertIsNone(data["cards"][0]["x"])
+
+
 class PruneSafety(unittest.TestCase):
     """清理只许删「名字像局ID + 有四个子目录之一」的整局目录。"""
 

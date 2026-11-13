@@ -89,6 +89,10 @@ HANDLERS = (
     # 之前——旧版没人认领，连点 3 次灰「跳过」后看门狗停任务
     # （logs/debug/1107-182236_nochange3）。固定选第一个「继续倾听和泉的问题」。
     TalentHandlers.handle_izumi_question,
+    # 天赋「占卜」（先斗月绮）的结果页：「占卜时间 / 中吉 / 确定」。
+    # handle_popup 有「确定」时故意不点（留给具体 handler），旧版落到 unknown
+    # 点屏幕中央，点不中底部「确定」→ 接管 3 次停任务（2026-11-13 16:45 实跑）。
+    TalentHandlers.handle_divination,
     # 「选择憋气难度」页（2026-11-04 实跑）：标题 + 底部「确定」，没有别的判据。
     # 必须排在通用「确定/下一步」类 handler 之前，否则会被 popup 的「关闭/取消」抢走。
     TrainingHandlers.handle_breath_difficulty,
