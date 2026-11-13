@@ -713,17 +713,19 @@ class TrainingHandlers:
             if self._boost_gain_missing <= self.BOOST_GAIN_MISSING_MAX:
                 if (time.monotonic()
                         - getattr(self, "_boost_gain_missing_at", 0.0) > 10.0):
-                    self.log_warning(
-                        f"加强训练：{len(rate_cols)} 个百分比列只有 "
-                        f"{len(gain_cols)} 个收益列（收益数字漏读），"
-                        "本拍不选，等下一拍重读")
+                    # 这类漏读通常下一拍就自愈（2026-11-10 实跑 22 次全是两拍解决），
+                    # 第一拍就报 warning 会刷屏；连续对不上才升到下面那条 warning。
+                    self.log_debug(
+                        f"加强训练：百分比 {len(rate_cols)} 列 / 收益 "
+                        f"{len(gain_cols)} 列对不上，本拍不选，等下一拍重读")
                     self.dump_unknown(texts, "boost_gain_missing")
                     self._boost_gain_missing_at = time.monotonic()
                 return True
             self.log_warning(
                 "加强训练：连续 "
                 f"{self._boost_gain_missing} 拍「百分比 {len(rate_cols)} / 收益 "
-                f"{len(gain_cols)}」对不上 → 只从读全的卡里选（不拿成功率当收益）")
+                f"{len(gain_cols)}」列对不上（百分比或收益数字漏读）"
+                " → 只从读全的卡里选（不拿成功率当收益）")
         else:
             self._boost_gain_missing = 0
 

@@ -416,8 +416,8 @@ class TrainingFlowMixin:
                 continue
 
             # ---- 兜底：不认识的界面也**让流程继续走**，不要卡死 ----
-            # 存证限流：同一段时间最多 3 秒存一张，避免动画期间刷出几十张图
-            if changed and time.monotonic() - self._last_dump > 3:
+            # 存证限流：同一段时间最多 5 秒存一张，避免动画期间刷出几十张图
+            if changed and time.monotonic() - self._last_dump > 5:
                 self.dump_unknown(texts, "unknown")
                 self._last_dump = time.monotonic()
                 self.log_warning("没见过这个界面 → 已存证，点一下继续")
@@ -610,8 +610,10 @@ class TrainingFlowMixin:
         pos = queue.position
         score = ratings.get(pos) if pos else None
         if score is None:
-            self.log_warning(f"读不到队长「{queue.captain}」（位置 {pos}）的评分"
-                             f"——这一页读到 {ratings or '空'}，本局按未达标算")
+            # 页面淡入的第一拍 OCR 必读不到（2026-11-10 实跑 4/4 都是下一拍才成功），
+            # 这里报 warning 会每次都吓人一跳；真读不到由局末收账补一条。
+            self.log_debug(f"读不到队长「{queue.captain}」（位置 {pos}）的评分"
+                           f"——这一页读到 {ratings or '空'}，下一拍再读")
             return None
         self._run_score = score
         self.log_info(f"本局评分：{queue.captain}（{pos}）{score}"
@@ -635,6 +637,8 @@ class TrainingFlowMixin:
             return False
         captain = queue.captain
         score = getattr(self, "_run_score", None)
+        if score is None:
+            self.log_warning(f"整局都没读到队长「{captain}」的评分 → 本局按未达标算")
         met = queue.record(score)
         self.log_info(f"第 {len(queue.runs)} 局收账：{captain} 评分 {score}"
                       f" / 目标 {queue.target} → {'达标' if met else '未达标，再练一局'}"
@@ -722,7 +726,7 @@ class TrainingFlowMixin:
         坑（2026-10-26）：之前把坐标也算进指纹，动画/滚动时文字位置抖动 20px 就变，
         结果每一拍都被当成"新界面"。
 
-        现在它**只用于 unknown 存证限流**（同一页面 3 秒最多存一张）。
+        现在它**只用于 unknown 存证限流**（同一页面 5 秒最多存一张）。
         卡住判据已经改成「同一天攒了多少」（`day_stuck_step`）：顶栏数字/星标每拍都在闪，
         指纹一直在变，靠它判卡死只会永远判不出来。
         """
