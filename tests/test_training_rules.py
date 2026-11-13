@@ -3446,6 +3446,118 @@ class WeekendMapRules(unittest.TestCase):
             texts.append(box(1000, 20, str(money), 120, 45))
         return texts
 
+    # ---------- 第3周周末：海边前把体力拉回目标（用户 2026-11-13） ----------
+    #
+    # 第4周海边合宿第4天是「全队友参与」的训练（玩家等级增益），前一天
+    # 体力不够就得休息、错过这一天。周末只有两次行动机会（周六/周日）：
+    #   划船 +30 / 野餐 +70 / 服务员 −25。
+    #   周六：<30 今天必须先补；<55 不打工（周日一次野餐也补不回）；
+    #   周日：<100 只补体力；<125 不打工（打完就掉到 100 以下）。
+
+    def _vacation_map(self, day, stamina=None, money=None):
+        texts = [box(30, 20, "第3周", 120, 40),
+                 box(200, 20, day, 130, 40),
+                 box(814, 461, "游戏厅", 148, 57),
+                 box(1538, 606, "公园", 102, 51),
+                 box(258, 748, "餐厅", 104, 60),
+                 box(1010, 897, "步行街", 148, 58)]
+        if stamina is not None:
+            texts.append(box(380, 16, "%d/130" % stamina, 210, 53))
+        if money is not None:
+            texts.append(box(1000, 20, str(money), 120, 45))
+        return texts
+
+    def _vacation_plan(self, style, day, stamina=None, money=None):
+        texts = self._vacation_map(day, stamina, money)
+        task = self.styled(style, texts)
+        return task.weekend_plan(day, task.weekend_state(), texts)
+
+    def test_vacation_stamina_target_from_params(self):
+        from src.tasks.training import params
+        params.reload()
+        self.assertEqual(params.get("vacation.stamina_target"), 100)
+
+    def test_vacation_saturday_low_stamina_goes_park(self):
+        """周六 <30：周日一次野餐也补不回 → 所有流派今天都先去公园。"""
+        for style in ("训练流", "商店流", "扭蛋流", "小游戏流"):
+            self.assertEqual(
+                self._vacation_plan(style, "星期六", 20),
+                [WeekendStep("公园", False)], style)
+
+    def test_vacation_saturday_no_work_below_floor(self):
+        """周六 30~54：打工后周日一次野餐也回不到 100 → 删掉餐厅。"""
+        self.assertEqual(
+            self._vacation_plan("商店流", "星期六", 40),
+            [WeekendStep("公园", False)])
+        # 扭蛋流钱够：步行街不耗体力，保留；只删餐厅。
+        self.assertEqual(
+            self._vacation_plan("扭蛋流", "星期六", 40,
+                                WEEKEND_WORK_MONEY_GATE),
+            [WeekendStep("步行街", False)])
+
+    def test_vacation_saturday_work_allowed_at_floor(self):
+        """周六 55 起允许打工：−25 后周日野餐 +70 正好回到 100。"""
+        self.assertEqual(
+            self._vacation_plan("商店流", "星期六", 55),
+            [WeekendStep("餐厅", False)])
+
+    def test_vacation_sunday_no_work_below_target_plus_cost(self):
+        """周日 100~124：现在打工就掉到 100 以下 → 改成公园。
+
+        训练流 110 旧逻辑（缺口 20 < 30）会去餐厅，守卫必须拦下来。
+        """
+        self.assertEqual(
+            self._vacation_plan("训练流", "星期日", 110),
+            [WeekendStep("公园", False)])
+        self.assertEqual(
+            self._vacation_plan("商店流", "星期日", 110),
+            [WeekendStep("公园", False)])
+
+    def test_vacation_sunday_work_allowed_above_target_plus_cost(self):
+        """周日 ≥125：打工后仍 ≥100，原计划照走。"""
+        plan = self._vacation_plan("训练流", "星期日", 125)
+        self.assertEqual(plan[0], WeekendStep("餐厅", False))
+
+    def test_vacation_sunday_park_when_below_target(self):
+        """周日 <100：体力优先，扭蛋流钱够也不去买卡。"""
+        self.assertEqual(
+            self._vacation_plan("扭蛋流", "星期日", 90,
+                                WEEKEND_WORK_MONEY_GATE),
+            [WeekendStep("公园", False)])
+
+    def test_vacation_other_week_keeps_old_rule(self):
+        """第1周周日体力 110：照旧打工，不启用海边守卫。"""
+        texts = self._map("星期日") + [box(380, 16, "110/130", 210, 53)]
+        task = self.styled("训练流", texts)
+        plan = task.weekend_plan("星期日", task.weekend_state(), texts)
+        self.assertEqual(plan, [WeekendStep("餐厅", False),
+                                WeekendStep("公园", False)])
+
+    def test_vacation_stamina_unknown_goes_park(self):
+        """第3周周末读不到体力：不赌，今天只去公园。"""
+        self.assertEqual(
+            self._vacation_plan("商店流", "星期六", None),
+            [WeekendStep("公园", False)])
+
+    def test_vacation_park_pick_by_gap(self):
+        """公园：距目标 > 划船 +30 → 野餐，否则划船（队友/配置不抢）。"""
+        texts = self._vacation_map("星期日", 60)
+        task = self.styled("扭蛋流", texts)
+        task.weekend_state()
+        self.assertEqual(task.park_pick(texts, "扭蛋流"), "野餐")
+        texts = self._vacation_map("星期日", 80)
+        task = self.styled("扭蛋流", texts)
+        task.weekend_state()
+        self.assertEqual(task.park_pick(texts, "扭蛋流"), "划船")
+
+    def test_vacation_park_pick_beats_old_threshold(self):
+        """体力 64：第3周按目标 100 差 36 → 野餐；旧训练流缺口 66 < 70 → 划船。"""
+        texts = self._vacation_map("星期六", 64)
+        task = self.styled("训练流", texts)
+        task.weekend_state()
+        self.assertEqual(task.park_pick(texts, "训练流"), "野餐")
+
+
     # ---------- 第 7 周以后：看到「新品上市」提示才进店（用户 2026-11-05） ----------
     # 判据本体在 `daycycle.late_shop_step`（一天的入口 ③），调用点是 flow.run 主循环里、
     # `_handle_any` 之前 —— 所以这里直接测那个方法，不再另立 handler。
