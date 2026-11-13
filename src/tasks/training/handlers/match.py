@@ -406,6 +406,15 @@ class MatchHandlers:
                 target = next((t for t in texts
                                if t.name.strip().startswith("下一")
                                and len(t.name.strip()) <= 4), None)
+            # 右下角那颗「下一步」是上一页（比赛结算）的残留：注册球员页的在 0.66w。
+            # 2026-11-10 / 11-12 三局实测第一次都点 (1333,780) 不动，第二次重新 OCR
+            # 读到 (1019,759) 才推进（s858/s840 存证）。先排除，让结算页的 handler 去点。
+            if target is not None:
+                cx = (target.x + target.width / 2) / self.width
+                if cx > 0.80:
+                    self.log_debug(f"注册球员：右下角「下一步」({int(cx * 100)}%w) "
+                                   "是上一页残留，本拍不点")
+                    target = None
             if target is not None:
                 tries = getattr(self, "_reg_step1_tries", 0) + 1
                 now = time.monotonic()
