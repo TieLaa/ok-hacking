@@ -299,15 +299,16 @@ class EntryHandlers:
         return False
 
     def _choose_captain_filters(self, texts):
-        """重置后默认全选：保留队长稀有度/位置，取消其余。"""
+        """重置后默认全选：只留队长对应的稀有度和位置，取消其余。"""
         info = roster.lookup(self.configured_captain())
         rarity = (info.get("rarity") or "").upper()
         position = info.get("position") or ""
-        if rarity in ("SSR", "SR"):
-            self._click_filter_text(texts, "R")
-        elif rarity == "R":
-            self._click_filter_text(texts, "SR")
-            self._click_filter_text(texts, "SSR")
+        # 稀有度按队长本身选：SR 队长只留 SR（取消 R/SSR），SSR 只留 SSR，
+        # R 只留 R。不是固定保留 SR+SSR。
+        if rarity in ("SSR", "SR", "R"):
+            for name in ("R", "SR", "SSR"):
+                if name != rarity:
+                    self._click_filter_text(texts, name)
         for name in ("控卫", "分卫", "小前", "大前", "中锋"):
             if position and name != position:
                 self._click_filter_text(texts, name)

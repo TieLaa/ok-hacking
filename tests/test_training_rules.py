@@ -1753,7 +1753,7 @@ class CaptainFilterFlow(unittest.TestCase):
         ]
 
     def test_filter_stages_keep_captain_rarity_and_position(self):
-        """春澄永远 = SR/大前：取消 R 和其余四个位置，保留大前。"""
+        """春澄永远 = SR/大前：只留 SR + 大前，取消 R/SSR 和其余四个位置。"""
         task = FakeTask(self._texts(), config={"指定队长": "春澄永远"})
         task._captain_filter_stage = "tab"
         self.assertTrue(task.handle_captain_filter(task._texts))
@@ -1764,7 +1764,7 @@ class CaptainFilterFlow(unittest.TestCase):
         task._texts = self._texts()
         self.assertTrue(task.handle_captain_filter(task._texts))
         names = [a[1] for a in task.actions if a[0] == "click_box"]
-        self.assertEqual(names, ["筛选", "重置", "R",
+        self.assertEqual(names, ["筛选", "重置", "R", "SSR",
                                  "控卫", "分卫", "小前", "中锋", "确定"])
         self.assertTrue(task._captain_filter_done)
         self.assertIsNone(task._captain_filter_stage)
