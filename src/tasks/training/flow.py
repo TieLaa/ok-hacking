@@ -1160,9 +1160,12 @@ class TrainingFlowMixin:
         """清空流派（新的一局 / 接管一局）：等日历解析队长。"""
         self._style = None
         self._style_name = None
-        # 2026-11-01：识别队长改成**主动**做（daycycle._resolve_style_step），
-        # 它的计数器是 _style_return_tries / _style_calendar_tries，
-        # 旧的 _style_probe_tries / _style_probe_at 随 handle_style_probe 一起删了。
+        # 状态机和计数器必须一起清：ok-script 复用同一个 Task 实例，
+        # 上一局停在「抓名字」且 tries 已到 3，新局会直接进「抓名字」→
+        # 一次读不到就放弃（2026-11-10 19:10 实跑：开新局 0.07 秒就报「未能识别到队长」）。
+        self._style_probe_state = None
+        self._style_return_tries = 0
+        self._style_calendar_tries = 0
 
     def configured_captain(self):
         """这次 run 的「指定队长」：本次队列优先，否则界面配置。
