@@ -1645,6 +1645,50 @@ class EventCardChoices(unittest.TestCase):
         self.assertEqual(task.actions[-1][1], "把大爷扶起来")
 
 
+class PageRegistry(unittest.TestCase):
+    """旁路页面分类（2026-11-13 阶段 1）：页面用 UI 锚点认，正文长句不参与。"""
+
+    def test_empty_page(self):
+        from src.tasks.training.pages import classify_page
+        task = FakeTask([])
+        self.assertEqual(classify_page(task, []), (None, ()))
+
+    def test_weekend_map_needs_two_place_labels(self):
+        from src.tasks.training.pages import classify_page
+        texts = [box(100, 300, "公园", 120, 40),
+                 box(100, 500, "餐厅", 120, 40)]
+        task = FakeTask(texts)
+        self.assertEqual(classify_page(task, texts)[0], "weekend_map")
+        # 事件正文里的「公园」不是地点名，不能单独把画面判成地图
+        body = [box(400, 386, "篮球社集体在公园打街球时…", 700, 32)]
+        self.assertEqual(classify_page(task, body), (None, ()))
+
+    def test_event_choice_yields_to_map(self):
+        """同一帧既有黄框又有 ≥2 个整框地点名：只出地图，不出事件页。"""
+        if cv2 is None:
+            self.skipTest("没有 cv2")
+        from src.tasks.training.pages import classify_page
+        texts = [box(100, 300, "公园", 120, 40),
+                 box(100, 500, "餐厅", 120, 40),
+                 box(536, 878, "和大爷道歉", 262, 60),
+                 box(1098, 878, "把大爷扶起来", 314, 60)]
+        task = FakeTask(texts)
+        cv2.rectangle(task.frame, (406, 861), (926, 1020), (0, 180, 255), 5)
+        cv2.rectangle(task.frame, (992, 861), (1512, 1020), (0, 180, 255), 5)
+        page, candidates = classify_page(task, texts)
+        self.assertEqual(page, "weekend_map")
+        self.assertNotIn("event_choice", candidates)
+
+    def test_construction_and_game_title(self):
+        from src.tasks.training.pages import classify_page
+        task = FakeTask([box(600, 300, "工地", 150, 40),
+                         box(900, 600, "进行施工", 200, 50)])
+        self.assertEqual(classify_page(task, task._texts)[0], "construction")
+        task2 = FakeTask([box(700, 900, "点击进入", 300, 60),
+                          box(200, 200, "账号", 150, 40)])
+        self.assertEqual(classify_page(task2, task2._texts)[0], "game_title")
+
+
 class ResumeTrainingNeverWipes(unittest.TestCase):
     """「训练确认」弹窗只许点「继续训练」，永不删档（2026-11-02 用户口径）。
 
