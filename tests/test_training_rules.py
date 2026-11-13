@@ -1100,12 +1100,12 @@ class RegisterPlayerFlow(unittest.TestCase):
         task = FakeTask([])
 
         p1 = [box(700, 240, "注册球员", 200, 40),
-              box(1900, 950, "下一步", 300, 60),
+              box(1150, 950, "下一步", 300, 60),
               box(400, 950, "记录笔记", 300, 60)]
         self.assertTrue(task.handle_register_player(p1))
         # 点的是「下一步」文字框中心（第一次 tries=1 不加偏移）
         self.assertEqual(task.actions[-1][0], "click")
-        self.assertEqual(task.actions[-1][1:], (2050, 980))
+        self.assertEqual(task.actions[-1][1:], (1300, 980))
         self.assertEqual(task._register_stage, "next")
 
         p2 = [box(600, 200, "训练结束", 240, 40),
@@ -1620,6 +1620,29 @@ class EventCardChoices(unittest.TestCase):
         self.assertEqual(task.usable_stamina(effs, 0), 0)       # 满精力
         self.assertEqual(task.usable_stamina(effs, 12), 12)     # 只剩 12 点余量
         self.assertEqual(task.usable_stamina(effs, None), 30)   # 读不到顶栏 → 原样
+
+    def test_park_story_body_does_not_hide_choice(self):
+        """事件正文含「在公园」时仍由 handle_event_choice 认领，并选非回精力项。
+
+        2026-11-13 实跑：篮球事故正文「篮球社集体在公园打街球时…」+
+        「和大爷道歉(精力+10) / 把大爷扶起来」。旧判据用包含匹配把事件页排除，
+        又被 weekend_map_page 当成地图，点不到按钮空转 3 次后停任务。
+        """
+        if cv2 is None:
+            self.skipTest("没有 cv2")
+        texts = [
+            box(522, 479, "篮球社集体在公园打街球时，身为主力的她一个", 863, 40),
+            box(536, 878, "和大爷道歉", 262, 60),
+            box(1098, 878, "把大爷扶起来", 314, 60),
+            box(585, 954, "精力+10", 166, 41),
+            box(1130, 954, "获得体能上限", 244, 46),
+        ]
+        task = FakeTask(texts)
+        # 两个黄色按钮边框（BGR：R>200 / G>150 / B<120），实测 419x128
+        cv2.rectangle(task.frame, (406, 861), (926, 1020), (0, 180, 255), 5)
+        cv2.rectangle(task.frame, (992, 861), (1512, 1020), (0, 180, 255), 5)
+        self.assertTrue(task.handle_event_choice(texts))
+        self.assertEqual(task.actions[-1][1], "把大爷扶起来")
 
 
 class ResumeTrainingNeverWipes(unittest.TestCase):
