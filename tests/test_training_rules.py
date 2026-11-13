@@ -1764,8 +1764,9 @@ class CaptainFilterFlow(unittest.TestCase):
         task._texts = self._texts()
         self.assertTrue(task.handle_captain_filter(task._texts))
         names = [a[1] for a in task.actions if a[0] == "click_box"]
-        self.assertEqual(names, ["筛选", "重置", "R", "SSR",
-                                 "控卫", "分卫", "小前", "中锋", "确定"])
+        self.assertEqual(names, ["筛选", "重置", "R复选框", "SSR复选框",
+                                 "控卫复选框", "分卫复选框", "小前复选框",
+                                 "中锋复选框", "确定"])
         self.assertTrue(task._captain_filter_done)
         self.assertIsNone(task._captain_filter_stage)
 

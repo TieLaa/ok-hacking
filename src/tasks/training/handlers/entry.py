@@ -340,10 +340,22 @@ class EntryHandlers:
         return self.box_of_screen(coords[0], coords[1], coords[0], coords[1])
 
     def _click_filter_text(self, texts, name):
+        """点复选框的小方块中心（文字本身不切换勾选）。"""
         box = self._filter_text(texts, name)
         if box is None:
             self.log_warning(f"选队长筛选：没找到「{name}」")
             return False
+        # 稀有度/位置的复选框在标签文字左侧；OCR 找到的是文字框，
+        # 往左挪约 0.022w 才是小方块中心（2026-11-13 截图实测）。
+        # 坐标兜底返回的是零宽框，本身已经是小方块中心，不再偏移。
+        if (box.width > 0
+                and (name in Defs.CAPTAIN_FILTER["rarity"]
+                     or name in Defs.CAPTAIN_FILTER["position"])):
+            cx = int(box.x - self.width * 0.022)
+            cy = int(box.y + box.height / 2)
+            from ok.feature.Box import Box
+            box = Box(x=cx - 2, y=cy - 2, width=4, height=4,
+                      name=f"{name}复选框")
         self.click_box(box, after_sleep=0.15)
         return True
 
