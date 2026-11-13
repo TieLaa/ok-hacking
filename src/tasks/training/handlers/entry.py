@@ -299,24 +299,23 @@ class EntryHandlers:
         return False
 
     def _choose_captain_filters(self, texts):
-        """重置后默认全选：只留队长对应的稀有度和位置，取消其余。"""
+        """重置后是**全不选**：只勾队长对应的稀有度和位置。
+
+        2026-11-14 实跑：近江奏 SR/分卫，旧逻辑按「重置后全选、取消其他」
+        写，结果点 R/SSR 反而把它们勾上，SR 没勾。重置的真实语义是清空。
+        """
         info = roster.lookup(self.configured_captain())
         rarity = (info.get("rarity") or "").upper()
         position = info.get("position") or ""
-        # 稀有度按队长本身选：SR 队长只留 SR（取消 R/SSR），SSR 只留 SSR，
-        # R 只留 R。不是固定保留 SR+SSR。
         if rarity in ("SSR", "SR", "R"):
-            for name in ("R", "SR", "SSR"):
-                if name != rarity:
-                    self._click_filter_text(texts, name)
-        for name in ("控卫", "分卫", "小前", "大前", "中锋"):
-            if position and name != position:
-                self._click_filter_text(texts, name)
-        if not rarity or position not in ("控卫", "分卫", "小前", "大前", "中锋"):
+            self._click_filter_text(texts, rarity)
+        if position in ("控卫", "分卫", "小前", "大前", "中锋"):
+            self._click_filter_text(texts, position)
+        else:
             self.log_warning(
                 f"选队长筛选：roster 里查不到「{self.configured_captain()}」"
                 f"（rarity={rarity or '?'} position={position or '?'}）"
-                "→ 稀有度/位置保持全选")
+                "→ 只勾了稀有度，位置保持全不选")
 
     def _filter_text(self, texts, name, region=None):
         """筛选面板里的文字框；OCR 没认出时用截图实测坐标兜底。"""
@@ -340,20 +339,21 @@ class EntryHandlers:
         return self.box_of_screen(coords[0], coords[1], coords[0], coords[1])
 
     def _click_filter_text(self, texts, name):
-        """点复选框的小方块中心（文字本身不切换勾选）。"""
+        """点复选框的小方块中心（文字本身不切换勾选）。
+
+        稀有度/位置：OCR 找到标签文字时，点文字框左侧的小方块中心
+        （截图实测偏移约 0.0137w）；OCR 没找到时用截图坐标兜底。
+        """
         box = self._filter_text(texts, name)
         if box is None:
             self.log_warning(f"选队长筛选：没找到「{name}」")
             return False
-        # 稀有度/位置的复选框在标签文字左侧；OCR 找到的是文字框，
-        # 往左挪约 0.022w 才是小方块中心（2026-11-13 截图实测）。
-        # 坐标兜底返回的是零宽框，本身已经是小方块中心，不再偏移。
         if (box.width > 0
                 and (name in Defs.CAPTAIN_FILTER["rarity"]
                      or name in Defs.CAPTAIN_FILTER["position"])):
-            cx = int(box.x - self.width * 0.022)
-            cy = int(box.y + box.height / 2)
             from ok.feature.Box import Box
+            cx = int(box.x - self.width * 0.0137)
+            cy = int(box.y + box.height / 2)
             box = Box(x=cx - 2, y=cy - 2, width=4, height=4,
                       name=f"{name}复选框")
         self.click_box(box, after_sleep=0.15)
