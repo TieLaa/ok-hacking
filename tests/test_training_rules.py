@@ -4951,19 +4951,20 @@ class PurchaseRules(unittest.TestCase):
 
     COLS = (0.223, 0.357, 0.490)
 
-    def _shop(self, items, money=80, quality="金", week=None, stamina=None,
-              style="商店流"):
+    def _shop(self, items, money=80, quality="金", week=None, day="一",
+              stamina=None, style="商店流"):
         """items = [(名字, 价格)]，价格写 "免费" 表示 0 元卡。
 
-        `week` 给了就把「第N周 星期一」写进顶栏（测第 7 周之前只买 0 元）。
-        `stamina` 给了就把「当前/上限」写进顶栏（测恢复精力商品的三类门槛）。
+        `week` 给了就把「第N周 星期X」写进顶栏（`day=None` 只写周数，
+        模拟星期读不到）。`stamina` 给了就把「当前/上限」写进顶栏。
         `style` 是流派：默认「商店流」（属性优先、精力 T5），测训练流时显式传。
         """
         texts = [box(760, 60, "商店", 160, 40),
                  box(1200, 60, "上新时间", 200, 30)]
         if week is not None:
             texts.append(box(30, 20, f"第{week}周", 120, 40))
-            texts.append(box(200, 20, "星期一", 130, 40))
+            if day is not None:
+                texts.append(box(200, 20, f"星期{day}", 130, 40))
         if stamina is not None:
             texts.append(box(380, 16, stamina, 210, 53))
         if money is not None:
@@ -5126,6 +5127,63 @@ class PurchaseRules(unittest.TestCase):
         task, texts = self._shop([("精力饮料", 30)], money=120, week=7)
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("第 7 周不买牛奶/精力", "".join(task.logs))
+
+    # ---------- 第7周周日：最后一场比赛，买光属性（用户 2026-11-13） ----------
+    #
+    # 比赛评分只看六维，所以最后一天只买直接加属性的商品：
+    #   - 不分品质，蓝/白也买；
+    #   - 器材/教科书/牛奶/精力都不买（训练类兑现不了）；
+    #   - 属性缺口、soft_cap、余额、0 元规则照旧。
+
+    def test_final_match_buys_attribute_regardless_of_quality(self):
+        """第7周周日：蓝属性也买；器材/教科书不买。"""
+        task, texts = self._shop(
+            [("弹跳秘籍+", 100), ("器材指导书", 80), ("弹跳教科书+", 100)],
+            money=300, week=7, day="日", quality="蓝")
+        task.info["attrs"] = {"弹跳": 800}
+        task._attr_caps = {"弹跳": 1575}
+        self.assertTrue(task.handle_shop(texts))
+        log = "".join(task.logs)
+        self.assertIn("买「弹跳秘籍+」", log)
+        self.assertNotIn("买「器材指导书」", log)
+        self.assertNotIn("买「弹跳教科书+」", log)
+
+    def test_final_match_still_checks_attribute_gap(self):
+        """缺口 < 缺口排除阈值 → 最后一场比赛也不买。"""
+        task, texts = self._shop(
+            [("弹跳秘籍+", 100)], money=300, week=7, day="日", quality="彩")
+        task.info["attrs"] = {"弹跳": 1500}
+        task._attr_caps = {"弹跳": 1575}      # 缺口 75 < 100
+        self.assertTrue(task.handle_shop(texts))
+        log = "".join(task.logs)
+        self.assertIn("关店", log)
+        self.assertNotIn("买「弹跳秘籍+」", log)
+
+    def test_final_match_closes_when_no_attribute(self):
+        """店里只剩器材/精力 → 最后一场比赛直接关店，不买替代品。"""
+        task, texts = self._shop(
+            [("器材指导书", 80), ("精力饮料", 30)], money=300,
+            week=7, day="日", quality="金")
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("最后一场比赛：店里没有属性商品", "".join(task.logs))
+
+    def test_final_match_only_on_sunday(self):
+        """第7周周六不启用：蓝属性仍按平时的「不买蓝白」处理。"""
+        task, texts = self._shop(
+            [("弹跳秘籍+", 100)], money=300, week=7, day="六", quality="蓝")
+        task.info["attrs"] = {"弹跳": 800}
+        task._attr_caps = {"弹跳": 1575}
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("只剩蓝/白商品", "".join(task.logs))
+
+    def test_final_match_needs_day(self):
+        """星期读不到时不猜「最后一场」：按平时规则，蓝属性不买。"""
+        task, texts = self._shop(
+            [("弹跳秘籍+", 100)], money=300, week=7, day=None, quality="蓝")
+        task.info["attrs"] = {"弹跳": 800}
+        task._attr_caps = {"弹跳": 1575}
+        self.assertTrue(task.handle_shop(texts))
+        self.assertIn("只剩蓝/白商品", "".join(task.logs))
 
     def test_shop_still_buys_free_drink_from_week7(self):
         """第 7 周以后：免费的精力饮料照样拿（0 元不花零用钱）。"""
