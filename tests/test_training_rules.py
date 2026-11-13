@@ -300,6 +300,29 @@ class GachaRules(unittest.TestCase):
         self.assertTrue(task.handle_street(task._texts))
         self.assertEqual(task.actions[0][1], 1100)          # 带队友的右边那张
 
+    def test_preferred_attr_beats_single_attr(self):
+        """同品质同价：两个推荐属性优先于单个其他属性。
+
+        2026-11-13 实跑（卧云真昼，分卫）：金「弹跳升级包++」赢了
+        金「推荐属性++」。原因：item_attr_target 不认「推荐属性」，
+        两者都归「其他专项」，最后按卡片顺序取了左边的弹跳。
+        现在按商店同一条属性档位：全属性 > 需求专项 > 推荐属性 > 其他。
+        """
+        task = FakeTask(gacha_texts([
+            ("弹跳升级包++", "主力弹跳+48"),
+            ("推荐属性++", "主力两项推荐属性+36"),
+        ], stamina="58/130", money="612", price="50"),
+            qualities=["金", "金"])
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions[0][1], 1100)          # 推荐属性（右）
+
+    def test_item_attr_target_prefers(self):
+        from src.tasks.training.attributes import item_attr_target
+        self.assertEqual(item_attr_target("全属性增加++"), "ALL")
+        self.assertEqual(item_attr_target("推荐属性++"), "PREFERRED")
+        self.assertEqual(item_attr_target("弹跳升级包++"), "弹跳")
+        self.assertIsNone(item_attr_target("专属饮料+"))
+
     def test_mate_card_beats_stamina_recovery(self):
         """2026-11-03 10:11 实跑：三张卡全带「增强款」，买错了中间那张恢复卡。
 

@@ -555,14 +555,14 @@ class ShopPlace:
                     attr_sub = 0
                 elif target in required:
                     attr_sub = 1
-                elif "专属" in i["name"]:
+                elif target == "PREFERRED" or "专属" in i["name"]:
                     attr_sub = 2
                 elif "奇妙" in i["name"]:
                     attr_sub = 3
                 else:
                     attr_sub = 4
                 cur, cap = attrs.get(target), caps.get(target)
-                if (target and target != "ALL"
+                if (target and target not in ("ALL", "PREFERRED")
                         and cur is not None and cap is not None):
                     if cap - cur < gap_limit:
                         continue

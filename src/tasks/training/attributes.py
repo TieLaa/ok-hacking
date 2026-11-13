@@ -41,14 +41,22 @@ def required_attrs(position):
 
 
 def item_attr_target(name):
-    """商品/卡片名加哪一项：`ALL` = 全属性，属性名 = 专项，None = 认不出。
+    """商品/卡片名加哪一项：
 
-    用户 2026-11-13：属性类内部顺序 **全属性 > 需求专项 > 其他专项**。
-    「专属 / 偶然」这类随机或不限定的，认不出具体属性 → 归「其他专项」。
+    - `ALL` = 全属性；
+    - `PREFERRED` = 「两个推荐属性」（不指定具体属性）；
+    - 属性名 = 专项；
+    - None = 认不出。
+
+    用户 2026-11-13：属性类内部顺序 **全属性 > 需求专项 > 推荐属性/专属 > 其他**。
+    商店（`places/shop.py`）和扭蛋（`places/street.py`）共用这一份分类，
+    不再各写一套「认不认得出推荐属性」。
     """
     name = name or ""
     if "全能" in name or "全属性" in name:
         return "ALL"
+    if "推荐属性" in name:
+        return "PREFERRED"
     for attr in SUBJECTS:
         if attr in name:
             return attr

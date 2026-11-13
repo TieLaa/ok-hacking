@@ -205,7 +205,7 @@ class StreetPlace:
                 continue
             # 属性取向（2026-11-13）：该属性缺口不足阈值 → 不买（加了会溢出）。
             target = attributes.item_attr_target(c.get("name"))
-            if target and target != "ALL":
+            if target and target not in ("ALL", "PREFERRED"):
                 cap, cur = caps.get(target), attrs.get(target)
                 if (cap is not None and cur is not None
                         and cap - cur < gap_limit):
@@ -222,8 +222,13 @@ class StreetPlace:
             if money is not None and c["price"] > money:
                 continue
             c["score"] = score(c)
+            # 属性子档（参考商店 `shop.pick_shop_item` 的 attr_sub）：
+            # 全属性 > 需求专项 > 推荐属性 > 其他专项。
+            # 「推荐属性」不再落进「其他」，否则同品质同价时会被卡片顺序
+            # 决定胜负（2026-11-13 实跑：金弹跳升级包赢了金推荐属性++）。
             c["attr_rank"] = (0 if target == "ALL"
-                              else 1 if target in required else 2)
+                              else 1 if target in required
+                              else 2 if target == "PREFERRED" else 3)
             ok.append(c)
 
         detail = "、".join(
