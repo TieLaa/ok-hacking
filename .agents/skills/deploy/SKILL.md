@@ -70,6 +70,25 @@ Use `scripts/next_tag.py` to calculate tags; it ignores tags outside these forma
 
 8. Report the commit subject, tag, remote, and whether the push succeeded.
 
+## 本仓库的额外顺序：推 tag 后立刻同步更新仓库
+
+`build.yml` 打包 China profile 时，要克隆更新仓库 `TieLaa/ok-hacking-update` 并检出**同名 tag**；该仓库只由它自己的 `sync.yml` 从源仓库拉 tag。同步慢了，构建就会失败在 `Setup failed: Tag '<tag>' not found`（v0.1.14 首次构建即如此）。
+
+推完 tag **立即**执行，不要等构建：
+
+```powershell
+gh workflow run sync.yml --repo TieLaa/ok-hacking-update -f tag=<tag>
+```
+
+然后确认两个更新源都有这个 tag：
+
+```powershell
+git ls-remote https://github.com/TieLaa/ok-hacking-update.git "refs/tags/<tag>"
+git ls-remote https://cnb.cool/TieLaa/ok-hacking-update.git "refs/tags/<tag>"
+```
+
+顺序必须是「先推 tag，再 sync」：`sync.yml` 从 GitHub 读 tag，没推上去就看不到。sync 约 20 秒，而 `build.yml` 的 China 打包在约 12 分钟后才执行，所以来得及。构建已经失败的话，sync 完成后 `gh run rerun <run-id> --failed` 即可，不用重打 tag。构建成功后才能报「发布完成」。
+
 ## Guardrails
 
 - Never rewrite, move, or delete an existing tag as part of deployment.
