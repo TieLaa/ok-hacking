@@ -186,8 +186,13 @@ class TrainingFlowMixin:
         try:
             return self._run_one_round()
         finally:
-            self.evidence.end_round(getattr(self, "_abort_reason", "") or "",
-                                    self._steps, style=getattr(self, "_style", "") or "")
+            # captain 要到收工才知道：接管局开局时没指定队长（目录已按「接手」命名），
+            # 队长由日历识别出来、只写在 `_style_name` 里（2026-11-10 19:08 实跑）。
+            self.evidence.end_round(
+                getattr(self, "_abort_reason", "") or "",
+                self._steps,
+                captain=getattr(self, "_style_name", "") or self.configured_captain(),
+                style=getattr(self, "_style", "") or "")
 
     def start_round_evidence(self):
         """定下本局的存证目录（回大厅之后调用：那段时间不属于这一局）。"""

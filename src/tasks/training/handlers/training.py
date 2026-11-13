@@ -59,6 +59,10 @@ class TrainingHandlers:
     BOOST_GAIN_DX = 0.12
     BOOST_GAIN_Y = (0.25, 0.65)
 
+    # 科目页「失败率」读不到时先等几拍重读：科目页必有这个数字（前置判据就是它），
+    # 漏读通常是淡入。直接开练会绕过「失败率上限(%)」配置（2026-11-10 19:09 实跑 1 次）。
+    FAIL_MISS_TICKS = 2
+
     def handle_training_result(self, texts):
         """训练结果浮层：精力降低了X / 属性提升了 / 触发训练后事件。
 
@@ -408,7 +412,17 @@ class TrainingHandlers:
                 return True
 
         fail = self.read_fail_rate(texts)
-        if fail is not None:
+        if fail is None:
+            # 科目页必有「失败率」（上面的前置判据就是它），读不到通常是页面淡入。
+            # 这时直接练会绕过「失败率上限(%)」配置（2026-11-10 19:09 实跑 1 次）。
+            miss = getattr(self, "_fail_miss", 0) + 1
+            self._fail_miss = miss
+            if miss <= self.FAIL_MISS_TICKS:
+                self.log_debug(f"失败率读不到（第 {miss} 拍）→ 等一拍重读")
+                return True
+            self.log_warning(f"失败率连续 {miss} 拍读不到 → 按 0 处理继续训练")
+        else:
+            self._fail_miss = 0
             self.info_set("当前失败率", f"{fail}%")
         limit = int(self.config.get("失败率上限(%)"))
         if fail is not None and fail > limit:

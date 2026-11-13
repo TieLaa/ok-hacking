@@ -159,7 +159,8 @@ LEAVE_RESETS = {
                                  "last_fast_at": 0.0},
     },
     # 训练科目页的选择缓存：离开科目页就清空
-    "handle_subject_select": {"_picked_subject": False, "_picked_index": 0},
+    "handle_subject_select": {"_picked_subject": False, "_picked_index": 0,
+                              "_fail_miss": 0},
     # 训练日主界面的「第几拍」和「等出行按钮」计数：离开这一页就清零。
     # `_hub_ticks` 是「头一拍不决策」的依据（见 HUB_SETTLE_TICKS），
     # 不清就会把第二天的页面当成「已经看过好几拍」→ 又回到淡入那一拍就决策。
