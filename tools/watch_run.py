@@ -53,13 +53,26 @@ def read_new(path, offset):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(ROOT, "logs", "run_session"))
+    # GUI 入口写 logs/ok-script.log，但 ok 自己的 FileHandler 缺席时由
+    # src/util/log_fallback.py 接管写 logs/run.log（2026-11-13 实跑就是这种）。
+    ap.add_argument("--log", default=None,
+                    help="日志文件；默认取 run.log / ok-script.log 里更新的那个")
     ap.add_argument("--idle", type=float, default=5.0)
     ap.add_argument("--heartbeat", type=float, default=30.0)
+    # 断流兜底：日志和点击同时停了这么久 → 判「彻底卡死」，主动退出叫醒盯的人
+    # （锁屏/游戏被全遮挡时 WGC 收不到新帧，任务不会报错，只会安静冻结）。
+    ap.add_argument("--max-stall", type=float, default=600.0)
+    # MCP 入口跑的任务没有「主动停止」日志？有；但**失败**只写 status.json，
+    # 所以额外盯这个文件，到终态就退出（2026-11-13 夜间用）。
+    ap.add_argument("--status", default=None, help="MCP run 的 status.json 路径")
     ap.add_argument("--timeout", type=float, default=4 * 3600)
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
-    log_path = os.path.join(ROOT, "logs", "ok-script.log")
+    candidates = [os.path.join(ROOT, "logs", "run.log"),
+                  os.path.join(ROOT, "logs", "ok-script.log")]
+    existing = [p for p in candidates if os.path.exists(p)]
+    log_path = args.log or (max(existing, key=os.path.getmtime) if existing else candidates[1])
     click_path = os.path.join(ROOT, "logs", "clicks.jsonl")
     timeline_path = os.path.join(args.out, "timeline.log")
     summary_path = os.path.join(args.out, "summary.json")
@@ -117,6 +130,11 @@ def main():
                 reason = "stuck 3 rounds"
             elif "紧急停止" in raw:
                 reason = "emergency stop"
+            elif "主动停止" in raw:
+                # 任务自己判定危险并停下（如「队长池里没有 X」）：GUI 不会自动重启，
+                # 必须立刻让外部知道，不能等到 --timeout 才发现（2026-11-13 实跑）。
+                reason = "task self-stopped"
+                finished = True
 
         idle = now - last_progress
         if idle > args.idle and not stall_open:
@@ -125,10 +143,29 @@ def main():
                            "last": last_line[-160:]})
             write(f"[{time.strftime('%H:%M:%S')}] STALL idle={idle:.1f}s 最后一行: {last_line[-160:]}")
 
+        if idle >= args.max_stall:
+            reason = f"hard stall {int(idle)}s"
+            write(f"[{time.strftime('%H:%M:%S')}] HARD STALL idle={idle:.1f}s "
+                  f"最后一行: {last_line[-160:]}")
+            finished = True
+            break
+
         if now - last_beat >= args.heartbeat:
             last_beat = now
             write(f"[{time.strftime('%H:%M:%S')}] alive step_state={last_state} "
                   f"clicks={clicks} idle={idle:.1f}s stalls={len(stalls)}")
+
+        if args.status:
+            try:
+                with open(args.status, encoding="utf-8") as f:
+                    state = json.load(f).get("state") or ""
+            except (OSError, ValueError):
+                state = ""
+            if state in ("succeeded", "failed", "cancelled"):
+                reason = f"mcp run {state}"
+                write(f"[{time.strftime('%H:%M:%S')}] MCP RUN {state}")
+                finished = True
+                break
 
         if finished:
             break

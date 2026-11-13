@@ -102,6 +102,11 @@ HANDLERS = (
     # 被它先命中就反复点跳过、什么都推进不了（2026-10-30 事故）。
     TalentHandlers.handle_stock_pick,
     TalentHandlers.handle_stock_result,
+    # 工地页（天赋「建设达人」，百目鬼剑；2026-11-13 夜间实跑 6 次）：
+    # 整页只有「进行施工」，不认领就会被 handle_training_hub 当成训练日主界面
+    # （右下角露着「训练」）反复点主按钮 → 空转 100 下 → 接管 3 次后任务自停。
+    # 必须在 handle_training_hub / handle_event_choice 之前。
+    TalentHandlers.handle_construction,
     MatchHandlers.handle_event_choice,
     MatchHandlers.handle_prepare,
     EntryHandlers.handle_dialog_continue,
