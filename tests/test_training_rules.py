@@ -2972,7 +2972,7 @@ class ConfigSpecRules(unittest.TestCase):
         self.assertEqual(task.config["允许进步行街"], True)
         self.assertEqual(task.config["休息精力阈值"], 50)
         self.assertEqual(task.config["扭蛋清空精力阈值"], 30)
-        self.assertEqual(task.config["周末野餐阈值"], 70)
+        self.assertEqual(task.config["周末野餐缺口"], 70)
         self.assertEqual(task.config["周末划船缺口"], 30)
         self.assertEqual(len(task.config), len(config_spec.ALL))
 
@@ -3059,6 +3059,28 @@ class ConfigSpecRules(unittest.TestCase):
 
         self.assertEqual(saved["商店购买策略"], "红包→彩→金→紫")
         self.assertNotIn("购买策略", saved)
+
+    def test_legacy_picnic_threshold_is_dropped(self):
+        """2026-11-11 起「野餐阈值」是缺口（旧口径是绝对精力），旧值没有对应值，只删旧键。"""
+        import json
+        import os
+        import tempfile
+        from src.tasks.training import config_spec
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "TrainingTask.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"周末野餐阈值": 60, "允许进步行街": False}, f, ensure_ascii=False)
+            self.assertTrue(config_spec.migrate_saved_config("TrainingTask", folder))
+            with open(path, encoding="utf-8") as f:
+                saved = json.load(f)
+            # 再跑一次不该有任何改动（幂等）
+            self.assertFalse(config_spec.migrate_saved_config("TrainingTask", folder))
+
+        self.assertNotIn("周末野餐阈值", saved)
+        # 不搬值：新键由 verify_config 填默认 70（60 是绝对精力，不是缺口）
+        self.assertNotIn("周末野餐缺口", saved)
+        self.assertEqual(saved["允许进步行街"], False)
 
 
 class PlaceModulesRules(unittest.TestCase):

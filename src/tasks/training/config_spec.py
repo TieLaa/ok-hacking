@@ -78,7 +78,7 @@ TRAINING = [
 WEEKEND = [
     Spec("公园选项", "野餐", DROP, "野餐 = 精力++；划船 = 属性+；散步 = 零用钱+",
          options=["野餐", "划船", "散步"]),
-    Spec("周末野餐阈值", 70, INT,
+    Spec("周末野餐缺口", 70, INT,
          "训练流周末：缺口（精力上限−当前精力）≥ 这个值去野餐；< 这个值去划船。"
          "野餐基础回 70，所以默认 70；其他流派不读这个键"),
     Spec("周末划船缺口", 30, INT,
@@ -264,11 +264,19 @@ LEGACY_VALUES = {
     },
 }
 
+# 旧键只删除、不搬值：语义单位变了，旧值没有对应值。
+# 2026-11-11 起「周末野餐阈值」表示「缺口 ≥ N」（旧口径是「周日精力 < N」），
+# 旧值 60 是绝对精力，直接搬过去会被当成「缺口 ≥ 60」。
+LEGACY_DROP = {
+    "周末野餐阈值": "周末野餐缺口",
+}
+
 
 def migrate_saved_config(name, folder="configs"):
     """把 `configs/<name>.json` 里的旧键名改成新键名。
 
-    返回改过没有。读不到文件（第一次跑）/ JSON 坏了都当「不用迁移」。
+    返回变更说明（列表）：空列表 = 没改。读不到文件（第一次跑）/
+    JSON 坏了都当「不用迁移」。
     """
     import json
     import os
@@ -278,27 +286,34 @@ def migrate_saved_config(name, folder="configs"):
         with open(path, encoding="utf-8") as f:
             saved = json.load(f)
     except (OSError, ValueError):
-        return False
+        return []
     if not isinstance(saved, dict):
-        return False
-    changed = False
+        return []
+    changed = []
     for new_key, old_keys in LEGACY_KEYS.items():
         # 新键已经有值（用户改过）就保留新键，旧键只负责清掉
-        values = [saved.pop(k) for k in old_keys if k in saved]
+        old_present = [k for k in old_keys if k in saved]
+        values = [saved.pop(k) for k in old_present]
         if not values:
             continue
-        changed = True
+        changed.append(f"「{' / '.join(old_present)}」已改写为「{new_key}」，值保留")
         if new_key not in saved:
             saved[new_key] = values[0]
     for new_key, mapping in LEGACY_VALUES.items():
         if saved.get(new_key) in mapping:
-            saved[new_key] = mapping[saved[new_key]]
-            changed = True
+            old_value = saved[new_key]
+            saved[new_key] = mapping[old_value]
+            changed.append(f"「{new_key}」的旧选项「{old_value}」已改为「{saved[new_key]}」")
+    for old_key in LEGACY_DROP:
+        if old_key in saved:
+            old_value = saved.pop(old_key)
+            changed.append(
+                f"「{old_key}」的旧值 {old_value} 已丢弃（语义从精力改为缺口）")
     if not changed:
-        return False
+        return []
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(saved, f, ensure_ascii=False, indent=4)
     except OSError:
-        return False
-    return True
+        return []
+    return changed
