@@ -75,9 +75,9 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self._no_change = 0             # 连续几次点击后界面指纹没变
         self._sig_after_click = None    # 上一次点击后那一帧的指纹
         self._stuck_rounds = 0          # 已经被判定「点不动」的轮数
-        # 周末状态：按「第N周+星期X」区分，跨天自动重置
-        self._weekend = {"date": None, "shop_checked": False, "bought": False,
-                         "park_choice": None}
+        # 当天行程实例（DayState）：按「第N周+星期X」重建，跨天自动重置。
+        # 只放一天最多变一次的值；钱/精力不进来（见 daycycle.DayState）。
+        self._day = None
         # 进店只在「比赛日、进比赛之前」（训练流/商店流各一次）+ 第 7 周以后的
         # 「商店上新」；_shop_day 记当天已经逛过的日期键。
         self._shop_day = None

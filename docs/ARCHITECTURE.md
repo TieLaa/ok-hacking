@@ -49,7 +49,7 @@ src/tasks/training/
 |---|---|
 | `current_day(texts)` | 返回 `(week, day)`；**每帧只读一次**并缓存 |
 | `day_name()` / `is_weekend()` | 星期几 / 是不是周末 |
-| `day_state()` | 当天状态（`visited` / `gacha_spent` / `outing_done` …） |
+| `day_state()` | 当天行程实例 `DayState`（`visited` / `gacha_spent` / `current_step` …）；只放一天最多变一次的值，钱/精力不进来 |
 | `training_day_action(texts)` | **入口①**：今天练还是休 → `("训练"/"休息", 理由)` |
 | `outing_offer(texts)` | **入口②**：这一页要不要外出 → `("点按钮"/"推进对话", 理由)` |
 | `resolve_style_by_config()` | **路径 A**：配置里的队长 → 查表定流派 |
@@ -142,7 +142,10 @@ places/
 class MapPlace:
     def weekend_map_page(self, texts)          -> bool  # 这是不是地图？
     def today_places(self, day, st)           -> list  # 今天去哪几个（有序）
-    def prefer_venue(texts, places, day)      -> list  # 先去哪个
+    def prefer_venue(texts, places, day)      -> list  # 基准：先去哪个（只看钱门槛）
+    def weekend_plan(self, day, st, texts)    -> list  # 基准 → 事件 → 海边守卫
+    def event_detour(st, texts, steps, places) -> list  # 只处理 MAP_DETOURS 里的例外
+    def map_context(st, texts, places)        -> MapContext  # 一次决策的只读上下文
 
 class StreetPlace:      # 其余四个地点同形
     def xxx_page(self, texts)                -> bool  # 这是不是我的页面？

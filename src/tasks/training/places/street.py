@@ -356,8 +356,8 @@ class StreetPlace:
 
     def mark_tried(self):
         """今天试过抽扭蛋了（进过页面就算）。"""
-        self.street_state().setdefault("gacha_tried", set()).add(PLACE)
+        self.street_state().gacha_tried.add(PLACE)
 
     def mark_spent(self):
         """今天买成了（点「确定」成功才算）。"""
-        self.street_state()["gacha_spent"] = True
+        self.street_state().gacha_spent = True

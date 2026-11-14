@@ -690,8 +690,8 @@ class GachaRules(unittest.TestCase):
         task = FakeTask(page, qualities=["紫", "金", "紫"])
         task.ocr_queue = [page] * 8
         self.assertTrue(task.handle_street(page))
-        self.assertIn("步行街", task._weekend.get("gacha_tried") or set())
-        self.assertFalse(task._weekend.get("gacha_spent"))
+        self.assertIn("步行街", task.day_state().gacha_tried)
+        self.assertFalse(task.day_state().gacha_spent)
 
     def test_street_not_entered_twice_after_failure(self):
         """买失败后回到地图，**不能再点一次步行街**（否则无限循环）。
@@ -712,7 +712,7 @@ class GachaRules(unittest.TestCase):
         task._texts = map_texts
         task.config["允许进步行街"] = True
         task._style = "扭蛋流"
-        task._weekend["date"] = (1, "五")
+        task.day_state().date = (1, "五")
         task.handle_weekend(map_texts)
         clicked = [a for a in task.actions if a[0] == "click_box"]
         self.assertTrue(clicked)
@@ -729,8 +729,8 @@ class GachaRules(unittest.TestCase):
         task = FakeTask(priced, qualities=["紫", "金", "紫"], mates=[False, True, False])
         task.ocr_queue = [priced, priced, priced, priced]
         self.assertTrue(task.handle_street(priced))
-        self.assertIn("步行街", task._weekend.get("visited") or set())
-        self.assertTrue(task._weekend.get("gacha_spent"))
+        self.assertIn("步行街", task.day_state().visited)
+        self.assertTrue(task.day_state().gacha_spent)
 
     def test_stamina_recover_parse(self):
         """2026-10-27 用户截图：精力恢复++ 的两种写法要能算出总量。"""
@@ -1233,8 +1233,7 @@ class EventRules(unittest.TestCase):
             box(900, 450, "餐厅", 200, 60),
         ]
         task = FakeTask(texts)
-        task._weekend = {"date": (None, None), "visited": {"餐厅"},
-                         "shop_checked": False, "bought": False, "park_choice": None}
+        task.day_state().visited = {"餐厅"}
         self.assertTrue(task.handle_weekend(texts))
         self.assertEqual(task.actions[0], ("click_box", "公园", 1000, 380))
 
@@ -2790,26 +2789,26 @@ class DayCycleRules(unittest.TestCase):
         """
         task = FakeTask(list(self.TOPBAR))
         st = task.day_state()
-        st["visited"].add("步行街")
-        st["gacha_spent"] = True
+        st.visited.add("步行街")
+        st.gacha_spent = True
         # 顶栏坏掉（只剩专注）
         task._texts = [box(380, 16, "120/130", 210, 53)]
         task._tick_frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
         st2 = task.day_state()
-        self.assertIn("步行街", st2["visited"])
-        self.assertTrue(st2["gacha_spent"])
+        self.assertIn("步行街", st2.visited)
+        self.assertTrue(st2.gacha_spent)
 
     def test_day_state_resets_on_new_day(self):
         """日期变了 → 新的一天，状态重置。"""
         task = FakeTask(list(self.TOPBAR))
-        task.day_state()["visited"].add("步行街")
+        task.day_state().visited.add("步行街")
         # 换到星期六
         task._texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期六", 130, 40),
                        box(380, 16, "120/130", 210, 53)]
         task._tick_frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
         st = task.day_state()
-        self.assertNotIn("步行街", st["visited"])
-        self.assertEqual(st["date"], (1, "六"))
+        self.assertNotIn("步行街", st.visited)
+        self.assertEqual(st.date, (1, "六"))
 
     def test_training_day_action_rest_when_low_stamina(self):
         """训练日入口①：专注低于阈值 → 休息。"""
@@ -3706,7 +3705,7 @@ class WeekendMapRules(unittest.TestCase):
         task = self.styled("扭蛋流", texts)
         # 地图不是扭蛋页，而且不能留下「步行街已去过」的错误记忆
         self.assertFalse(task.handle_street(texts))
-        self.assertNotIn("步行街", task.weekend_state().get("visited") or set())
+        self.assertNotIn("步行街", task.weekend_state().visited or set())
         # 交给 handle_weekend：扭蛋流周五去步行街
         self.assertTrue(task.handle_weekend(texts))
         self.assertEqual(task.actions[-1][1], "步行街")
@@ -3803,7 +3802,7 @@ class WeekendMapRules(unittest.TestCase):
             self.assertTrue(task.handle_weekend(task._texts), style)
             self.assertEqual(task.actions[-1][1], place, style)     # 先主地点
             task.actions.clear()
-            task._weekend["visited"] = {place}                      # 走完了
+            task.day_state().visited = {place}                      # 走完了
             self.assertTrue(task.handle_weekend(task._texts), style)
             self.assertEqual(task.actions[-1][1], "餐厅", style)     # 接着打工
 
@@ -3935,6 +3934,51 @@ class WeekendMapRules(unittest.TestCase):
         self.assertTrue(task.handle_weekend(texts))
         self.assertEqual(task.actions[-1][1], "餐厅")
 
+    def test_urgent_beats_street_discount_when_money_enough(self):
+        """钱够时急招优先：先餐厅赚双倍，步行街留在下一站。"""
+        texts = (self._weekend_map("星期六", WEEKEND_WORK_MONEY_GATE)
+                 + [self.STREET_DISCOUNT, self.RESTAURANT_URGENT])
+        task = self.styled("扭蛋流", texts)
+        st = task.weekend_state()
+        self.assertEqual(
+            task.weekend_plan("星期六", st, texts),
+            [WeekendStep("餐厅", True), WeekendStep("步行街", False)])
+
+    def test_discount_beats_urgent_when_money_below_gate(self):
+        """钱在 180~359：基准是餐厅，打折改道胜出（急招插不了队）。"""
+        texts = (self._weekend_map("星期六", WEEKEND_DISCOUNT_MONEY_GATE)
+                 + [self.STREET_DISCOUNT, self.RESTAURANT_URGENT])
+        task = self.styled("扭蛋流", texts)
+        st = task.weekend_state()
+        self.assertEqual(
+            task.weekend_plan("星期六", st, texts),
+            [WeekendStep("步行街", False), WeekendStep("餐厅", False)])
+
+    def test_final_saturday_ignores_urgent(self):
+        """第7周周六是最后一次出行：急招不插队，直接去步行街。"""
+        texts = self._weekend_map("星期六", WEEKEND_WORK_MONEY_GATE)
+        texts[-3] = box(30, 20, "第7周", 120, 40)
+        texts.append(self.RESTAURANT_URGENT)
+        task = self.styled("扭蛋流", texts)
+        st = task.weekend_state()
+        self.assertEqual(
+            task.weekend_plan("星期六", st, texts),
+            [WeekendStep("步行街", False), WeekendStep("餐厅", False)])
+
+    def test_ensure_day_keeps_visited_without_date(self):
+        """地点内页读不到顶栏时，`_ensure_day()` 不能把 visited 清空。"""
+        task = self.styled("扭蛋流", [box(1000, 200, "请选择1个扭蛋", 300, 50)])
+        task.day_state().visited.add("餐厅")
+        self.assertIn("餐厅", task._ensure_day().visited)
+
+    def test_day_state_style_follows_runtime(self):
+        """快速接手：流派当天才识别出来，当天实例的 style 要跟着变。"""
+        task = self.styled("训练流", [box(30, 20, "第1周", 120, 40),
+                                      box(200, 20, "星期六", 130, 40)])
+        self.assertEqual(task.day_state().style, "训练流")
+        task._style = "扭蛋流"
+        self.assertEqual(task.day_state().style, "扭蛋流")
+
     def test_urgent_restaurant_is_detour_for_main_venue_styles(self):
         """扭蛋/小游戏钱够时，急招是 detour；原主地点还在后面。"""
         for style, main in (("扭蛋流", "步行街"), ("小游戏流", "游戏厅")):
@@ -3948,14 +3992,14 @@ class WeekendMapRules(unittest.TestCase):
 
             self.assertTrue(task.handle_weekend(texts), style)
             self.assertEqual(task.actions[-1][1], "餐厅", style)
-            self.assertTrue(task._weekend["current_step"].urgent, style)
+            self.assertTrue(task.day_state().current_step.urgent, style)
 
             # 餐厅走完后，原主地点仍在计划里。
             task.actions.clear()
-            task._weekend["visited"] = {"餐厅"}
+            task.day_state().visited = {"餐厅"}
             self.assertTrue(task.handle_weekend(texts), style)
             self.assertEqual(task.actions[-1][1], main, style)
-            self.assertFalse(task._weekend["current_step"].urgent, style)
+            self.assertFalse(task.day_state().current_step.urgent, style)
 
     def test_urgent_restaurant_is_not_detour_when_planned(self):
         """商店流 / 扭蛋小游戏钱不够：主计划首选就是餐厅 → urgent=False。"""
@@ -3968,7 +4012,7 @@ class WeekendMapRules(unittest.TestCase):
             self.assertEqual(task.weekend_plan("星期日", st, texts),
                              [WeekendStep("餐厅", False)], style)
             self.assertTrue(task.handle_weekend(texts), style)
-            self.assertFalse(task._weekend["current_step"].urgent, style)
+            self.assertFalse(task.day_state().current_step.urgent, style)
 
     def test_urgent_restaurant_training_gap(self):
         """训练流：缺口小本来去餐厅 → 主计划；缺口大只去公园 → 急招 detour。"""
@@ -3986,7 +4030,7 @@ class WeekendMapRules(unittest.TestCase):
                              stamina)
             self.assertTrue(task.handle_weekend(texts), stamina)
             self.assertEqual(task.actions[-1][1], "餐厅", stamina)
-            self.assertEqual(task._weekend["current_step"].urgent,
+            self.assertEqual(task.day_state().current_step.urgent,
                              want[0].urgent, stamina)
 
     def test_urgent_detour_skipped_after_restaurant_visited(self):
@@ -3995,7 +4039,7 @@ class WeekendMapRules(unittest.TestCase):
                  + [self.RESTAURANT_URGENT])
         task = self.styled("扭蛋流", texts)
         st = task.weekend_state()
-        st["visited"] = {"餐厅"}
+        st.visited = {"餐厅"}
         self.assertEqual(task.weekend_plan("星期日", st, texts),
                          [WeekendStep("步行街", False)])
         self.assertTrue(task.handle_weekend(texts))
@@ -4029,7 +4073,7 @@ class WeekendMapRules(unittest.TestCase):
         self.assertTrue(task.handle_weekend(task._texts))
         self.assertEqual(task.actions[-1][1], "步行街")
         task.actions.clear()
-        task._weekend["visited"] = {"步行街"}          # 步行街走完，但没买东西
+        task.day_state().visited = {"步行街"}          # 步行街走完，但没买东西
         self.assertTrue(task.handle_weekend(task._texts))
         self.assertEqual(task.actions[-1][1], "餐厅")
 
@@ -4037,8 +4081,8 @@ class WeekendMapRules(unittest.TestCase):
         """买到扭蛋（gacha_spent）→ 当天不再去餐厅打工。"""
         task = self.styled("扭蛋流", self._weekend_map("星期六", 1000))
         st = task.weekend_state()
-        st["visited"] = {"步行街"}
-        st["gacha_spent"] = True
+        st.visited = {"步行街"}
+        st.gacha_spent = True
         self.assertEqual(task.today_places("六", st), ["步行街"])
 
     def test_friday_row_is_explicit_for_shop_style(self):
@@ -4101,9 +4145,9 @@ class WeekendMapRules(unittest.TestCase):
         for day in ("星期五", "星期六", "星期日"):
             task = self.styled("扭蛋流", self._map(day))
             task.weekend_state()
-            self.assertFalse(task.weekend_state().get("outing_done"), day)
+            self.assertFalse(task.weekend_state().outing_done, day)
             self.assertTrue(task.handle_weekend(task._texts), day)
-            self.assertTrue(task.weekend_state().get("outing_done"), day)
+            self.assertTrue(task.weekend_state().outing_done, day)
 
     def _weekend_map(self, day, money=None):
         """周末地图（扭蛋流 / 小游戏流共用）：可带顶栏零用钱（不传 = OCR 读不到）。"""
@@ -4434,7 +4478,7 @@ class WeekendMapRules(unittest.TestCase):
     def test_all_places_visited_exits_map(self):
         task = FakeTask(list(self.MAP))
         task.weekend_state()                      # 先固定 date，避免 handle_weekend 清空 visited
-        task._weekend["visited"] = {"餐厅", "公园"}   # 训练流的两个候选都走完
+        task.day_state().visited = {"餐厅", "公园"}   # 训练流的两个候选都走完
         self.assertTrue(task.handle_weekend(task._texts))
         self.assertEqual(task.actions[-1][0], "click")
         self.assertGreaterEqual(task.actions[-1][1], int(task.width * 0.9))   # 右上角返回
@@ -4444,7 +4488,7 @@ class WeekendMapRules(unittest.TestCase):
         task = FakeTask(list(self.MAP))
         task.weekend_state()
         self.assertTrue(task.handle_weekend(task._texts))
-        self.assertEqual(task._weekend["visited"], set())
+        self.assertEqual(task.day_state().visited, set())
 
     def test_park_page_marks_visited(self):
         texts = [box(600, 100, "在公园干点什么好呢?", 600, 50),
@@ -4454,7 +4498,7 @@ class WeekendMapRules(unittest.TestCase):
         task = FakeTask(texts)
         task.weekend_state()
         task.handle_park(texts)
-        self.assertIn("公园", task._weekend["visited"])
+        self.assertIn("公园", task.day_state().visited)
 
     def test_street_exit_clicks_give_up(self):
         """扭蛋页右上角 ↩ 点不动，退出必须点底部「放弃」（2026-10-26 实测）。"""
@@ -4495,7 +4539,7 @@ class WeekendMapRules(unittest.TestCase):
         task = FakeTask(texts)
         task.weekend_state()
         self.assertFalse(task.handle_park(texts))
-        self.assertEqual(task._weekend["visited"], set())
+        self.assertEqual(task.day_state().visited, set())
 
     def test_place_click_ignores_dialogue_text(self):
         """地图上点地点必须点地点名那一整框，不能点含「公园」的对白长句。"""
@@ -4518,7 +4562,7 @@ class WeekendMapRules(unittest.TestCase):
                  box(400, 260, "告诉她公园的草坪是假的，她", 700, 40)]
         task = FakeTask(texts)
         task.weekend_state()
-        task._weekend["visited"] = {"公园"}
+        task.day_state().visited = {"公园"}
         self.assertFalse(task.handle_weekend(texts))
         self.assertEqual(task.actions, [])
 
@@ -4808,7 +4852,7 @@ class StylePlanRules(unittest.TestCase):
         counts = dict(mates or {})
         task.mate_face_count = lambda b, **k: counts.get(b.name.strip(), 0)
         if step is not None:
-            task._weekend["current_step"] = step
+            task.day_state().current_step = step
         return task
 
     def test_restaurant_tie_picks_servant(self):
@@ -5624,13 +5668,13 @@ class StuckTakeover(unittest.TestCase):
         task._shop_try_key, task._shop_try_count = (2, "二"), 2
         task._no_change = 3
         task._loop_handler, task._loop_count = "handle_x", 9
-        task.day_state()["visited"].add("公园")
+        task.day_state().visited.add("公园")
         task._clear_day_home_brakes()
         self.assertIsNone(task._shop_try_key)
         self.assertEqual(task._shop_try_count, 0)
         self.assertEqual(task._no_change, 0)
         self.assertIsNone(task._loop_handler)
-        self.assertEqual(task.day_state()["visited"], set())
+        self.assertEqual(task.day_state().visited, set())
 
 
 class ShopGrid(unittest.TestCase):
@@ -6281,10 +6325,10 @@ class OutingOnTrainingDay(unittest.TestCase):
         self.assertTrue(task.handle_training_day(task._texts))
         self.assertEqual(task.actions[-1][1], "出行")
         # 点完**不算**用过：还没进地图（否则点空一次就锁死这一天）
-        self.assertFalse(task.weekend_state().get("outing_done"))
+        self.assertFalse(task.weekend_state().outing_done)
         # 进了地图（handle_weekend 认到地图）→ 才记账
         self.assertTrue(task.handle_weekend(self._map()))
-        self.assertTrue(task.weekend_state().get("outing_done"))
+        self.assertTrue(task.weekend_state().outing_done)
 
     def test_first_tick_does_not_click_go_out(self):
         """整页刚出现的第一拍不点「出行」（躲淡入，与训练/休息的决策拍同理）。"""
@@ -6305,7 +6349,7 @@ class OutingOnTrainingDay(unittest.TestCase):
         clicks = [a for a in task.actions if a[0] == "click_box" and a[1] == "出行"]
         self.assertEqual(len(clicks), task.OUTING_CLICK_LIMIT)
         # 放弃之后不能死盯这一页：记账（这一天按「出过行」处理）+ 告警 + 回去训练/休息
-        self.assertTrue(task.weekend_state().get("outing_done"))
+        self.assertTrue(task.weekend_state().outing_done)
         self.assertTrue(any("今天不再试" in m for m in task.logs), task.logs)
 
     def test_outing_used_home_page_does_not_click_again(self):
@@ -6339,7 +6383,7 @@ class OutingOnTrainingDay(unittest.TestCase):
         task.ensure_speed = lambda texts: False
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions, [])          # 台词不是按钮，一个都不点
-        self.assertFalse(task.weekend_state().get("outing_done"))
+        self.assertFalse(task.weekend_state().outing_done)
         # 下一拍按钮出来了 → 正常外出
         self.assertTrue(task.handle_training_day(self._texts()))
         self.assertEqual(task.actions[-1][1], "出行")
@@ -6352,7 +6396,7 @@ class OutingOnTrainingDay(unittest.TestCase):
         for _ in range(task.GO_OUT_WAIT_TICKS + 1):
             self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "今天可以出行哦！要不")
-        self.assertFalse(task.weekend_state().get("outing_done"))
+        self.assertFalse(task.weekend_state().outing_done)
 
     def test_split_button_still_found(self):
         """OCR 把按钮拆成「出」「行」两个单字框时也要认出来（商店 商/店 同款坑）。"""
