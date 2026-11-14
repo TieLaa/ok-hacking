@@ -1891,6 +1891,7 @@ class PageRegistry(unittest.TestCase):
         import os
         from src.tasks.training.pages import classify_page
         from tools.check_handlers import load_boxes
+        from tools.check_pages import SHOTS_OVERRIDE
         root = os.path.join("docs", "shots")
         expected = json.load(open(os.path.join(root, "expected.json"),
                                   encoding="utf-8"))
@@ -1916,7 +1917,7 @@ class PageRegistry(unittest.TestCase):
         # （不是每张图都要认领 —— 未登记的页面返回 None 是正常的。）
         groups = {}
         for name, handler in expected.items():
-            page = by_handler.get(handler)
+            page = SHOTS_OVERRIDE.get(name) or by_handler.get(handler)
             if page is None:
                 continue
             path = os.path.join(root, name)
@@ -1946,26 +1947,30 @@ class PageRegistry(unittest.TestCase):
         同名不同义，两表判定结果有 331 帧不一致 —— 这是**真 bug**，
         已把前者改名 `stage_list`。
 
-        现在两表允许重名，但重名分两类：
-        - **判据等价**（实测 0 帧不一致）：register_player / training_plan /
-          weekend_map —— 名字撞了没关系；
+        现在两表允许重名，但重名分三类：
+        - **判据等价**（在 docs/shots 人工确认过的图上两表都命中）：
+          register_player / training_plan / weekend_map / announcement /
+          captain / confirm_team / equipment / team / stock_pick；
         - **有意不等价**：shop / training_subject —— 认页要严（能独立认出
-          这一页），排除要宽（宁可多排），理由写在两张表的 docstring 里。
+          这一页），排除要宽（宁可多排），理由写在两张表的 docstring 里；
+        - **同一页面的两种形态**：stage_list —— 签名表认「关卡加成+奖励预览」，
+          页面表认「赛程已完成+距离下场比赛」，是同一类页面的两种样子。
         """
         from src.tasks.training import pages, page_signatures
         overlap = set(pages.PRIORITY) & set(page_signatures.SIGNATURES)
-        # 真 bug 的形态：同一个名字，判据**无关**（既不等价、也没登记过差异原因）
-        known_equal = {"register_player", "training_plan", "weekend_map"}
+        known_equal = {"register_player", "training_plan", "weekend_map",
+                       "announcement", "captain", "confirm_team",
+                       "equipment", "team", "stock_pick"}
         known_different = {"shop", "training_subject"}
+        known_two_forms = {"stage_list"}
         self.assertEqual(
-            overlap, known_equal | known_different,
+            overlap, known_equal | known_different | known_two_forms,
             "页面表和签名表的重名集合变了：新增 %s / 少了 %s。"
-            "新增重名必须先确认判据是否等价（logs/dev/probe_dup2.py 可测），"
+            "新增重名必须先确认判据是否等价"
+            "（logs/dev/probe_dup4.py 在 docs/shots 上测），"
             "不等价就改名（如 match_result → stage_list）"
-            % (sorted(overlap - known_equal - known_different),
-               sorted(known_equal | known_different - overlap)))
-        # 这三页两表判据等价（实测 0 帧不一致），名字撞了没关系
-        self.assertTrue(known_equal <= overlap)
+            % (sorted(overlap - known_equal - known_different - known_two_forms),
+               sorted(known_equal | known_different | known_two_forms - overlap)))
 
     def test_replay_real_shots_match_expected_page(self):
         """实跑存证帧回放：认对率不能低于 90%。

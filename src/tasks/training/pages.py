@@ -35,24 +35,44 @@ PRIORITY = {
     "construction": 20,
     "register_player": 25,
     "result": 30,
-    # --- 以下四个是独有整句标题 ---
+    # --- 独有整句标题 ---
     "boost_training": 35,
     "prepare": 40,
     "skill_select": 42,
     "result_page": 45,
     "training_plan": 48,
-    # --- 以下靠通用关键词，排在标题页之后 ---
-    "match_result": 50,
-    "boost_status": 52,
-    "training_subject": 55,
-    "event_choice": 60,
-    "weekend_map": 65,
-    "go_out": 66,
+    "announcement": 49,
+    "theme_select": 51,
+    "ingredient_select": 52,
+    "izumi_question": 53,
+    "stock_pick": 54,
+    "spin_wheel": 56,
+    "arcade": 57,
+    "manuscript_submit": 58,
+    "training_entry": 59,
+    "lobby": 61,
+    # --- 靠通用关键词，排在标题页之后 ---
+    "match_result": 62,
+    "boost_status": 63,
+    "training_subject": 64,
+    "event_choice": 65,
+    "weekend_map": 66,
+    "go_out": 67,
     "restaurant": 70,
     "street": 80,
     "park": 90,
+    "park_detail": 91,
     "shop": 100,
     "story_arrow": 120,
+    "popup": 125,
+    # --- 需要组合判据的（两三个词同时出现才算）---
+    "stage_list": 130,
+    "confirm_team": 131,
+    "equipment": 132,
+    "team": 133,
+    "note_study": 134,
+    "captain": 135,
+    "rest_confirm": 136,
 }
 
 
@@ -64,6 +84,154 @@ def _short_place_names(texts):
 
 
 # ---------- 每个页面的锚点 ----------
+
+def _is_captain(task, texts):
+    """选队长页：整框「训练核心」。
+
+    必须**整框**：`match_text` 的「整段拼接」兜底会把训练日主界面里
+    「…都给我好好训练…」「核心评分提升！」拼成「训练核心」，
+    于是主界面被当成选队长页（`handlers/entry.py: handle_captain` 同源判据）。
+    """
+    return task.exact_text(texts, ("训练核心",)) is not None
+
+
+def _is_training_entry(task, texts):
+    """训练剧本页（大厅 → 训练）：「训练剧本」+ 右下「启程」。
+
+    单看「训练剧本」不够 —— 训练日台词也会提到「训练剧本」。
+    """
+    if task.match_text(texts, "训练剧本") is None:
+        return False
+    return task.exact_text(texts, ("启程",)) is not None
+
+
+def _is_lobby(task, texts):
+    """大厅（首页子菜单）：「赛事 / 社团GO / 新人抽奖 / 转一圈 / 冠军之路」。
+
+    新版大厅的「社团GO」有时 OCR 读不到，只靠它会在主界面空转
+    （实测 2026-10-26）。
+    """
+    return task.match_text(texts, ("赛事", "社团GO", "新人抽奖",
+                                   "转一圈", "冠军之路")) is not None
+
+
+def _is_arcade(task, texts):
+    """游戏厅（需「强化」里解锁）：标题「请选择一个小游戏 / 幸运小游戏」。"""
+    return task.match_text(texts, labels.ARCADE_TITLE) is not None
+
+
+def _is_stage_list(task, texts):
+    """锦标赛对阵图（关卡列表页）：「赛程已完成 / 距离下场比赛 / 挑战中」。
+
+    这一页只有「下一步」和学校名，没有「结算/赛程」这种整词标题，
+    旧判据认不出来会被事件 handler 当成竖排选项。
+    """
+    return task.match_text(texts, ("赛程已完成", "距离下场比赛",
+                                   "挑战中")) is not None
+
+
+def _is_confirm_team(task, texts):
+    """确认编队页：整框「确认编队」+「开始训练」。
+
+    「确认编队」单独出现不够 —— 选器材/选笔记页也会出现这个词。
+    """
+    if task.match_text(texts, "确认编队") is None:
+        return False
+    return task.match_text(texts, "开始训练") is not None
+
+
+def _is_equipment(task, texts):
+    """选器材页：整框「选择器材」+「自动选择」。"""
+    if task.match_text(texts, "选择器材") is None:
+        return False
+    return task.match_text(texts, "自动选择") is not None
+
+
+def _is_team(task, texts):
+    """选队友页：整框「选择队友」+「队伍能力」。"""
+    if task.match_text(texts, "选择队友") is None:
+        return False
+    return task.match_text(texts, "队伍能力") is not None
+
+
+def _is_note_study(task, texts):
+    """笔记/球星卡「学习」页：「契合度」+「评分」。
+
+    「契合度」是这一页独有的标签（选卡详情弹窗也会弹它，但那一页
+    有「选择笔记/选择器材」，被 `handle_note_select`/`handle_equipment` 认领）。
+    """
+    if task.match_text(texts, "契合度") is None:
+        return False
+    return task.match_text(texts, "评分") is not None
+
+
+def _is_theme_select(task, texts):
+    """题材选择页：标题「请选择一个题材」。"""
+    return task.match_text(texts, "请选择一个题材") is not None
+
+
+def _is_ingredient_select(task, texts):
+    """食材选择页：标题「请选择要使用的食材」。"""
+    return task.match_text(texts, "请选择要使用的食材") is not None
+
+
+def _is_spin_wheel(task, texts):
+    """转盘页（钓鱼/做饭）：标题「开始做饭 / 钓鱼啦」+「转一转」。"""
+    if task.match_text(texts, labels.WHEEL_TITLES) is None:
+        return False
+    return task.match_text(texts, "转一") is not None
+
+
+def _is_izumi_question(task, texts):
+    """和泉的问题（对话二选一）：「继续倾听和泉的问题」。"""
+    return task.match_text(texts, "继续倾听和泉的问题") is not None
+
+
+def _is_stock_pick(task, texts):
+    """选股页（天赋「股神!」）：标题「请选择你要投资的股票」。"""
+    return task.match_text(texts, labels.STOCK_PICK_TITLE) is not None
+
+
+def _is_rest_confirm(task, texts):
+    """休息确认框：「休息需要消耗一天」等（`labels.REST_CONFIRM_TEXTS`）。"""
+    return task.match_text(texts, labels.REST_CONFIRM_TEXTS) is not None
+
+
+def _is_manuscript_submit(task, texts):
+    """WARD 文档汇报页：标题「WARD文档」+「收集到的idea」。
+
+    不能只认标题 —— 页面底部（y≈0.93）还印着一个装饰用的「WARD文档」，
+    只靠标题判会出现只有标题的中间态（`handlers/talent.py` 同源判据）。
+    """
+    if task.match_text(texts, "WARD文档") is None:
+        return False
+    return task.match_text(texts, "收集到的idea") is not None
+
+
+def _is_announcement(task, texts):
+    """整页公告：标题「公告」。
+
+    2026-11-10 实机：游戏刚启动时这页盖住全部界面。
+    """
+    return task.match_text(texts, "公告") is not None
+
+
+def _is_popup(task, texts):
+    """弹层：「点击屏幕继续」等纯文本弹窗。
+
+    和 `result_page`（活动结算，有奖励明细）分开 —— 这一页没有明细，
+    只是一句提示 + 「点击屏幕继续」。
+    """
+    return task.match_text(texts, labels.TAP_TO_CONTINUE) is not None
+
+
+def _is_park_detail(task, texts):
+    """公园详情页（选了某个项目后）：「前往划船 / 前往野餐」。
+
+    和 `park`（公园首页）分开 —— 详情页上才有「前往XX」。
+    """
+    return task.match_text(texts, ("前往划船", "前往野餐", "前往散步")) is not None
+
 
 def _is_game_title(task, texts):
     if task.exact_text(texts, (labels.GAME_TITLE_ENTER,)) is None:
@@ -492,6 +660,26 @@ _ANCHORS = {
     "skill_select": _is_skill_select,
     "result_page": _is_result_page,
     "training_plan": _is_training_plan,
+    # --- 2026-11-14 补登记（依据 docs/shots 50 张人工确认过的回归图）---
+    "captain": _is_captain,
+    "training_entry": _is_training_entry,
+    "lobby": _is_lobby,
+    "arcade": _is_arcade,
+    "stage_list": _is_stage_list,
+    "confirm_team": _is_confirm_team,
+    "equipment": _is_equipment,
+    "team": _is_team,
+    "note_study": _is_note_study,
+    "theme_select": _is_theme_select,
+    "ingredient_select": _is_ingredient_select,
+    "spin_wheel": _is_spin_wheel,
+    "izumi_question": _is_izumi_question,
+    "stock_pick": _is_stock_pick,
+    "rest_confirm": _is_rest_confirm,
+    "manuscript_submit": _is_manuscript_submit,
+    "announcement": _is_announcement,
+    "popup": _is_popup,
+    "park_detail": _is_park_detail,
 }
 
 

@@ -123,6 +123,95 @@ def iter_shots():
     return sorted(seen.items())
 
 
+# docs/shots 里的回归图 → 它们该被认成的页面。
+#
+# 这批图和实跑存证帧互补：
+# - 实跑存证帧：4000+ 张，覆盖广，但 ground truth 是「文件名里的 handler 名」；
+# - docs/shots：50 张，ground truth 是**人工确认过**的 expected.json，
+#   覆盖实跑存证帧里没有的页面（选队长/选器材/选队友/确认编队/题材选择…）。
+#
+# 两边都要跑：实跑存证帧抓「漏认的页面」，回归图抓「认错的手工样本」。
+SHOTS_PAGES = {
+    "handle_captain": "captain",
+    "handle_training_entry": "training_entry",
+    "handle_lobby": "lobby",
+    "handle_arcade": "arcade",
+    "handle_match_result": "stage_list",
+    "handle_confirm_team": "confirm_team",
+    "handle_equipment": "equipment",
+    "handle_team": "team",
+    "handle_note_study": "note_study",
+    "handle_theme_select": "theme_select",
+    "handle_ingredient_select": "ingredient_select",
+    "handle_spin_wheel": "spin_wheel",
+    "handle_izumi_question": "izumi_question",
+    "handle_stock_pick": "stock_pick",
+    "handle_rest_confirm": "rest_confirm",
+    "handle_manuscript_submit": "manuscript_submit",
+    "handle_announcement": "announcement",
+    "handle_subject_select": "training_subject",
+    "handle_register_player": "register_player",
+    "handle_shop": "shop",
+    "handle_street": "street",
+    "handle_park": "park",
+    "handle_restaurant": "restaurant",
+    "handle_weekend": "weekend_map",
+    "handle_go_out": "go_out",
+    "handle_event_choice": "event_choice",
+    "handle_story_arrow": "story_arrow",
+    "handle_boost_training": "boost_training",
+    "handle_construction": "construction",
+    "handle_result": "result_page",
+    "handle_training_hub": "training_hub",
+    "handle_popup": "popup",
+    "handle_activity_go": "restaurant",
+}
+
+# 个别图的期望要按**图名**覆盖（同一个 handler 在不同图上属于不同页面）：
+#   handle_activity_go 在公园详情页上是 park_detail，在餐厅详情页上是 restaurant。
+SHOTS_OVERRIDE = {
+    "2026-10-26-park-confirm.png": "park_detail",
+}
+
+
+def run_shots():
+    """在 docs/shots 回归图上跑分类器。返回 (认对数, 总数, 错配列表)。"""
+    import cv2
+    from tools.check_handlers import DryRunTask, load_boxes
+    from src.tasks.training.pages import classify_page
+
+    shots_dir = os.path.join(ROOT, "docs", "shots")
+    expected_path = os.path.join(shots_dir, "expected.json")
+    if not os.path.exists(expected_path):
+        return 0, 0, []
+    with open(expected_path, encoding="utf-8") as f:
+        expected = json.load(f)
+    holder = {}
+    hit = 0
+    total = 0
+    wrong = []
+    for name in sorted(expected):
+        handler = expected[name]
+        page = SHOTS_OVERRIDE.get(name) or SHOTS_PAGES.get(handler)
+        if page is None:
+            continue
+        path = os.path.join(shots_dir, name)
+        if not os.path.exists(path):
+            continue
+        frame = cv2.imread(path)
+        if frame is None:
+            continue
+        texts = load_boxes(path, holder, use_cache=True)
+        task = DryRunTask(frame, texts)
+        got, _cands = classify_page(task, texts)
+        total += 1
+        if got == page:
+            hit += 1
+        else:
+            wrong.append((name, handler, page, got))
+    return hit, total, wrong
+
+
 def frame_key(path):
     st = os.stat(path)
     raw = "%s|%d|%d" % (path, st.st_size, int(st.st_mtime))
@@ -197,7 +286,7 @@ def run(sample=False, min_rate=90.0):
 
     rate = 100 * hit / max(total, 1)
     print()
-    print("总帧数 %d  认对 %d  认对率 %.1f%%（门槛 %.0f%%）"
+    print("实跑存证帧：总 %d  认对 %d  认对率 %.1f%%（门槛 %.0f%%）"
           % (total, hit, rate, min_rate))
 
     if sample:
@@ -208,7 +297,17 @@ def run(sample=False, min_rate=90.0):
             print("%4d  %-18s → %-18s (%s)" % (n, gt, page, tag))
             print("      %s" % (" | ".join(names))[:300])
 
-    return rate, rate >= min_rate
+    # ---- docs/shots 回归图（人工确认过的期望值）----
+    s_hit, s_total, s_wrong = run_shots()
+    s_rate = 100 * s_hit / max(s_total, 1)
+    print()
+    print("回归图（docs/shots）：总 %d  认对 %d  认对率 %.1f%%" % (s_total, s_hit, s_rate))
+    for name, handler, page, got in s_wrong:
+        print("  %-40s handler=%-22s 期望 %-16s 实得 %s"
+              % (name, handler, page, got or "unknown"))
+
+    ok = rate >= min_rate and s_rate >= min_rate
+    return max(rate, s_rate), ok
 
 
 def main():
