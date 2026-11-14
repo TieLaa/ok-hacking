@@ -9,6 +9,7 @@
     .venv\\Scripts\\python.exe -m unittest discover -s tests -p "test_training_rules.py" -v
 """
 
+import collections
 import glob
 import json
 import os
@@ -1971,6 +1972,36 @@ class PageRegistry(unittest.TestCase):
             "不等价就改名（如 match_result → stage_list）"
             % (sorted(overlap - known_equal - known_different - known_two_forms),
                sorted(known_equal | known_different | known_two_forms - overlap)))
+
+    def test_route_matches_sequence_scan(self):
+        """路由（先分类、再分派）不能改变行为 —— 除非是登记过的「修 bug」。
+
+        2026-11-14 阶段 2 第 4 步：`flow._handle_any` 从「顺序遍历 58 个 handler」
+        改成「先分类成 PageID，再按 PageID 路由到对应 handler」。
+
+        路由**只当加速器**：路由到的 handler 跑不到就照旧全量遍历，
+        绝不排除任何 handler —— 最坏情况 = 现在的行为。
+
+        这个测试跑的是**真实流程**（同一个 task 顺序跑），
+        所以能测出调用顺序变化带来的差异；
+        `tools/check_behavior.py` 测不出（它每个 handler 单独跑）。
+        """
+        import os
+        from tools import check_route
+        if not os.path.exists(check_route.replay_frames.CACHE):
+            self.skipTest("没有实跑存证帧缓存，跳过路由回归")
+        diffs = collections.Counter()
+        for _tag, _path, frame, data in check_route.replay_frames.frames_with_cache():
+            seq = check_route.run(frame, data, False)
+            rt = check_route.run(frame, data, True)
+            if seq[0] != rt[0] or seq[1] != rt[1]:
+                diffs[(seq[0], rt[0])] += 1
+        for (a, b), n in diffs.items():
+            limit, why = check_route.ALLOWED.get((a, b), (0, "★未登记的差异"))
+            self.assertLessEqual(
+                n, limit,
+                "路由引入了未登记的行为差异 %d 帧：顺序=%s → 路由=%s（%s）"
+                % (n, a, b, why))
 
     def test_replay_real_shots_match_expected_page(self):
         """实跑存证帧回放：认对率不能低于 90%。

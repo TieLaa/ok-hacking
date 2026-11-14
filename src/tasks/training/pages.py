@@ -1,14 +1,22 @@
-"""页面分类（Page Registry）——**旁路阶段**：只认页面，不点击、不改控制流。
+"""页面分类（Page Registry）—— 页面 → 锚点的**唯一出处**。
 
 为什么要有这一层（2026-11-13 全局方案）：
-    现在 30+ 个 handler 各自在内部判断「这是不是我的页面」，判据散落、
+    之前 30+ 个 handler 各自在内部判断「这是不是我的页面」，判据散落、
     互不知道对方的边界；冲突只能靠 `HANDLERS` 顺序和一条条排除条件消化。
     结果是每撞一次事故就补一条排除（2026-11-13「在公园」正文让事件页
     被跳过、又被当成周末地图，就是典型）。
 
-    这里先把「页面 → 锚点」集中到一张表，**旁路运行**：
-    每拍算一个 PageID 写日志，和实际命中的 handler 对照。
-    等差异清零，再把 `_handle_any` 切到「先分类、再分派」。
+2026-11-14 阶段 2：从旁路变成**执行路径**。
+    `flow._handle_any` 现在是「先分类成 PageID，再按 PageID 路由到
+    对应的 handler」；路由到的 handler 跑不到就照旧全量顺序遍历。
+
+    **分类器只当加速器，绝不排除任何 handler** —— 顺序遍历里沉淀了
+    踩坑的教训（「共用『下一步/确定』的必须排在专属 handler 之后」），
+    丢掉它就等于丢掉那些教训。最坏情况 = 改之前的行为。
+
+    页面 → handler 的对应在 `page_handlers.py`；
+    路由的回归门禁在 `tools/check_route.py`（跑真实流程，
+    因为 handler 之间有状态，单独跑每个 handler 测不出顺序变化）。
 
 判据约定（和 docs/ENGINEERING.md §3.1 一致）：
 - 锚点只用 **UI 词/形态**（整框按钮、黄色边框、整框地点名），
@@ -17,7 +25,10 @@
 - 多个页面同时命中时按 `PRIORITY` 取第一个，但把 candidates 一起返回——
   旁路日志会把它打出来，这就是「判据重叠」的可观测入口。
 
-只登记了首批高频/出过事的页面；其余页面返回 None，仍走现有 handler。
+**识别率**（2026-11-14）：
+- 实跑存证帧 2785 张，认对 95.5%（`tools/check_pages.py`）
+- 人工确认过的回归图 49 张，认对 95.9%
+剩下认不出的是过渡态（悬停浮层、剧情开场），本来就没有稳定的页面身份。
 """
 
 from src.tasks.ui import Defs, labels
@@ -51,11 +62,13 @@ PRIORITY = {
     "manuscript_submit": 58,
     "training_entry": 59,
     "lobby": 61,
+    # 度假页要在 story_arrow 之前 —— 它也有右下角 ▼，但要点的是主按钮
+    "vacation": 62,
     # --- 靠通用关键词，排在标题页之后 ---
-    "match_result": 62,
-    "boost_status": 63,
-    "training_subject": 64,
-    "event_choice": 65,
+    "match_result": 63,
+    "boost_status": 64,
+    "training_subject": 65,
+    "event_choice": 66,
     "weekend_map": 66,
     "go_out": 67,
     "restaurant": 70,
@@ -216,6 +229,19 @@ def _is_announcement(task, texts):
     return task.match_text(texts, "公告") is not None
 
 
+def _is_vacation(task, texts):
+    """度假 / 海边合宿页：「海边合宿 / 度假 / 合宿」。
+
+    2026-11-14 路由修正：分类器把这页认成 `story_arrow`（剧情页），
+    路由后 `handle_story_arrow` 会抢先，点右下角 ▼ 推进剧情 ——
+    但这一页要点的是主按钮（`handle_vacation` 的行为）。
+    「合宿」是这一页独有的词，别处不出现。
+    """
+    if task.match_text(texts, "训练计划") is not None:
+        return False
+    return task.match_text(texts, labels.VACATION_TEXTS) is not None
+
+
 def _is_popup(task, texts):
     """弹层：「点击屏幕继续」等纯文本弹窗。
 
@@ -297,6 +323,12 @@ def _is_match_result(task, texts):
       - 目标达成：「目标达成」+「获得奖励」
       - 胜利结算：「战胜XX学校」+「获得奖励」
 
+    「获得奖励」单独出现**不够** —— 专注恢复页弹出的奖励提示框
+    （`获得奖励 | 点击任意区域关闭`）也有这个词，
+    会被误判成比赛结算页、进而抢走「专注恢复」的关闭按钮
+    （2026-11-14 路由实测发现）。所以要求**同时**有比赛结算的另一样标志：
+    比分（「胜利」/「战胜XX学校」）或统计表头。
+
     「失败」不能用：训练科目页的「失败率 27%」含「失败」
     （docs/shots/2026-10-26-subject-crit.png 就是这样被抢走的）。
     """
@@ -305,7 +337,15 @@ def _is_match_result(task, texts):
     if task.match_text(texts, ("胜利", "失败", "结算", "目标达成")) is not None:
         return True
     if task.match_text(texts, "获得奖励") is not None:
-        return True
+        # 奖励弹窗要在**同时**有比分或统计表头才算比赛结算：
+        # - 专注恢复页的奖励提示框（`获得奖励 | 点击任意区域关闭`）
+        # - 注册球员编队页的奖励弹层（`获得奖励：钻石500 | 关闭`）
+        # 这两处都只有「获得奖励」，没有比分 → 不能算比赛结算页。
+        if task.match_text(texts, "战胜") is not None:
+            return True
+        stats = [w for w in ("得分", "篮板", "助攻", "盖帽", "抢断")
+                 if task.match_text(texts, w) is not None]
+        return len(stats) >= 2
     stats = [w for w in ("得分", "篮板", "助攻", "盖帽", "抢断")
              if task.match_text(texts, w) is not None]
     return len(stats) >= 2
@@ -505,6 +545,14 @@ def _is_event_choice(task, texts):
         return False
     if len(_short_place_names(texts)) >= 2:
         return False
+    # 编队 / 战术板页（2026-11-14 路由实测发现）：
+    # 这一页的「自动编队 / 保存成功 / 评分奖励」是竖排的**面板标签**，
+    # 形态和竖排事件选项一样（`choice_candidates` 会把它们当候选），
+    # 于是这一页被认成事件页，路由后点了「AN」这种 OCR 碎片。
+    # 用**页面级强特征**排除：这几个词只出现在编队页。
+    if task.match_text(texts, ("自动编队", "保存调整", "奖励总览",
+                               "战术板", "下级奖励")) is not None:
+        return False
     # 地点内页的底部按钮（野餐/划船、桌游GM/当服务员）也是居中一列短词，
     # 形态和竖排事件选项一样 —— 用**页面标题**区分（2026-11-14 实测）。
     if _is_park(task, texts) or _is_restaurant(task, texts):
@@ -680,6 +728,7 @@ _ANCHORS = {
     "announcement": _is_announcement,
     "popup": _is_popup,
     "park_detail": _is_park_detail,
+    "vacation": _is_vacation,
 }
 
 
