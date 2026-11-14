@@ -512,7 +512,9 @@ class EntryHandlers:
         # 包含匹配会把那一页也当成选择笔记页，反复点下一步（2026-10-29 实机）。
         if self.exact_text(texts, ("选择笔记",)) is None:
             return False
-        if self.match_text(texts, "确认编队") is not None:
+        # 「确认编队」页有「未选择笔记 / 请携带笔记一起训练吧」——
+        # 阶段 2：收口到签名表（`confirm_team`），各页面只声明一次。
+        if page_signatures.page_has(self, texts, "confirm_team"):
             return False
         if self.no_captain_mode:
             return self.stop_for_no_captain("选择笔记")

@@ -106,7 +106,9 @@ class TrainingHandlers:
             return False
         # 选卡页（选择笔记/选择器材）也可能弹出卡片详情带「契合度」——
         # 那是开局流程的页，交给 handle_note_select / handle_equipment，别在这儿等。
-        if self.match_text(texts, ("选择笔记", "选择器材")) is not None:
+        # 阶段 2：收口到签名表（`note_select` / `equipment`）。
+        if (page_signatures.page_has(self, texts, "note_select")
+                or page_signatures.page_has(self, texts, "equipment")):
             return False
         clicked = getattr(self, "_note_study_clicks", 0)
         if self.exact_text(texts, labels.BUTTONS["study"]) is not None:
