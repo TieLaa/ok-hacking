@@ -323,6 +323,32 @@ class GachaRules(unittest.TestCase):
         self.assertEqual(item_attr_target("弹跳升级包++"), "弹跳")
         self.assertIsNone(item_attr_target("专属饮料+"))
 
+    def test_effect_all_attribute_card_ranks_as_all(self):
+        """2026-11-14：卡名认不出时，效果文本里的「全属性」按 0 号档。
+
+        实跑：「延迟满足」（紫）效果是「5天后，全队成员获得全属性+13」，
+        实际是全属性卡（六项各 +13 = 78 点），卡名认不出 → 归「其他专项」
+        后同品质里输给需求专项卡。
+        """
+        from src.tasks.training.attributes import effect_attr_target
+        self.assertEqual(
+            effect_attr_target("5天后，全队成员获得全属性+13"), "ALL")
+        self.assertEqual(
+            effect_attr_target("立刻恢复40精力，之后每天恢复10点"), None)
+        self.assertIsNone(effect_attr_target(""))
+
+    def test_delay_satisfaction_beats_single_attribute(self):
+        """同品质时：「延迟满足」（全属性）赢过单属性卡。"""
+        task = FakeTask(gacha_texts([
+            ("投射增加+", "主力投射+48，队友属性大幅提升"),
+            ("延迟满足", "5天后，全队成员获得全属性+13"),
+            ("意识增加+", "主力意识+48，队友属性中幅提升"),
+        ], stamina="128/130", money="344", price="80"),
+            qualities=["金", "金", "金"])
+        task._style = "扭蛋流"
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions[0][1], 1100)      # 中间那张全属性卡
+
     def test_money_card_beats_quality(self):
         """2026-11-14 用户口径：增加零用钱的卡最高优先（扭蛋流）。
 

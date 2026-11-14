@@ -214,7 +214,12 @@ class StreetPlace:
                 continue
             # 属性取向（2026-11-13）：该属性缺口不足阈值 → 不买（加了会溢出）。
             target = attributes.item_attr_target(c.get("name"))
-            if target and target not in ("ALL", "PREFERRED"):
+            if target is None:
+                # 卡名认不出六维属性名时，用**效果文本**兜底（2026-11-14）：
+                # 「延迟满足」的效果是「5天后，全队成员获得全属性+13」，
+                # 实际是全属性卡（78 点），卡名认不出 → 归「其他专项」就输了。
+                target = attributes.effect_attr_target(c.get("effect"))
+            if target and target not in ("ALL", "PREFERRED", "CASH"):
                 cap, cur = caps.get(target), attrs.get(target)
                 if (cap is not None and cur is not None
                         and cap - cur < gap_limit):
