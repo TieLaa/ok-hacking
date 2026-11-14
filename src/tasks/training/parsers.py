@@ -550,10 +550,17 @@ class TrainingParsersMixin:
         scores, positions, ratings = [], [], []
         for t in band:
             s = t.name.strip()
-            if s.isdigit() and labels.SQUAD_SCORE_MIN <= int(s) <= labels.SQUAD_SCORE_MAX:
-                scores.append((cx_of(t), int(s)))
-            elif s in labels.SQUAD_POSITIONS:
+            if s in labels.SQUAD_POSITIONS:
+                # 位置词先判（精确匹配），避免「中锋5937」这种黏连框被当成评分
                 positions.append((cx_of(t), s))
+                continue
+            m = labels.SQUAD_SCORE_RE.search(s)
+            if m and labels.SQUAD_SCORE_MIN <= int(m.group(1)) <= labels.SQUAD_SCORE_MAX:
+                # 2026-11-14 实跑：OCR 会把评分和相邻文字黏在一起
+                # （`7929箱`、`中锋5937`），旧写法要求整框 `isdigit()`，
+                # 这两列直接丢了 → 只读到 3/5 个位置，队长评分读到 None、
+                # 达标判断永远「未达标」（logs/1114-230254_野上泷 第 1 局）。
+                scores.append((cx_of(t), int(m.group(1))))
             elif labels.SQUAD_RATING_RE.match(s):
                 ratings.append((cx_of(t), s))
         if not scores or not positions:

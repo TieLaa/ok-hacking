@@ -431,6 +431,10 @@ SQUAD_POSITIONS = ("控卫", "分卫", "小前", "大前", "中锋")
 SQUAD_RATING_RE = re.compile(r"^[SABCD]\s*[+\-]?$")
 SQUAD_SECTION_BAND = (0.55, 0.70)      # 这一段的 cy 才是球队评分行（画面比例）
 SQUAD_SCORE_MIN, SQUAD_SCORE_MAX = 1000, 15000
+# 评分数字：允许和相邻文字黏在一起（2026-11-14 实跑 OCR 读出过 `7929箱`）。
+# 只取第一段连续数字，范围由 SQUAD_SCORE_MIN/MAX 过滤，
+# 所以「672/3600」这类进度条不会被误当成评分。
+SQUAD_SCORE_RE = re.compile(r"(\d{3,5})")
 SQUAD_AWARD_MARKS = ("训练奖励", "恭喜获得")
 # 一局结束的**个人训练评分**弹层（2026-11-04 实跑 20:53:21 原样）：
 #     训练评分  7728  SS  点击屏幕继续

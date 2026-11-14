@@ -433,6 +433,37 @@ class SquadRatings(unittest.TestCase):
                          {"中锋": 4822, "控卫": 3028, "分卫": 3025,
                           "小前": 2915, "大前": 2917})
 
+    def test_glued_score_frames_are_parsed(self):
+        """OCR 把评分和相邻文字黏在一起时也要读到 5 个位置。
+
+        2026-11-14 实跑（logs/1114-230254_野上泷 第 1 局）：
+            ... | 大前 | 控卫 | 分卫 | 小前 | 中锋 | 中锋5937 | 元 |
+            7929箱 | 5813 | 5814 | 5735 | ...
+        旧写法要求整框 `isdigit()`，`7929箱` 和 `中锋5937` 被丢掉
+        → 只读到 3/5 个位置，队长（大前）评分读到 None，
+        达标判断永远「未达标」（收账日志：「野上泷 评分 None」）。
+        """
+        W, H = 1548, 871
+
+        def at(cx, cy, name, w=70, h=28):
+            return box(int(cx * W - w / 2), int(cy * H - h / 2), name, w, h)
+
+        texts = [at(0.294, 0.599, "中锋"), at(0.407, 0.599, "控卫"),
+                 at(0.524, 0.599, "分卫"), at(0.638, 0.599, "小前"),
+                 at(0.756, 0.599, "大前"),
+                 at(0.219, 0.639, "7929箱"),      # 黏了后缀
+                 at(0.336, 0.639, "5813"),
+                 at(0.450, 0.639, "5814"),
+                 at(0.565, 0.639, "5735"),
+                 at(0.679, 0.639, "中锋5937"),    # 黏了位置词
+                 at(0.80, 0.639, "672/3600"),     # 进度条，不是评分
+                 at(0.222, 0.603, "A")]           # 评级字母
+        task = task_with(texts, size=(W, H))
+        got = task.read_squad_ratings(texts)
+        self.assertEqual(len(got), 5, f"应该读到 5 个位置，实际 {got}")
+        self.assertEqual(sorted(got.values()), [5735, 5813, 5814, 5937, 7929])
+        self.assertNotIn(672, got.values(), "「672/3600」不是评分")
+
     def test_captain_score_lookup_uses_position(self):
         texts = award_page()
         task = task_with(texts, size=(1307, 735))
