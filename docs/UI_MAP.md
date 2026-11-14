@@ -56,15 +56,16 @@
 - **队友和标签都不参与**，**星期也不参与**：训练日的额外出行日走同一条门槛。
   队友气泡看不到品质（带队友的可能是根本不买的蓝卡），也看不到刷新后的批次
   （买一颗刷一批，下一批才冒队友），对「去不去」没有预测力。
-- 一处常量：`WEEKEND_WORK_MONEY_GATE = 360`（历史：300 → 270 → 360 → 200 试值 →
-  回滚 360；2026-11-13 试 200 时假设每次五折，实际折扣不是每次发生；
-  `WEEKEND_RICH_MONEY` 已删）。为什么是 360 见 `constants.py` 的注释。
+- 策略参数：`strategy/params.json` 的 `weekend.work_money_gate = 360`
+  （历史：300 → 270 → 360 → 200 试值 → 回滚 360；2026-11-13 试 200 时假设每次五折，
+  实际折扣不是每次发生；`WEEKEND_RICH_MONEY` 已删）。为什么是 360 见 `weekend._doc`。
 - 去了主地点但**没消费**（没钱 / 没买到 / 只剩蓝卡）→ 再去餐厅打工；买到东西 /
   玩完小游戏当天就结束，不再去餐厅。
 - 训练流周六：只有一个地点在打折就先进它（这段已不再被训练流用到——训练流不去步行街/游戏厅）。
 - 餐厅打工：默认选**当服务员**（右边、耗精力）；**桌游GM**（左边）的队友比它
   **多 2 个及以上**才改选桌游GM；当服务员精力不够就选桌游GM。
-- 代码：`constants.WEEKEND_PLAN / WEEKEND_MAIN_PLACE / WEEKEND_WORK_MONEY_GATE`、
+- 代码：`constants.WEEKEND_PLAN / WEEKEND_MAIN_PLACE`、`strategy/params.json` 的
+  `weekend.*`、
   `places/map.py: today_places / prefer_venue`、
   `places/restaurant.py: restaurant_preference`。
 

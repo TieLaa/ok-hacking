@@ -87,7 +87,7 @@
 ## 1. 出行地点：出门门槛只看零用钱（2026-11-10）
 
 实现：`places/map.py: today_places / prefer_venue`（`flow.weekend_priority` 是它的旧名）、
-`constants.WEEKEND_PLAN` / `WEEKEND_MAIN_PLACE` / `WEEKEND_WORK_MONEY_GATE`、
+`constants.WEEKEND_PLAN` / `WEEKEND_MAIN_PLACE`、`strategy/params.json` 的 `weekend.*`、
 `handle_weekend` / `handle_go_out`
 
 | 星期 | 流派 | 去哪（顺序 = 优先级，前一个走完再下一个） |
@@ -104,8 +104,8 @@
 | # | 条件 | 去哪 |
 |---|---|---|
 | 0 | 零用钱读不到 | 主地点（不拿打工赌今天的消费） |
-| 1 | 零用钱 < **360**（`WEEKEND_WORK_MONEY_GATE`） | 只去餐厅打工 |
-| 1b | **扭蛋流** + 步行街名字左侧有「打折！」+ 零用钱 ≥ **180**（`WEEKEND_DISCOUNT_MONEY_GATE`） | 去步行街消费（2026-11-14） |
+| 1 | 零用钱 < **360**（`weekend.work_money_gate`） | 只去餐厅打工 |
+| 1b | **扭蛋流** + 步行街名字左侧有「打折！」+ 零用钱 ≥ **180**（`weekend.discount_money_gate`） | 去步行街消费（2026-11-14） |
 | 2 | 零用钱 ≥ **360** | 主地点 |
 
 - **不分星期**：训练日的额外出行（一星野上泷的周五、二星的第 9/16/30 天）走同一条
@@ -124,7 +124,7 @@
   没折扣时只够买 2 颗，已回滚 360。
   2026-11-14 起：只有**地图明确贴了步行街「打折！」**才按 180 算
   （标签 = 当天确实打折的先验）；没标签仍按 360。折扣只覆盖部分卡时 180 可能买不满。
-  详见 `constants.WEEKEND_WORK_MONEY_GATE` 的注释。
+  详见 `strategy/params.json` 的 `weekend._doc`。
 - **训练流（2026-11-11 起）**：不再固定「周六步行街 → 游戏厅 → 公园」。
   按**精力缺口**（上限−当前）选动作：
   - 缺口 ≥ **30**（`周末划船缺口`）→ 公园；公园里缺口 ≥ **70**
@@ -535,7 +535,7 @@
 - 训练日精力 < 阈值 → 休息（`flow.rest_threshold`）：
   - 平时：策略参数 `rest.stamina_threshold`（`strategy/params.json`，默认 50）；
   - **周四**（2026-11-04 用户口径：原来的「周二 65」改到这里）：**扭蛋流 / 小游戏流**
-    有硬阈值 **60**（`THURSDAY_REST_THRESHOLD_BY_STYLE`），取 `max(参数值, 60)`；
+    有硬阈值 **60**（`rest.thursday_threshold_by_style`），取 `max(参数值, 60)`；
     **训练流 / 商店流周四没有任何特殊限制**，只遵守 `rest.stamina_threshold`；
   - **周二没有任何特殊阈值**（旧的「周二 65」「周二一律 60」都已删除），
     任何流派周二都只遵守 `rest.stamina_threshold`。

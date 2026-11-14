@@ -31,8 +31,12 @@ from ok.feature.Box import Box  # noqa: E402
 from tools.check_handlers import DryRunTask  # noqa: E402
 from src.tasks.training.parsers import (  # noqa: E402
     CRIT_RING_FACTOR, CRIT_RING_MIN, ring_is_border)
-from src.tasks.training.constants import (  # noqa: E402
-    WEEKEND_DISCOUNT_MONEY_GATE, WEEKEND_PLAN, WEEKEND_WORK_MONEY_GATE)
+from src.tasks.training import params  # noqa: E402
+from src.tasks.training.constants import WEEKEND_PLAN  # noqa: E402
+
+# 门槛已进策略参数表：测试按当前值取边界，不写死 360/180。
+WEEKEND_WORK_MONEY_GATE = int(params.get("weekend.work_money_gate"))
+WEEKEND_DISCOUNT_MONEY_GATE = int(params.get("weekend.discount_money_gate"))
 from src.tasks.training.attributes import subject_priority  # noqa: E402
 from src.tasks.training.places.map import WeekendStep  # noqa: E402
 from src.tasks.ui import topbar_day  # noqa: E402
@@ -4648,7 +4652,7 @@ class StylePlanRules(unittest.TestCase):
     def test_thursday_rest_threshold_by_style(self):
         """周四硬阈值只对**扭蛋流 / 小游戏流**生效（60）；其它流派周四没有特殊限制。
 
-        用户 2026-11-04 口径（constants.THURSDAY_REST_THRESHOLD_BY_STYLE）：
+        用户 2026-11-04 口径（`params: rest.thursday_threshold_by_style`）：
         「周二的 65 改成周四精力低于 60 就休息」，流派白名单不变
         （扭蛋流 / 小游戏流）。**周二现在没有任何特殊阈值。**
         """
@@ -4665,10 +4669,19 @@ class StylePlanRules(unittest.TestCase):
             self.assertEqual(limit(style, "二"), 50, style)
             self.assertEqual(limit(style, "五"), 50, style)
             self.assertEqual(limit(style, "一"), 50, style)
-        # 参数调得更高时以参数为准（取 max，不能因为周四就下调）
+        # 参数调得更高时以参数为准（取 max，不能因为周四就下调）；
+        # 只覆盖基础阈值，周四的按流派表保持不变
         from unittest import mock
+        from src.tasks.training import params as _params
+        real_get = _params.get
+
+        def base_80(path, default=None):
+            if path == "rest.stamina_threshold":
+                return 80
+            return real_get(path, default)
+
         for style in ("扭蛋流", "小游戏流", "训练流"):
-            with mock.patch("src.tasks.training.params.get", return_value=80):
+            with mock.patch("src.tasks.training.params.get", side_effect=base_80):
                 task = FakeTask([])
                 task._style = style
                 self.assertEqual(task.rest_threshold("四"), 80, style)
