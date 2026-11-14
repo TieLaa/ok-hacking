@@ -118,6 +118,17 @@ SIGNATURES = {
     "captain": ((Exact("训练核心"),),),
     # 公告页
     "announcement": (("公告",),),
+    # 扭蛋页的说明文字里也会出现「体能」「投射」等词
+    # （例：「所有小游戏额外获得20点体能」）—— 不排除掉会被当成科目页，
+    # 然后疯狂点卡片、点确定（2026-10-25 死循环）。
+    "gacha_page": (("扭蛋", "本局训练中", "小游戏强化",
+                   "器材熟练度", "熟练度"),),
+    # 「专属页面」的聚合签名：这些页面上也有 2~3 张上色卡，
+    # 但点下去会花钱或改阵容 —— 未登记卡兜底（handle_unmarked_cards）不能碰。
+    # 2026-11-03 实跑暴露：扭蛋/商店/游戏厅/地图/餐厅/队伍/结算都会被兜底抢走。
+    # 原来这 36 个词写在 `labels.QUALITY_CARD_EXCLUDE`，由那个 handler 自己判断；
+    # 现在收口到这里，各页面只声明一次。
+    "exclusive_page": (labels.QUALITY_CARD_EXCLUDE,),
 }
 
 
@@ -158,3 +169,8 @@ def page_is_other(task, texts, page):
         if other != page:
             return True
     return False
+
+
+def page_has(task, texts, page):
+    """这一帧命中了**指定**页面的签名吗（只看这一页）。"""
+    return page in matched_signatures(task, texts)

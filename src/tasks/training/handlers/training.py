@@ -9,7 +9,7 @@ import time
 
 from ok.feature.Box import Box
 
-from src.tasks.training import attributes, roster
+from src.tasks.training import attributes, page_signatures, roster
 from src.tasks.ui import labels
 from src.tasks.ui import zoom_reread
 
@@ -399,11 +399,13 @@ class TrainingHandlers:
         # 只按科目名匹配会把商店当成科目页（实训 2026-10-26，400 步全耗在商店里）。
         if self.match_text(texts, "失败率") is None:
             return False
-        if self.match_text(texts, ("上新时间", "能力详情")) is not None:
+        # 商店 / 扭蛋页的特征收口到 `page_signatures`（阶段 2）：
+        # 「上新时间/能力详情」= 商店内页；「扭蛋/本局训练中/小游戏强化/
+        # 器材熟练度/熟练度」= 扭蛋页说明文字（2026-10-25 死循环：
+        # 扭蛋页说明里也有「体能」「投射」，被当成科目页后疯狂点卡片）。
+        if page_signatures.page_has(self, texts, "shop"):
             return False
-        # 扭蛋/加成页的说明文字里也会出现「体能」「投射」等词（例：「所有小游戏额外获得20点体能」），
-        # 不排除掉就会被当成科目页，然后疯狂点卡片、点确定（实训 2026-10-25 死循环）。
-        if self.match_text(texts, ("扭蛋", "本局训练中", "小游戏强化", "器材熟练度", "熟练度。")) is not None:
+        if page_signatures.page_has(self, texts, "gacha_page"):
             return False
 
         # 已经点过「决定」但界面还没切走：补点决定，别重新探测一遍
