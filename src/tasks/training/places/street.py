@@ -225,6 +225,7 @@ class StreetPlace:
                 # 「延迟满足」的效果是「5天后，全队成员获得全属性+13」，
                 # 实际是全属性卡（78 点），卡名认不出 → 归「其他专项」就输了。
                 target = attributes.effect_attr_target(c.get("effect"))
+            random_effect = attributes.is_random_effect(c.get("name"))
             if target and target not in ("ALL", "PREFERRED", "CASH"):
                 cap, cur = caps.get(target), attrs.get(target)
                 if (cap is not None and cur is not None
@@ -243,10 +244,13 @@ class StreetPlace:
                 continue
             c["score"] = score(c)
             # 属性子档（参考商店 `shop.pick_shop_item` 的 attr_sub）：
-            # 全属性 > 需求专项 > 推荐属性 > 其他专项。
+            # 全属性 > 需求专项 > 推荐属性 > 其他专项 > **随机效果**。
             # 「推荐属性」不再落进「其他」，否则同品质同价时会被卡片顺序
             # 决定胜负（2026-11-13 实跑：金弹跳升级包赢了金推荐属性++）。
-            c["attr_rank"] = (0 if target == "ALL"
+            # 2026-11-14：随机效果（偶然饮料 = 随机一个属性+N）降到最后一档，
+            # 期望值只有 N/6，还可能加到不需要的属性上。
+            c["attr_rank"] = (4 if random_effect
+                              else 0 if target == "ALL"
                               else 1 if target in required
                               else 2 if target == "PREFERRED" else 3)
             # 用户 2026-11-14：**增加零用钱的卡最高优先**（商店流/扭蛋流/小游戏流

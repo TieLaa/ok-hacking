@@ -561,11 +561,16 @@ class ShopPlace:
                        else self.SHOP_QUALITY_RANK.get(i.get("quality"), 9))
             # 2026-11-13：属性类内部 全属性 > 需求属性 > 专属饮料 > 奇妙秘籍 > 其他；
             # 缺口不足 `gap_limit` 的不买，过 `soft_cap` 的数值减半。
+            # 2026-11-14：**随机效果商品降到最后**（偶然饮料 = 随机一个属性+N，
+            # 期望值只有 N/6，还可能加到不需要的属性上）。
+            # 「专属饮料」（两个推荐属性+N）是**确定的**，保持原档。
             attr_sub = 0
             value = self.shop_value(i)
             if cat == "attribute":
                 target = self.shop_attr_target(i["name"])
-                if target == "ALL":
+                if attributes.is_random_effect(i["name"]):
+                    attr_sub = 5
+                elif target == "ALL":
                     attr_sub = 0
                 elif target in required:
                     attr_sub = 1

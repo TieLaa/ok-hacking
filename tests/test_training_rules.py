@@ -557,10 +557,14 @@ class GachaRules(unittest.TestCase):
         （日志原文 `随机加成(金·+队友/90币/200)、体能增加++(金/90币/201)`）。
         「+」只表示**同名卡片**之间的档位差，没「+」的同名卡本来就是紫/蓝，
         已经由品质体现，不能再算一次分 → 同分时队友胜出，必须点中间那张。
+
+        注：中间那张原本叫「随机加成」，2026-11-14 起**随机效果卡降档**
+        （`is_random_effect`），会排到最后 —— 那条规则另有测试覆盖。
+        这里换成确定效果的「运控增加++」，保持本测试只验「+」不计分。
         """
         task = FakeTask(gacha_texts([
             ("运控增加+", "主力运控+48，队友属性中幅提升"),
-            ("随机加成", "训练主力随机一项属性+80，队友属性大幅提升"),
+            ("运控增加++", "主力运控+72，队友属性大幅提升"),
             ("体能增加++", "主力体能+72，队友属性大幅提升"),
         ], stamina="105/130", money="561",
             price=[("80", "70"), ("100", "90"), ("100", "90")]),
@@ -5570,6 +5574,28 @@ class PurchaseRules(unittest.TestCase):
             required={"弹跳"}, attrs={"弹跳": 1500},
             caps={"弹跳": 1575}, gap_limit=100)
         self.assertIsNone(best)
+
+    def test_random_effect_item_ranked_last(self):
+        """随机效果商品（偶然饮料）排最后；专属饮料是确定的、不降档。
+
+        2026-11-14 用户口径：偶然饮料 = 随机一个属性+N，期望值只有 N/6；
+        专属饮料 = 两个推荐属性+N，效果**确定**，保持原档。
+        """
+        from src.tasks.training.attributes import is_random_effect
+        self.assertTrue(is_random_effect("偶然饮料+"))
+        self.assertTrue(is_random_effect("随机加成"))
+        self.assertFalse(is_random_effect("专属饮料+"))
+        self.assertFalse(is_random_effect("弹跳秘籍+"))
+
+    def test_shop_random_drink_ranked_after_determined(self):
+        task, texts = self._shop(
+            [("偶然饮料+", 50), ("弹跳秘籍+", 100)], money=200, week=6,
+            quality="紫")
+        task.info["attrs"] = {"弹跳": 800}
+        task._attr_caps = {"弹跳": 1575}
+        self.assertTrue(task.handle_shop(texts))
+        log = "".join(task.logs)
+        self.assertIn("买「弹跳秘籍+」", log)
 
     def test_shop_week7_skips_paid_drink(self):
         """2026-11-13 用户口径：第 7 周（赛季末）不再买付费的牛奶/精力。
