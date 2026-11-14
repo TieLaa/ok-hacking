@@ -23,14 +23,31 @@
 from src.tasks.ui import Defs, labels
 
 # 页面 ID → 优先级（数字越小越先；和 HANDLERS 的顺序保持同一口径）
+#
+# 排法原则（2026-11-14 回放修正）：**独有整句标题**的页面排在前面，
+# 靠通用关键词认的页面排在后面。
+# 反例：技能三选一页的卡片说明里有「得分」（技能效果描述），
+# 比赛结算页也按「得分」认 —— 谁在前谁赢。
+# 独有标题（整句、只出现在那一页）：
+#   请选择1个技能 / 请选择一种加强训练 / 赛前准备 / XX的训练计划 / 请选择1个扭蛋
 PRIORITY = {
     "game_title": 10,
     "construction": 20,
-    "register_player": 30,
-    "result": 35,
-    "training_subject": 40,
-    "event_choice": 50,
-    "weekend_map": 60,
+    "register_player": 25,
+    "result": 30,
+    # --- 以下四个是独有整句标题 ---
+    "boost_training": 35,
+    "prepare": 40,
+    "skill_select": 42,
+    "result_page": 45,
+    "training_plan": 48,
+    # --- 以下靠通用关键词，排在标题页之后 ---
+    "match_result": 50,
+    "boost_status": 52,
+    "training_subject": 55,
+    "event_choice": 60,
+    "weekend_map": 65,
+    "go_out": 66,
     "restaurant": 70,
     "street": 80,
     "park": 90,
@@ -73,9 +90,131 @@ def _is_register_player(task, texts):
 
 
 def _is_training_subject(task, texts):
+    """训练科目页：「失败率」+ 右边有个 2~3 字的按钮。
+
+    2026-11-14 回放修正：原来要求 `confirm` 区（右上）整框是「决定」，
+    但科目页的「决定」在**最右边**（cx≈0.95），而且 **cy 随选中科目移动**
+    （0.34~0.83 都有 —— 右侧是纵向滚动的科目列表，「决定」跟着选中项走），
+    所以固定区域框不住它。
+    而且 OCR 常把它读成「快定」（实跑帧里 113 帧如此，占 16%）。
+
+    加「快定」到词表是治标 —— OCR 错读会一直变。改成**形态判据**：
+    失败率 + 最右边（cx>0.85）有一个 2~3 字的**汉字**框。
+    左边（cx≈0.13）那些是队友名（望月/真崎/希雅），也是 2~3 字汉字，
+    靠 cx 区分；「Lv.1」「MAX」是等级，靠「只含汉字」排除。
+    """
     if task.match_text(texts, "失败率") is None:
         return False
-    return task.exact_text(texts, labels.BUTTONS["decide"]) is not None
+    for t in texts:
+        s = t.name.strip()
+        if not (2 <= len(s) <= 3):
+            continue
+        if not all("\u4e00" <= c <= "\u9fff" for c in s):
+            continue
+        if (t.x + t.width / 2) / task.width <= 0.85:
+            continue
+        return True
+    return False
+
+
+def _is_match_result(task, texts):
+    """比赛结算页：比分大字 + 统计表头 + 奖励弹层。
+
+    2026-11-14 回放：4116 帧里 286 帧属于这一页，原先全部掉进 unknown。
+    统计词要**≥2 个**才算 —— 技能三选一页的卡片说明里也出现「得分」
+    （技能效果描述），单看一个词会把那一页抢走。
+
+    这一页有三个变体，锚点各不相同：
+      - 完整结算：「胜利 26 20」+ 得分/篮板/助攻 统计表
+      - 目标达成：「目标达成」+「获得奖励」
+      - 胜利结算：「战胜XX学校」+「获得奖励」
+
+    「失败」不能用：训练科目页的「失败率 27%」含「失败」
+    （docs/shots/2026-10-26-subject-crit.png 就是这样被抢走的）。
+    """
+    if task.match_text(texts, "失败率") is not None:
+        return False
+    if task.match_text(texts, ("胜利", "失败", "结算", "目标达成")) is not None:
+        return True
+    if task.match_text(texts, "获得奖励") is not None:
+        return True
+    stats = [w for w in ("得分", "篮板", "助攻", "盖帽", "抢断")
+             if task.match_text(texts, w) is not None]
+    return len(stats) >= 2
+
+
+def _is_boost_training(task, texts):
+    """加强训练二选一：标题「请选择一种加强训练」。
+
+    这是这一页独有的标题（`handlers/training.py: handle_boost_training`
+    的判据），其它页面不会有这句整句。
+    """
+    return task.match_text(texts, "请选择一种加强训练") is not None
+
+
+def _is_prepare(task, texts):
+    """赛前准备页：标题「赛前准备」+（跳过比赛 / 前往比赛）。
+
+    两个词同时出现才算 —— 单看「跳过比赛」会撞活动赛赛程页。
+    """
+    if task.match_text(texts, "赛前准备") is None:
+        return False
+    return task.match_text(texts, ("跳过比赛", "前往比赛")) is not None
+
+
+def _is_skill_select(task, texts):
+    """技能三选一：标题「请选择1个技能」。
+
+    这一页原来完全没登记（4116 帧里 45 帧，100% 被 event_choice 抢走）。
+    「请选择1个技能」是这一页独有的标题。
+    """
+    return task.match_text(texts, "请选择1个技能") is not None
+
+
+def _is_result_page(task, texts):
+    """活动/打工结算页：「成功！」+「下一步」。
+
+    和 `match_result`（比赛结算）分开：这一页是**地点活动**的结算
+    （划船/野餐/打工），没有比分统计，只有「成功！」和奖励。
+
+    2026-11-14 回放修正：原来只认「成功！/成功!」两个词形，
+    但 OCR 把「成功」读成过「成动」「茂功」「俄动」（实测 111/16/1/1 次），
+    19 帧因此掉进 unknown。改成形态判据：整框 2~3 字，
+    含「功」或「动」字（成功 / 感动 / 激动的客人 / 成功）。
+    """
+    if task.match_text(texts, "下一步") is None:
+        return False
+    for t in texts:
+        s = t.name.strip()
+        if not (2 <= len(s) <= 3):
+            continue
+        if "功" in s or "动" in s:
+            return True
+    return False
+
+
+def _is_training_plan(task, texts):
+    """训练计划（日历）页：左上角标题「XX的训练计划」。
+
+    必须整框（`plan_title` 区域）：训练日台词「今天的训练计划，我看看」
+    也含这四个字，包含匹配会把台词当标题。
+    """
+    for t in task.texts_in_region(texts, "plan_title"):
+        if labels.PLAN_TITLE_RE.match(t.name.strip()):
+            return True
+    return False
+
+
+def _is_go_out(task, texts):
+    """周末首页：有「出行」大按钮（地图上没有）。
+
+    和 `weekend_map`（出行地图，整框地点名 ≥2）分开 ——
+    2026-11-14 拆分：两者是**两个页面**，之前合并导致 42% 的地图帧
+    被当成首页（首页有「出行」，地图没有）。
+    """
+    if len(_short_place_names(texts)) >= 2:
+        return False
+    return task.exact_text(texts, ("出行",)) is not None
 
 
 def _choice_buttons(task, texts):
@@ -151,6 +290,24 @@ def _has_centered_choices(task, texts):
     return True
 
 
+def _is_boost_status(task, texts):
+    """加成状态页：底部列着「表情加成 / 倍率加成 / 属性加成 / 额外队友」等增益标签。
+
+    2026-11-14 回放：4116 帧里有 56 帧属于这一页，之前全掉进 unknown，
+    被 `handle_event_choice` 兜底认领。它和事件选项页长得像（都在底部属性
+    面板上方），但**没有可点选项**。
+
+    只认**标签**词，不能用泛词「加成」—— 正文里到处是「加成」
+    （「器材加成-70熟练度」「训练加成状态」「暴击训练的加成」都是效果描述，
+    见 `logs/.../1112-002441_handle_event_choice.jpg`）。
+    """
+    for t in texts:
+        s = t.name.strip()
+        if len(s) <= 6 and (s.endswith("加成") or s in ("额外队友", "Bonus", "Bonus:")):
+            return True
+    return False
+
+
 def _is_event_choice(task, texts):
     """事件选项：**成行的黄色选项按钮**（≥2 个），且不是邻居页面。
 
@@ -193,13 +350,37 @@ def _is_weekend_map(task, texts):
     return len(_short_place_names(texts)) >= 2
 
 
+def _is_training_plan(task, texts):
+    """训练计划（日历）页：左上角标题「XX的训练计划」。
+
+    2026-11-14 回放修正：原来用 `labels.PLAN_TITLE_RE` 匹配**整框**，
+    但那一页的标题被 OCR 拆成两个框 —— 角色名「真崎」一个框、
+    「的训练计划」另一个框（实测 4 张存证帧全是这样），所以整框正则
+    永远不中，35 帧全掉进 restaurant（活动格里也写着「当服务员」）。
+
+    改成：plan_title 区域里有「的训练计划」这个框就算。
+    区域限定仍要保留 —— 训练日台词「今天的训练计划，我看看」也含这四个字，
+    但它不在左上角标题区（`parsers.read_plan_captain` 用同一招）。
+    """
+    for t in task.texts_in_region(texts, "plan_title"):
+        if "的训练计划" in t.name:
+            return True
+    return False
+
+
 def _is_restaurant(task, texts):
     """餐厅内页：标题是「在餐厅 / 桌游GM / 当服务员」之一。
 
     但**详情页**（点开某个打工项）也算餐厅流程 —— 那页有「前往当服务员」，
     同样属于餐厅 handler 的工作范围。
+
+    2026-11-14 回放修正：日历页（训练计划）的活动格里也写着「当服务员」
+    「桌游GM」「野餐」—— 32 帧因此被误判成餐厅页。
+    排除：训练计划页有自己独有的左上角标题。
     """
     if task.exact_text(texts, labels.RESTAURANT_TITLE) is not None:
+        if _is_training_plan(task, texts):
+            return False
         return True
     return task.match_text(texts, ("前往当服务员", "前往桌游GM")) is not None
 
@@ -296,12 +477,21 @@ _ANCHORS = {
     "training_subject": _is_training_subject,
     "event_choice": _is_event_choice,
     "weekend_map": _is_weekend_map,
+    "go_out": _is_go_out,
     "restaurant": _is_restaurant,
     "street": _is_street,
     "park": _is_park,
     "shop": _is_shop,
     "result": _is_result,
     "story_arrow": _is_story_arrow,
+    # --- 2026-11-14 补登记（依据 4116 张实跑存证帧回放）---
+    "match_result": _is_match_result,
+    "boost_status": _is_boost_status,
+    "boost_training": _is_boost_training,
+    "prepare": _is_prepare,
+    "skill_select": _is_skill_select,
+    "result_page": _is_result_page,
+    "training_plan": _is_training_plan,
 }
 
 

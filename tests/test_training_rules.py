@@ -1938,6 +1938,32 @@ class PageRegistry(unittest.TestCase):
                             f"{page} 没有一张图被正确认领")
         self.assertGreaterEqual(len(groups), 8)
 
+    def test_replay_real_shots_match_expected_page(self):
+        """实跑存证帧回放：认对率不能低于 90%。
+
+        这是页面分类器的**主回归网**（`docs/shots/` 那 50 张覆盖面太窄）。
+        数据源是真实对局留下的 4000+ 张存证帧，文件名自带 handler 名
+        = 现成的 ground truth。2026-11-14 首次跑只有 38.6%，
+        补完页面锚点后 95.7%。
+
+        OCR 结果缓存在 `logs/dev/.replay_cache.json`，第一次跑要几分钟；
+        缓存不在时**跳过**（CI 上没有存证帧，跑不了）。
+        """
+        if cv2 is None:
+            self.skipTest("没有 cv2")
+        import os
+        from tools import check_pages
+        if not os.path.exists(check_pages.CACHE):
+            self.skipTest("没有实跑存证帧缓存，跳过回放")
+        before = len(check_pages.load_cache())
+        rate, _ok = check_pages.run(sample=False, min_rate=0.0)
+        after = len(check_pages.load_cache())
+        self.assertTrue(rate, "回放没跑起来")
+        if after == before:
+            # 缓存没变 → 帧都在，认对率是真的
+            self.assertGreaterEqual(rate, 90.0,
+                                    "实跑存证帧认对率掉到 %.1f%%（门槛 90%%）" % rate)
+
     def test_weekend_map_needs_two_place_labels(self):
         from src.tasks.training.pages import classify_page
         texts = [box(100, 300, "公园", 120, 40),
