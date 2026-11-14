@@ -12,3 +12,5 @@ requirements.txt
 README.md
 assets
 pyappify.yml
+CHANGELOG.md
+CHANGELOG.zh-CN.md
