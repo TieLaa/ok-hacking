@@ -344,12 +344,26 @@ class WeekendHandlers:
         if not texts:
             return None
         name = item["name"]
+        # 详情面板的**第一行**是商品名（实测 cy=0.276，cx≈0.80），
+        # 效果文案在 cy≈0.58，中间是商品图。所以标题只从第一行里取。
         title = None
-        for t in texts:
+        title_row = [t for t in texts
+                     if self.SHOP_DETAIL_TITLE_ROW[0] <=
+                     (t.y + t.height / 2) / self.height <= self.SHOP_DETAIL_TITLE_ROW[1]]
+        for t in title_row:
             s = (t.name or "").strip()
             if s and (s == name or name in s or s in name):
                 title = s
                 break
+        if title is None:
+            # OCR 错字：商品卡名读成「大乐边」、详情标题读成「大乐透」。
+            # 2026-11-14 实跑：严格比对判不出来 → 详情整段作废 →
+            # 这张 60 币的现金类（大乐透）既没买也没进正常流程。
+            for t in title_row:
+                s = (t.name or "").strip()
+                if s and labels.name_matches_loose(name, s):
+                    title = s
+                    break
         if title is None:
             self.log_debug(f"商店：点「{name}」后详情标题对不上 → 不采信")
             return None

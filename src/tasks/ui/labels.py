@@ -84,6 +84,50 @@ def name_matches(want, name):
     return a in b or b in a
 
 
+def name_matches_loose(want, name, max_diff=1):
+    """两个商品名是不是同一个 —— 在 `name_matches` 之外**容忍 1 个字的 OCR 错**。
+
+    2026-11-14 实跑：商品「大乐透」被 OCR 读成「大乐边」，`name_matches`
+    判不出来 → 详情面板的标题校验失败 → 详情整段作废 → 这张卡既不是
+    现金类（没买）也没进未登记样本的正常流程，白丢一次必拿的 60 币。
+
+    只用于**商品/卡片名**这种短词：编辑距离 ≤ 1 且长度 ≥ 3 才算命中，
+    避免「意识」和「意织」这种短词误配。
+    """
+    a, b = norm_name(want), norm_name(name)
+    if not a or not b:
+        return False
+    if a in b or b in a:
+        return True
+    if min(len(a), len(b)) < 3:
+        return False
+    return _edit_distance_le1(a, b)
+
+
+def _edit_distance_le1(a, b):
+    """两个字符串的编辑距离是否 ≤ 1（只允许插入/删除/替换各一次）。"""
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la == lb:
+        diff = sum(1 for x, y in zip(a, b) if x != y)
+        return diff <= 1
+    # 长度差 1：短的那个必须是长的删一个字符后的结果
+    short, long = (a, b) if la < lb else (b, a)
+    i = j = 0
+    skipped = False
+    while i < len(short) and j < len(long):
+        if short[i] != long[j]:
+            if skipped:
+                return False
+            skipped = True
+            j += 1
+            continue
+        i += 1
+        j += 1
+    return True
+
+
 # ---------- 已知文本（页面/选项文案）----------
 WEEKEND_PLACES = ("餐厅", "游戏厅", "公园", "步行街")
 # 周末子页面

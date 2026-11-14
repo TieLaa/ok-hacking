@@ -36,8 +36,15 @@ from src.tasks.training.places.map import WeekendStep  # noqa: E402
 from src.tasks.ui import topbar_day  # noqa: E402
 
 
-def box(x, y, name, w=240, h=60):
-    return Box(x=x, y=y, width=w, height=h, name=name)
+def box(x, y, name, w=240, h=60, conf=None):
+    """构造一个 OCR 文本框。
+
+    `conf=None` 时**不传** confidence（Box 默认 1.0）——
+    传 None 会让 `drop_icon_noise` 的 `confidence < 阈值` 比较炸掉。
+    """
+    if conf is None:
+        return Box(x=x, y=y, width=w, height=h, name=name)
+    return Box(x=x, y=y, width=w, height=h, name=name, confidence=conf)
 
 
 def tick_boost(task, texts, ticks=2):
@@ -404,6 +411,56 @@ class GachaRules(unittest.TestCase):
         task._style = "扭蛋流"
         self.assertTrue(task.handle_street(task._texts))
         self.assertNotEqual(task.actions[0][1], 1100)   # 不是小游戏强化+
+
+    def test_shop_name_uses_fixed_row_above_price(self):
+        """商品名取**价格正上方固定距离**处的框（2026-11-14 用户口径）。
+
+        实跑「大乐透」卡上 OCR 读到卡名「透」(cy 0.277) 和卡内图标上的
+        「边」(cy 0.344)，两者只差 0.067 —— 靠置信度或「最靠上」都会选错。
+        位置固定且有排他性：卡名永远在价格正上方 ≈0.20 处
+        （第一行 名0.277/价0.479，第二行 名0.543/价0.746）。
+        """
+        w, h = 1920, 1080
+        texts = [
+            # 第一张卡：卡名 + 图标上的错字 + 价格
+            box(int(w * 0.223) - 60, int(h * 0.277) - 20, "大乐透", 120, 40),
+            box(int(w * 0.223) - 60, int(h * 0.344) - 15, "大乐边", 120, 30),
+            box(int(w * 0.223) - 30, int(h * 0.479) - 15, "60", 60, 30),
+        ]
+        task = FakeTask(texts)
+        items = task.read_shop_items(texts)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["name"], "大乐透")
+
+    def test_shop_second_row_name_also_found(self):
+        """第二行的卡名靠「相对价格的距离」定位，不是固定 cy 区间。"""
+        w, h = 1920, 1080
+        texts = [
+            box(int(w * 0.223) - 60, int(h * 0.543) - 20, "专属饮料", 120, 40),
+            box(int(w * 0.223) - 60, int(h * 0.610) - 15, "专属饮科", 120, 30),
+            box(int(w * 0.223) - 30, int(h * 0.746) - 15, "60", 60, 30),
+        ]
+        task = FakeTask(texts)
+        items = task.read_shop_items(texts)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["name"], "专属饮料")
+
+    def test_shop_detail_title_tolerates_one_wrong_char(self):
+        """详情标题 OCR 差一个字也要认（大乐边 vs 大乐透）。"""
+        from src.tasks.ui import labels
+        self.assertTrue(labels.name_matches_loose("大乐边", "大乐透"))
+        self.assertTrue(labels.name_matches_loose("大乐透", "大乐边"))
+        self.assertFalse(labels.name_matches_loose("意织", "意识"))
+
+    def test_shop_money_card_bought_when_name_read_wrong(self):
+        """名字读错时，详情里的「零用钱」仍要把它认成现金类并买下。"""
+        task = FakeTask([])
+        items = [{"name": "大乐边", "price": 60, "quality": "金", "y": 300,
+                  "detail": "随机获得20~200零用钱",
+                  "detail_category": "cash"}]
+        pick, why = task.pick_shop_item(items, money=190, policy="红包→彩→金→紫")
+        self.assertIsNotNone(pick)
+        self.assertEqual(pick["name"], "大乐边")
 
     def test_money_card_beats_quality(self):
         """2026-11-14 用户口径：增加零用钱的卡最高优先（扭蛋流）。
