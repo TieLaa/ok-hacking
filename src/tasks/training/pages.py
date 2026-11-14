@@ -65,11 +65,12 @@ PRIORITY = {
     # 度假页要在 story_arrow 之前 —— 它也有右下角 ▼，但要点的是主按钮
     "vacation": 62,
     "captain_filter": 63,
+    "breath_difficulty": 64,
     # --- 靠通用关键词，排在标题页之后 ---
-    "match_result": 64,
-    "boost_status": 65,
-    "training_subject": 66,
-    "event_choice": 67,
+    "match_result": 65,
+    "boost_status": 66,
+    "training_subject": 67,
+    "event_choice": 68,
     "weekend_map": 66,
     "go_out": 67,
     "restaurant": 70,
@@ -266,6 +267,17 @@ def _is_training_hub(task, texts):
     """
     action = task.texts_in_region(texts, "main_action")
     return task.match_text(action, ("VS", "比赛", "训练")) is not None
+
+
+def _is_breath_difficulty(task, texts):
+    """憋气难度页：标题「选择憋气难度」。
+
+    2026-11-14 实跑：这一页被认成 `event_choice`（三张卡的形态一样），
+    路由先试 event_choice 失败后才落到 `handle_breath_difficulty` ——
+    行为对，但分类日志不准，且万一 event_choice 命中就会抢走。
+    标题是这一页独有的。
+    """
+    return task.match_text(texts, "选择憋气难度") is not None
 
 
 def _is_popup(task, texts):
@@ -761,6 +773,7 @@ _ANCHORS = {
     "vacation": _is_vacation,
     "captain_filter": _is_captain_filter,
     "training_hub": _is_training_hub,
+    "breath_difficulty": _is_breath_difficulty,
 }
 
 

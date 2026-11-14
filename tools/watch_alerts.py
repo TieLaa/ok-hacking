@@ -22,7 +22,7 @@ LOG = os.path.join(ROOT, "logs", "run.log")
 TS = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d{3}")
 PAGE = re.compile(r"页面分类：(\S+) → (\S+?)（候选 \[([^\]]*)\]）")
 HIT = re.compile(r"命中 (handle_\w+)（第 (\d+) 步）")
-BAD = re.compile(r"(异常|停止任务|硬卡|noresp|未能识别|死循环|推不动|接管)")
+BAD = re.compile(r"(异常|停止任务|硬卡|noresp|未能识别|死循环|推不动|立刻接管")
 
 # 页面 → 期望的 handler（和 src/tasks/training/page_handlers.py 同源）
 EXPECT = {

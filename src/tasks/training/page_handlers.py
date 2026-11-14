@@ -56,6 +56,7 @@ PAGE_HANDLERS = {
     "popup": "handle_popup",
     "story_arrow": "handle_story_arrow",
     "vacation": "handle_vacation",
+    "breath_difficulty": "handle_breath_difficulty",
 }
 
 # 一个页面对应**多个** handler 时，按顺序表里的先后列出。
