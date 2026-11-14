@@ -108,6 +108,64 @@ def is_money_card(name):
     return any(k in name for k in MONEY_CARD_NAMES)
 
 
+# ---------- 流派专属卡（2026-11-14 用户口径） ----------
+#
+# 有些卡的效果**只在特定流派下才兑现**，买了用不上就是白花：
+#   小游戏强化+ → 「本局训练中，所有小游戏都可以额外获得30点体能」
+#                  只有小游戏流去游戏厅才用得到；扭蛋流/商店流买了纯浪费。
+# 判据看**效果文本**里的场景词（卡名没有这些词）。
+#
+# 注意：场景词必须是**条件句**（「…中，所有小游戏…」「…时…」），
+# 不能是任意位置 —— 「器材暴击++」的效果是「接下来的训练中，器材的暴击
+# 加成提高20%」，含「训练中」但它对所有流派都有用（2026-11-14 实跑）。
+STYLE_ONLY_EFFECTS = {
+    "小游戏流": ("小游戏",),
+    "扭蛋流": ("扭蛋",),
+    "训练流": ("训练中", "训练时"),
+}
+
+
+def style_only_target(effect):
+    """这张卡的效果只对某个流派有效吗？返回流派名，认不出返回 None。
+
+    「本局训练中，所有小游戏…」—— 只有小游戏流去游戏厅才兑现。
+    """
+    text = (effect or "").replace(" ", "")
+    if not text:
+        return None
+    for style, words in STYLE_ONLY_EFFECTS.items():
+        if any(w in text for w in words):
+            return style
+    return None
+
+
+def is_other_style_card(name, effect, style):
+    """这张卡是不是「别的流派专属」？是 → 本流派不该买。
+
+    2026-11-14 用户口径：扭蛋流要排除小游戏卡（反之同理）。
+
+    判据：效果文本里出现**场景词**，且该词描述的是「玩什么才兑现」——
+    「所有小游戏都可以额外获得30点体能」= 小游戏流的专属卡；
+    「接下来的训练中，器材的暴击加成提高20%」= 器材收益，所有流派都有用，
+    不能因为含「训练中」就当成训练流专属。
+    """
+    text = (effect or "").replace(" ", "")
+    if not text:
+        return False
+    only = style_only_target(text)
+    if only is None:
+        return False
+    if only == (style or ""):
+        return False
+    # 「所有小游戏」「所有扭蛋」= 这张卡给所有该类玩法加成，
+    # 只有真的去玩那种玩法才兑现 → 别的流派买它就是白花。
+    if only == "小游戏流" and "所有小游戏" in text:
+        return True
+    if only == "扭蛋流" and "所有扭蛋" in text:
+        return True
+    return False
+
+
 def subject_priority(score, value=None, cap=None, y=0,
                      soft_cap=DEFAULT_SOFT_CAP, gap_limit=DEFAULT_GAP_LIMIT):
     """科目排序键（越大越优先）；返回 None = 排除。

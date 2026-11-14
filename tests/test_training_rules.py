@@ -349,6 +349,33 @@ class GachaRules(unittest.TestCase):
         self.assertTrue(task.handle_street(task._texts))
         self.assertEqual(task.actions[0][1], 1100)      # 中间那张全属性卡
 
+    def test_other_style_card_is_excluded(self):
+        """2026-11-14 用户口径：扭蛋流排除小游戏卡。
+
+        实跑：小游戏强化+（金，100币）效果是「本局训练中，所有小游戏都可以
+        额外获得30点体能」—— 扭蛋流不去游戏厅，买了纯浪费。
+        """
+        from src.tasks.training.attributes import is_other_style_card
+        effect = "本局训练中，所有小游戏都可以额外获得30点体能。队友属性大幅提升"
+        self.assertTrue(is_other_style_card("小游戏强化+", effect, "扭蛋流"))
+        self.assertFalse(is_other_style_card("小游戏强化+", effect, "小游戏流"))
+        # 器材暴击++ 含「训练中」但对所有流派都有用，不能当成训练流专属
+        self.assertFalse(is_other_style_card(
+            "器材暴击++", "接下来的训练中，器材的暴击加成提高20%。队友属性中幅提升",
+            "扭蛋流"))
+
+    def test_gacha_style_skips_arcade_card(self):
+        """扭蛋流遇到小游戏强化+ → 不买它，改选另一张。"""
+        task = FakeTask(gacha_texts([
+            ("延迟满足", "5天后，全队成员获得全属性+13"),
+            ("小游戏强化+", "本局训练中，所有小游戏都可以额外获得30点体能。队友属性大幅提升"),
+            ("投射增加+", "主力投射+48，队友属性大幅提升"),
+        ], stamina="128/130", money="344", price="80"),
+            qualities=["金", "金", "金"])
+        task._style = "扭蛋流"
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertNotEqual(task.actions[0][1], 1100)   # 不是小游戏强化+
+
     def test_money_card_beats_quality(self):
         """2026-11-14 用户口径：增加零用钱的卡最高优先（扭蛋流）。
 

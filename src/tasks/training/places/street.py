@@ -212,6 +212,12 @@ class StreetPlace:
             if why:
                 c["reject"] = why
                 continue
+            # 流派专属卡：效果只在别的流派下兑现 → 本流派不买（2026-11-14 用户口径：
+            # 扭蛋流要排除小游戏卡。小游戏强化+ 100 币，在扭蛋流里纯浪费）。
+            if attributes.is_other_style_card(c.get("name"), c.get("effect"),
+                                              self.style):
+                c["reject"] = f"{attributes.style_only_target(c.get('effect'))}流专属"
+                continue
             # 属性取向（2026-11-13）：该属性缺口不足阈值 → 不买（加了会溢出）。
             target = attributes.item_attr_target(c.get("name"))
             if target is None:
