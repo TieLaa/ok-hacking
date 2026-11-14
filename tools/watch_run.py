@@ -40,6 +40,15 @@ NOISE = (
 def read_new(path, offset):
     """从 offset 往后读新内容，返回 (新行列表, 新 offset)。"""
     try:
+        size = os.path.getsize(path)
+    except OSError:
+        return [], offset
+    # 日志轮转/截断：新文件比 offset 小 → 回到文件头重读。
+    # 2026-11-13 17:04 run.log 轮转（run.log → run.log.1，新文件从 0 写），
+    # watch_run 继续用旧偏移 seek，永远读不到新日志 → 误报 hard stall。
+    if size < offset:
+        offset = 0
+    try:
         with open(path, "rb") as f:
             f.seek(offset)
             data = f.read()
