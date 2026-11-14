@@ -450,10 +450,28 @@ class ShopPlace:
             pick = max(free_cash or paid_cash, key=lambda i: -i["y"])
             return pick, "必定优先拿（%s）" % pick["name"]
 
-        # 2026-11-14 用户口径：第 7 周周日**购买逻辑跟平时一样**，唯一区别是
-        # 允许买蓝色（白色仍不买）。不再限制「只买属性商品」；第 7 周的
-        # 牛奶/精力规则（LATE_SHOP_FROM_WEEK）照旧生效。
+        # 2026-11-14 用户口径（最后一周策略，**两层**）：
+        #   - **第 7 周整周**：不买器材、教科书、牛奶、精力（训练类兑现不了）；
+        #   - **第 7 周周日**（最后一场比赛）：同上，且属性商品**蓝色也买**。
+        # 所以周日 = 第 7 周规则 + 放开蓝色；不用去算「训练一天比赛一天」。
+        # 属性缺口、soft_cap 减半、余额、0 元商品规则照旧。
+        final_week = week is not None and week >= LATE_SHOP_FROM_WEEK
         final_match = week == SHOP_SEASON_WEEKS and day == "日"
+        if final_week:
+            items = [i for i in items
+                     if i["price"] == 0
+                     or self.item_category(i) not in ("equipment_boost",
+                                                      "textbook", "milk",
+                                                      "stamina")]
+            if not items:
+                return None, "最后一周：店里只剩器材/教科书/牛奶/精力，关店"
+        if final_match:
+            # 0 元（红包）白送，不算购买，照拿（和「0 元照拿」的既有口径一致）
+            items = [i for i in items
+                     if i["price"] == 0
+                     or self.item_category(i) == "attribute"]
+            if not items:
+                return None, "最后一场比赛：店里没有属性商品，关店"
 
         # 扭蛋流 / 小游戏流：前 6 周零花钱要留周末，只拿必拿（现金类，
         # 上面已经返回）；训练流 / 商店流不设周数限制，进店就按顺序买。

@@ -5575,6 +5575,8 @@ class PurchaseRules(unittest.TestCase):
         """2026-11-13 用户口径：第 7 周（赛季末）不再买付费的牛奶/精力。
 
         训练增益类在最后一周没价值了；0 元商品不受限（见下一条测试）。
+        2026-11-14 补充：第 7 周**整周**都过滤器材/教科书/牛奶/精力，
+        所以「只剩付费饮料」现在由**新规则**接管（关店理由不同）。
         """
         task, texts = self._shop([("精力饮料", 30), ("弹跳秘籍++", 100)],
                                  money=120, week=7)
@@ -5584,9 +5586,9 @@ class PurchaseRules(unittest.TestCase):
         # 只剩付费饮料 → 关店
         task, texts = self._shop([("精力饮料", 30)], money=120, week=7)
         self.assertTrue(task.handle_shop(texts))
-        self.assertIn("第 7 周不买牛奶/精力", "".join(task.logs))
+        self.assertNotIn("买「精力饮料」", "".join(task.logs))
 
-    # ---------- 第7周周日：购买逻辑跟平时一样，唯一放开蓝色 ----------
+    # ---------- 第7周周日：最后一场比赛，只买属性商品（蓝/白也买） ----------
 
     def test_final_match_buys_blue_attribute(self):
         """第7周周日：平时不买的蓝色属性，这时可以买。"""
@@ -5596,6 +5598,36 @@ class PurchaseRules(unittest.TestCase):
         task._attr_caps = {"弹跳": 1575}
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「弹跳秘籍+」", "".join(task.logs))
+
+    def test_final_week_skips_equipment_and_textbook(self):
+        """第 7 周整周：器材/教科书/牛奶/精力不买（2026-11-14 用户口径）。"""
+        task, texts = self._shop(
+            [("器材指导书", 80), ("弹跳教科书+", 100), ("弹跳秘籍+", 100)],
+            money=300, week=7, day="六", quality="金")
+        task.info["attrs"] = {"弹跳": 800}
+        task._attr_caps = {"弹跳": 1575}
+        self.assertTrue(task.handle_shop(texts))
+        log = "".join(task.logs)
+        self.assertIn("买「弹跳秘籍+」", log)
+        self.assertNotIn("买「器材指导书」", log)
+        self.assertNotIn("买「弹跳教科书+」", log)
+
+    def test_final_match_skips_equipment_and_textbook(self):
+        """第7周周日（最后一场比赛）：器材/教科书兑现不了 → 不买。
+
+        2026-11-14 用户口径恢复：a994fc0 定的「最后一场只买属性商品」，
+        被 e98140d（改成「跟平时一样」）误删了。
+        """
+        task, texts = self._shop(
+            [("器材指导书", 80), ("弹跳教科书+", 100), ("弹跳秘籍+", 100)],
+            money=300, week=7, day="日", quality="金")
+        task.info["attrs"] = {"弹跳": 800}
+        task._attr_caps = {"弹跳": 1575}
+        self.assertTrue(task.handle_shop(texts))
+        log = "".join(task.logs)
+        self.assertIn("买「弹跳秘籍+」", log)
+        self.assertNotIn("买「器材指导书」", log)
+        self.assertNotIn("买「弹跳教科书+」", log)
 
     def test_final_match_still_checks_attribute_gap(self):
         """缺口 < 缺口排除阈值 → 最后一场比赛也不买。"""
