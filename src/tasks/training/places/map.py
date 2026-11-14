@@ -22,8 +22,9 @@ from collections import namedtuple
 
 from src.tasks.training import params
 from src.tasks.training.constants import (
-    PARK_PICNIC_STAMINA, SHOP_SEASON_WEEKS, WEEKEND_MAIN_PLACE,
-    WEEKEND_PARK_GAP, WEEKEND_PLAN, WEEKEND_WORK_MONEY_GATE, WORK_STAMINA_COST)
+    PARK_PICNIC_STAMINA, SHOP_SEASON_WEEKS, WEEKEND_DISCOUNT_MONEY_GATE,
+    WEEKEND_MAIN_PLACE, WEEKEND_PARK_GAP, WEEKEND_PLAN, WEEKEND_WORK_MONEY_GATE,
+    WORK_STAMINA_COST)
 from src.tasks.ui import labels
 
 # 周末计划的一步：place=地点名，urgent=True=急招临时插队（不是今天的主计划）。
@@ -188,13 +189,18 @@ class MapPlace:
         两条决策链，**互斥**：
 
         **扭蛋流 / 小游戏流**（2026-11-10 用户口径，**取代** 2026-11-08 的 0~7 表）：
-        只看零用钱，和队友、标签、星期都无关 ——
+        先看零用钱，队友和星期都无关 ——
           - 读不到 → 主地点（不拿打工赌今天的消费）；
           - < `WEEKEND_WORK_MONEY_GATE`（360）→ **只去餐厅打工**；
+            例外（2026-11-14 用户口径）：**扭蛋流**遇到步行街名字左侧
+            「打折！」且零用钱 ≥ `WEEKEND_DISCOUNT_MONEY_GATE`（180）→
+            改去步行街。折后门槛 = 360 的一半，错过打折是实打实的损失。
+            游戏厅/餐厅的「打折」标签不适用；小游戏流本次不改。
           - ≥ 360 → 主地点。
         理由（一次步行街期望 3.3 颗、4 颗金 = 360 覆盖 78% 的触发轮次）见
         `constants.WEEKEND_WORK_MONEY_GATE` 的注释。2026-11-13 试过 200，
         但折扣不是每次发生，没折扣时只够买 2 颗，已回滚 360。
+        现在的 180 只在**地图确认今天打折**时生效，不是无条件降门槛。
 
         **训练流**（2026-11-11 起）**不再经过这里**：缺口 < 30 固定去餐厅打工，
         候选里已经没有步行街/游戏厅。下面这条「只有一边打折就先去那边」
@@ -229,6 +235,18 @@ class MapPlace:
             if money is None:
                 self.log_info(f"周末地点：零用钱读不到 → 去「{main}」")
             elif money < WEEKEND_WORK_MONEY_GATE:
+                # 2026-11-14 用户口径：钱不够 360 时，如果**步行街自己**在打折，
+                # 折后能买完，错过就是实打实的损失 → 改去步行街。
+                # 只认扭蛋流 + 步行街名字左侧的「打折」；游戏厅/餐厅的标签不改道。
+                if (self.style == "扭蛋流"
+                        and money >= WEEKEND_DISCOUNT_MONEY_GATE
+                        and self.venue_on_discount(
+                            texts, self._venue_box(texts, "步行街"))):
+                    self.log_info(
+                        f"周末地点：零用钱 {money} < {WEEKEND_WORK_MONEY_GATE}"
+                        f"，但步行街打折（折后门槛 {WEEKEND_DISCOUNT_MONEY_GATE}）"
+                        f" → 去「步行街」消费")
+                    return [main] + [p for p in places if p != main]
                 self.log_info(
                     f"周末地点：零用钱 {money} < {WEEKEND_WORK_MONEY_GATE}"
                     " → 只去「餐厅」打工")

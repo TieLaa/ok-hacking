@@ -31,7 +31,8 @@ from ok.feature.Box import Box  # noqa: E402
 from tools.check_handlers import DryRunTask  # noqa: E402
 from src.tasks.training.parsers import (  # noqa: E402
     CRIT_RING_FACTOR, CRIT_RING_MIN, ring_is_border)
-from src.tasks.training.constants import WEEKEND_WORK_MONEY_GATE, WEEKEND_PLAN  # noqa: E402
+from src.tasks.training.constants import (  # noqa: E402
+    WEEKEND_DISCOUNT_MONEY_GATE, WEEKEND_PLAN, WEEKEND_WORK_MONEY_GATE)
 from src.tasks.training.attributes import subject_priority  # noqa: E402
 from src.tasks.training.places.map import WeekendStep  # noqa: E402
 from src.tasks.ui import topbar_day  # noqa: E402
@@ -3865,16 +3866,41 @@ class WeekendMapRules(unittest.TestCase):
                 self.assertTrue(task.handle_weekend(texts), (style, mate, money))
                 self.assertEqual(task.actions[-1][1], want, (style, mate, money))
 
-    def test_labels_do_not_exempt_money_gate(self):
-        """标签（步行街打折 / 游戏厅打折 / 餐厅打折）都不豁免钱门槛。"""
-        for label in (self.STREET_DISCOUNT, self.ARCADE_DISCOUNT,
-                      self.RESTAURANT_DISCOUNT):
-            texts = (self._weekend_map("星期六", WEEKEND_WORK_MONEY_GATE - 1)
-                     + [label])
+    def test_street_discount_lowers_gate_for_gacha_style(self):
+        """2026-11-14 用户口径：步行街名字左侧有「打折！」→ 扭蛋流门槛降到 180。
+
+        折后 180 = 原 360 的一半，覆盖同样的卡数；错过打折是实打实的损失。
+        """
+        for money, want in ((WEEKEND_DISCOUNT_MONEY_GATE, "步行街"),
+                            (WEEKEND_DISCOUNT_MONEY_GATE - 1, "餐厅"),
+                            (WEEKEND_WORK_MONEY_GATE - 1, "步行街")):
+            texts = (self._weekend_map("星期六", money) + [self.STREET_DISCOUNT])
             task = self.styled("扭蛋流", texts)
             task.weekend_state()
-            self.assertTrue(task.handle_weekend(texts))
-            self.assertEqual(task.actions[-1][1], "餐厅")
+            self.assertTrue(task.handle_weekend(texts), money)
+            self.assertEqual(task.actions[-1][1], want, money)
+
+    def test_other_discount_labels_do_not_lower_gate(self):
+        """游戏厅/餐厅打折不改道；小游戏流也不因游戏厅打折降门槛。"""
+        cases = (("扭蛋流", self.ARCADE_DISCOUNT),
+                 ("扭蛋流", self.RESTAURANT_DISCOUNT),
+                 ("小游戏流", self.ARCADE_DISCOUNT))
+        for style, label in cases:
+            texts = (self._weekend_map("星期六", WEEKEND_DISCOUNT_MONEY_GATE)
+                     + [label])
+            task = self.styled(style, texts)
+            task.weekend_state()
+            self.assertTrue(task.handle_weekend(texts), (style, label.name))
+            self.assertEqual(task.actions[-1][1], "餐厅", (style, label.name))
+
+    def test_discount_label_elsewhere_does_not_lower_gate(self):
+        """「打折」没贴在步行街名字左侧（这里放右上角）→ 钱 180 也去餐厅。"""
+        texts = (self._weekend_map("星期六", WEEKEND_DISCOUNT_MONEY_GATE)
+                 + [box(1400, 200, "打折！", 70, 55)])
+        task = self.styled("扭蛋流", texts)
+        task.weekend_state()
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertEqual(task.actions[-1][1], "餐厅")
 
     def test_urgent_restaurant_is_detour_for_main_venue_styles(self):
         """扭蛋/小游戏钱够时，急招是 detour；原主地点还在后面。"""
