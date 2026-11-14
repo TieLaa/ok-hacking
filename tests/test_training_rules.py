@@ -1938,6 +1938,35 @@ class PageRegistry(unittest.TestCase):
                             f"{page} 没有一张图被正确认领")
         self.assertGreaterEqual(len(groups), 8)
 
+    def test_two_page_tables_do_not_collide(self):
+        """两张页面表的重名必须是**有意为之**，且理由写在表里。
+
+        2026-11-14 实测：`page_signatures` 的 `match_result`（判据=关卡加成+
+        奖励预览，指关卡列表页）和 `pages` 的 `match_result`（比赛结算页）
+        同名不同义，两表判定结果有 331 帧不一致 —— 这是**真 bug**，
+        已把前者改名 `stage_list`。
+
+        现在两表允许重名，但重名分两类：
+        - **判据等价**（实测 0 帧不一致）：register_player / training_plan /
+          weekend_map —— 名字撞了没关系；
+        - **有意不等价**：shop / training_subject —— 认页要严（能独立认出
+          这一页），排除要宽（宁可多排），理由写在两张表的 docstring 里。
+        """
+        from src.tasks.training import pages, page_signatures
+        overlap = set(pages.PRIORITY) & set(page_signatures.SIGNATURES)
+        # 真 bug 的形态：同一个名字，判据**无关**（既不等价、也没登记过差异原因）
+        known_equal = {"register_player", "training_plan", "weekend_map"}
+        known_different = {"shop", "training_subject"}
+        self.assertEqual(
+            overlap, known_equal | known_different,
+            "页面表和签名表的重名集合变了：新增 %s / 少了 %s。"
+            "新增重名必须先确认判据是否等价（logs/dev/probe_dup2.py 可测），"
+            "不等价就改名（如 match_result → stage_list）"
+            % (sorted(overlap - known_equal - known_different),
+               sorted(known_equal | known_different - overlap)))
+        # 这三页两表判据等价（实测 0 帧不一致），名字撞了没关系
+        self.assertTrue(known_equal <= overlap)
+
     def test_replay_real_shots_match_expected_page(self):
         """实跑存证帧回放：认对率不能低于 90%。
 

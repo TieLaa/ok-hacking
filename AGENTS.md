@@ -34,6 +34,23 @@
   <!-- 变更 2026-11-10 · opencode · 新增提交信息口径 · 安装器更新提示由 tag 之间的 commit 生成，内部词会直接暴露给用户；v0.1.9 前已按此口径重写过一批提交 -->
 - 踩到新坑时，把「下次该怎么说」补进 `docs/PROMPT_PLAYBOOK.md`，不要只改代码。
 
+## 发版（双重发布，顺序有依赖）
+
+**推 tag 之前必须先确认更新仓库已有这个 tag**，否则 pyappify 的 setup 步骤会失败。
+
+```
+① 源仓库推 v* tag  →  ② CI 出包 + 建 Release  →  ③ 更新仓库 Sync from source（填同一个 tag）
+```
+
+- 更新仓库是 `TieLaa/ok-hacking-update`（`pyappify.yml` 的 `git_url` 指向它，不是源仓库）。
+- pyappify 的 setup 在**更新仓库的 clone** 里找 `refs/tags/<tag>`；更新仓库没这个 tag →
+  `Setup failed: Tag 'vX.Y.Z' not found locally after fetch`。
+- 所以正确顺序是：**先手动触发更新仓库的 `sync.yml`**（`gh workflow run sync.yml --repo TieLaa/ok-hacking-update -f tag=vX.Y.Z`），
+  等它 success（更新仓库有了 tag），**再**去 CI 重跑 Build。
+- 只推源仓库 tag 不动更新仓库 → 已安装的用户更新时会停在旧版本。
+- 细节见 `docs/release.md`「更新仓库」一节。
+<!-- 变更 2026-11-14 · opencode · 新增「发版」一节 · v0.1.18 的 Build 就是因为更新仓库没有 v0.1.18 tag 而失败；原文只在 docs/release.md 里，会话不主动读 -->
+
 ## 开跑指令（用户 2026-11-07 口径）
 <!-- 变更 2026-11-07 · opencode · 新增「开跑指令」一节 · 用户不再口头复述队长/目标分/吃药条件，改由会话读 configs/TrainingTask.json 自取 -->
 <!-- 变更 2026-11-07 · opencode · 「队长队列」配置键已废弃（队列降级为 MCP 注入参数），改口径描述 · 防止会话按已删键找配置 -->

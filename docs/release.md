@@ -104,9 +104,25 @@ Defender 提示的地方，CI 无桌面会话，验不了这些。
 | **源仓库 `TieLaa/ok-hacking` 改为 public** | **待做**（否则更新仓库读不到源；玩家也下不了 Release 附件） |
 | 源仓库的 `build.yml` 不再需要 Sync 步骤 | 已删除（避免依赖 PAT） |
 
-发版顺序：推 `v*` tag → CI 出包并建 Release → 到更新仓库 Actions 点一次
-**Sync from source**（填同一个 tag）→ 玩家 launcher 才能按新 tag 拉到增量。
-漏了最后一步，已安装的用户更新时会停在旧版本。
+发版顺序（**2026-11-14 实测修正**，原来写的顺序漏了第 0 步）：
+
+```
+0. 源仓库推 v* tag
+1. 更新仓库 Actions 跑一次 "Sync from source"（填同一个 tag）→ 等它 success
+2. 源仓库 CI 重跑 Build → 出包 + 建 Release
+3. 玩家 launcher 才能按新 tag 拉到增量
+```
+
+- **第 1 步必须在第 2 步之前**：pyappify 的 setup 步骤在**更新仓库的 clone** 里
+  `revparse_single("refs/tags/<tag>")`，更新仓库没这个 tag 就报
+  `Setup failed: Tag 'vX.Y.Z' not found locally after fetch`（v0.1.18 实测）。
+- 第 1 步手动触发：
+  ```powershell
+  gh workflow run sync.yml --repo TieLaa/ok-hacking-update -f tag=v0.1.18
+  gh run watch --repo TieLaa/ok-hacking-update   # 等它 success
+  ```
+- 第 3 步漏了，已安装的用户更新时会停在旧版本。
+- 更新仓库的 sync.yml 同时会推 GitHub 更新仓库和 cnb 镜像（China profile 用后者）。
 
 第三方 Action 一律钉 commit SHA（`pyappify-action` 已钉），不要用 `@master`。
 
