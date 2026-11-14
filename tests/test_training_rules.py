@@ -350,19 +350,48 @@ class GachaRules(unittest.TestCase):
         self.assertEqual(task.actions[0][1], 1100)      # 中间那张全属性卡
 
     def test_other_style_card_is_excluded(self):
-        """2026-11-14 用户口径：扭蛋流排除小游戏卡。
+        """2026-11-14 用户口径：别的流派的专属卡一律跳过。
 
         实跑：小游戏强化+（金，100币）效果是「本局训练中，所有小游戏都可以
         额外获得30点体能」—— 扭蛋流不去游戏厅，买了纯浪费。
+        器材暴击++ 按卡名归训练流，扭蛋流/小游戏流同样买了没收益 → 也跳过。
         """
         from src.tasks.training.attributes import is_other_style_card
         effect = "本局训练中，所有小游戏都可以额外获得30点体能。队友属性大幅提升"
         self.assertTrue(is_other_style_card("小游戏强化+", effect, "扭蛋流"))
         self.assertFalse(is_other_style_card("小游戏强化+", effect, "小游戏流"))
-        # 器材暴击++ 含「训练中」但对所有流派都有用，不能当成训练流专属
-        self.assertFalse(is_other_style_card(
+        # 器材暴击++ 归训练流：训练流该买，别的流派跳过
+        self.assertTrue(is_other_style_card(
             "器材暴击++", "接下来的训练中，器材的暴击加成提高20%。队友属性中幅提升",
             "扭蛋流"))
+        self.assertFalse(is_other_style_card(
+            "器材暴击++", "接下来的训练中，器材的暴击加成提高20%。队友属性中幅提升",
+            "训练流"))
+
+    def test_card_style_target_by_name(self):
+        """流派归属**先看卡名**：器材暴击/训练增强/教科书 → 训练流。"""
+        from src.tasks.training.attributes import card_style_target
+        self.assertEqual(card_style_target("器材暴击++", ""), "训练流")
+        self.assertEqual(card_style_target("训练增强++", ""), "训练流")
+        self.assertEqual(card_style_target("弹跳教科书+", ""), "训练流")
+        self.assertEqual(card_style_target("小游戏强化+", ""), "小游戏流")
+        # 卡名认不出才看效果文本
+        self.assertEqual(
+            card_style_target("延迟满足", "本局训练中，所有小游戏都可以额外获得30点体能"),
+            "小游戏流")
+        self.assertIsNone(card_style_target("投射增加+", "主力投射+48，队友属性大幅提升"))
+
+    def test_style_matching_card_wins_first(self):
+        """训练流里符合流派的专属卡（器材暴击++）排最前。"""
+        task = FakeTask(gacha_texts([
+            ("投射增加+", "主力投射+48，队友属性大幅提升"),
+            ("器材暴击++", "接下来的训练中，器材的暴击加成提高20%。队友属性中幅提升"),
+            ("意识增加+", "主力意识+48，队友属性中幅提升"),
+        ], stamina="128/130", money="344", price="80"),
+            qualities=["金", "金", "金"])
+        task._style = "训练流"
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions[0][1], 1100)      # 中间那张器材暴击++
 
     def test_gacha_style_skips_arcade_card(self):
         """扭蛋流遇到小游戏强化+ → 不买它，改选另一张。"""
