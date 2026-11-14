@@ -2050,6 +2050,30 @@ class PageRegistry(unittest.TestCase):
                 "路由引入了未登记的行为差异 %d 帧：顺序=%s → 路由=%s（%s）"
                 % (n, a, b, why))
 
+    def test_stamina_short_popup_beats_underlying_page(self):
+        """专注不足弹框叠在器材页上时，必须认成弹框、路由到 handle_stamina_short。
+
+        2026-11-14 实跑死循环（logs/1114-231948_第2局_野上泷，23:20:10）：
+        点「开始训练」时专注差 20 弹出「是否进行回复」的框，
+        但底下的「选择器材 / 自动选择」还在 → 分类器认成 equipment →
+        路由把 handle_equipment 提到最前，抢走了 handle_stamina_short 的活 →
+        「点自动选择 → 点开始训练 → 弹框 → 再点自动选择」死循环，
+        一天点了 101 下后被看门狗停任务。
+        """
+        from src.tasks.training.pages import classify_page
+        from src.tasks.training import page_handlers
+        names = ["到余0次", "选择器材", "我的", "筛选T", "提示",
+                 "训练所需专注还差20，是否进行回复呢？", "自动选择",
+                 "取消", "确定", "投射", "下一步"]
+        texts = [box(100 + i * 70, 300, n, 60, 28) for i, n in enumerate(names)]
+        task = FakeTask(texts)
+        page, cands = classify_page(task, texts)
+        self.assertEqual(page, "stamina_short",
+                         "弹框要优先于底下的器材页，实际 %s（候选 %s）"
+                         % (page, list(cands)))
+        self.assertEqual(page_handlers.handlers_for(page),
+                         ("handle_stamina_short",))
+
     def test_replay_real_shots_match_expected_page(self):
         """实跑存证帧回放：认对率不能低于 90%。
 

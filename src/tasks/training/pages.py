@@ -42,6 +42,8 @@ from src.tasks.ui import Defs, labels
 # 独有标题（整句、只出现在那一页）：
 #   请选择1个技能 / 请选择一种加强训练 / 赛前准备 / XX的训练计划 / 请选择1个扭蛋
 PRIORITY = {
+    # 专注不足弹框排在最前：它叠加在任何页面上，必须先处理
+    "stamina_short": 5,
     "game_title": 10,
     "construction": 20,
     "register_player": 25,
@@ -278,6 +280,21 @@ def _is_breath_difficulty(task, texts):
     标题是这一页独有的。
     """
     return task.match_text(texts, "选择憋气难度") is not None
+
+
+def _is_stamina_short(task, texts):
+    """专注不足弹框：「训练所需专注还差 N，是否进行回复呢？」。
+
+    2026-11-14 实跑（logs/1114-231948_第2局_野上泷）：点「开始训练」时
+    专注差 20，弹出这个框。但分类器看到底下的「选择器材 / 自动选择」，
+    把这一帧认成 `equipment` —— 路由把 `handle_equipment` 提到最前，
+    抢走了本该由 `handle_stamina_short`（顺序表位置 5）处理的弹框，
+    于是「点自动选择 → 点开始训练 → 弹框 → 再点自动选择」死循环，
+    一天点了 101 下后被看门狗停任务。
+
+    弹框是**叠加在任何页面上的**，所以它的优先级要比所有页面都高。
+    """
+    return task.match_text(texts, ("专注还差", "是否进行回复")) is not None
 
 
 def _is_popup(task, texts):
@@ -774,6 +791,7 @@ _ANCHORS = {
     "captain_filter": _is_captain_filter,
     "training_hub": _is_training_hub,
     "breath_difficulty": _is_breath_difficulty,
+    "stamina_short": _is_stamina_short,
 }
 
 
