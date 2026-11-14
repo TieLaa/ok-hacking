@@ -1676,6 +1676,64 @@ class PageRegistry(unittest.TestCase):
         task = FakeTask([])
         self.assertEqual(classify_page(task, []), (None, ()))
 
+    def test_regression_shots_match_expected_handler(self):
+        """每一张回归图的 PageID 必须和 expected.json 的 handler 对得上。
+
+        这是页面分类器的**回归网**：新增/改动锚点后，哪张图认错了这里直接红。
+        OCR 复用 `tools/check_handlers.py` 的缓存（`docs/shots/.ocr_cache/`），
+        跑得慢也不会重复识别。
+        """
+        import json
+        import os
+        from src.tasks.training.pages import classify_page
+        from tools.check_handlers import load_boxes
+        root = os.path.join("docs", "shots")
+        expected = json.load(open(os.path.join(root, "expected.json"),
+                                  encoding="utf-8"))
+        # PageID ← handler 的一一对应（分类器只登记这些页面）
+        by_handler = {
+            "handle_weekend": "weekend_map",
+            "handle_restaurant": "restaurant",
+            "handle_activity_go": "restaurant",
+            "handle_street": "street",
+            "handle_park": "park",
+            "handle_shop": "shop",
+            "handle_event_choice": "event_choice",
+            "handle_subject_select": "training_subject",
+            "handle_register_player": "register_player",
+            "handle_construction": "construction",
+            # 同一张图可能由**不同** handler 处理（地点详情页是 activity_go，
+            # 地点首页是 park/restaurant）。分类器认哪个都算对，这里只要求
+            # 「认领的页面和 expected 的 handler 属于同一族」。
+            "handle_activity_go": "restaurant",
+        }
+        holder = {}
+        # 按 handler 分组：每组**至少一张图**要被正确认领。
+        # （不是每张图都要认领 —— 未登记的页面返回 None 是正常的。）
+        groups = {}
+        for name, handler in expected.items():
+            page = by_handler.get(handler)
+            if page is None:
+                continue
+            path = os.path.join(root, name)
+            if not os.path.exists(path):
+                continue
+            frame = cv2.imread(path)
+            if frame is None:
+                continue
+            texts = load_boxes(path, holder, use_cache=True)
+            task = DryRunTask(frame, texts)
+            got, _cands = classify_page(task, texts)
+            ok = got == page
+            groups.setdefault(page, []).append((name, ok))
+            if got is not None and not ok:
+                # 认领了但认错了 = 真 bug（会误分派）
+                self.fail(f"{name}: expected {page}, got {got}")
+        for page, items in groups.items():
+            self.assertTrue(any(ok for _n, ok in items),
+                            f"{page} 没有一张图被正确认领")
+        self.assertGreaterEqual(len(groups), 8)
+
     def test_weekend_map_needs_two_place_labels(self):
         from src.tasks.training.pages import classify_page
         texts = [box(100, 300, "公园", 120, 40),

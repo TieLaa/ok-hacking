@@ -45,6 +45,7 @@
   "2026-11-10-announcement.png": "handle_announcement",
   "2026-11-13-event-choice-park-story.png": "handle_event_choice",
   "2026-11-13-talent-construction.png": "handle_construction",
+  "2026-11-14-weekend-map.png": "handle_weekend",
   "park_boat_mates.png": "handle_park",
   "restaurant_cards.png": "handle_restaurant",
   "restaurant_detail_blocked.png": "handle_activity_go"
