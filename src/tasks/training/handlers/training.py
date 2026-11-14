@@ -835,9 +835,18 @@ class TrainingHandlers:
             if cards:
                 minutes, card = max(cards, key=lambda c: c[0])
                 x, y = self._breath_card_point(card, texts)
-                self.click(x, y, after_sleep=0.5)
-                self._breath_picked = True
+                # 2026-11-14 实跑（logs/1114-230254_野上泷/debug/
+                # 1114-230512_noresp3s）：这一下点击被「让路」闸门吞掉了
+                # （clicks.jsonl 里没有记录），但 `_breath_picked` 照样设成 True
+                # → 之后每拍只点「确定」，卡片永远是灰的，连点到看门狗接管。
+                # 所以**只认真的发出去的点击**：`_last_click_at` 只在点击完成时更新。
+                before = getattr(self, "_last_click_at", 0.0)
                 self.log_info(f"憋气难度页：选 {minutes} 分钟那档（时长最长）@({x},{y})")
+                self.click(x, y, after_sleep=0.5)
+                picked = getattr(self, "_last_click_at", 0.0) != before
+                if not picked:
+                    self.log_warning("憋气难度页：选卡那次点击被让路跳过 → 下一拍重试")
+                self._breath_picked = picked
                 return True
             self.log_warning(f"憋气难度页：认不出「N分钟」卡片 → 直接点确定"
                              f"（读到 {[t.name.strip() for t in texts][:6]}…）")

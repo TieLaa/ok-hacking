@@ -20,6 +20,7 @@ import glob
 import json
 import os
 import sys
+import time
 
 import cv2
 
@@ -118,6 +119,9 @@ class DryRunTask(TrainingTask):
         self.config["无队长不接开局"] = False
         self.actions = []
         self.logs = []
+        # 被「让路闸门」拦下的点击（`click(..., skip=True)` 时记这里）。
+        # 真实环境里这些点击不会出现在 clicks.jsonl，也不会更新 _last_click_at。
+        self.clicks_skipped = []
         self.name = "dry-run"
         # 与 BaseTask 保持一致：handler 会往 info 写监控页数据
         self.info = {}
@@ -174,7 +178,18 @@ class DryRunTask(TrainingTask):
 
     # ---------- 动作（只记录） ----------
     def click(self, x=-1, y=-1, **kwargs):
+        """记录点击。`skip=True` 模拟「让路闸门拦下」—— 与真实 `flow.click`
+        一致：被拦下的点击**不更新** `_last_click_at`。
+
+        为什么要有这个开关（2026-11-14）：憋气难度页选卡那一下被让路吞掉，
+        但 handler 照样把「已选卡」标记设成 True，之后每拍只点「确定」，
+        卡片永远是灰的 → 卡到看门狗。测试要能复现「点击没发出去」。
+        """
         self.actions.append(("click", int(x), int(y)))
+        if kwargs.get("skip"):
+            self.clicks_skipped.append((int(x), int(y)))
+            return
+        self._last_click_at = time.time()
 
     def click_box(self, box, **kwargs):
         cx = int(box.x + box.width / 2)

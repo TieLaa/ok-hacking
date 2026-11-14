@@ -489,6 +489,33 @@ class BreathDifficultyPage(unittest.TestCase):
         clicked = [a for a in task.actions if a[0] == "click_box"]
         self.assertEqual(clicked[0][1], "确定")          # 再确定
 
+    def test_retries_when_card_click_was_skipped(self):
+        """选卡那一下被「让路」吞掉时，下一拍必须**重试选卡**。
+
+        2026-11-14 实跑（logs/1114-230254_野上泷/debug/1114-230512_noresp3s）：
+        click(406,451) 被闸门拦下（clicks.jsonl 里没有记录），
+        但 `_breath_picked` 照样设成 True → 之后每拍只点「确定」，
+        卡片永远是灰的 → 连点到看门狗接管、整页推不动。
+        """
+        page = self.page()
+        task = task_with(page)
+        real_click = task.click
+
+        def skip_first(x=-1, y=-1, **kw):
+            kw["skip"] = True
+            return real_click(x, y, **kw)
+
+        task.click = skip_first            # 第一次点击（选卡）被吞
+        self.assertTrue(task.handle_breath_difficulty(page))
+        self.assertFalse(getattr(task, "_breath_picked", False),
+                         "点击被跳过时不能把「已选卡」标成 True")
+        task.click = real_click              # 第二次正常
+        task.actions.clear()
+        self.assertTrue(task.handle_breath_difficulty(page))
+        clicks = [a for a in task.actions if a[0] == "click"]
+        self.assertEqual(len(clicks), 1, "应该**重新选卡**，不是直接点确定")
+        self.assertTrue(getattr(task, "_breath_picked", False))
+
     def test_not_this_page(self):
         texts = [box(600, 300, "训练剧本", 160, 40)]
         task = task_with(texts)
