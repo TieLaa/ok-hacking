@@ -45,10 +45,14 @@ def item_attr_target(name):
 
     - `ALL` = 全属性；
     - `PREFERRED` = 「两个推荐属性」（不指定具体属性）；
+    - `CASH` = 纯零用钱卡（不涨六维）；
     - 属性名 = 专项；
     - None = 认不出。
 
     用户 2026-11-13：属性类内部顺序 **全属性 > 需求专项 > 推荐属性/专属 > 其他**。
+    用户 2026-11-14：**增加零用钱的卡最高优先**（商店流/扭蛋流/小游戏流
+    都要零用钱买牛奶/秘籍），所以单独给 `CASH` 一档，排在所有属性之前。
+
     商店（`places/shop.py`）和扭蛋（`places/street.py`）共用这一份分类，
     不再各写一套「认不认得出推荐属性」。
     """
@@ -57,10 +61,31 @@ def item_attr_target(name):
         return "ALL"
     if "推荐属性" in name:
         return "PREFERRED"
+    if is_money_card(name):
+        return "CASH"
     for attr in SUBJECTS:
         if attr in name:
             return attr
     return None
+
+
+# 增加零用钱的卡名（2026-11-14 实跑）：
+#   额外零用钱+  → 「接下来每个周六开始前，获得80零用钱。」
+#   额外零用钱++ → 「获得110零用钱。」
+#   超前消费     → 「立刻获取300零用钱。所有打工的基础零用钱-60。」
+# 「超可消费」是同一族（OCR 变体）。
+MONEY_CARD_NAMES = ("额外零用钱", "超前消费", "超可消费")
+
+
+def is_money_card(name):
+    """这张卡/商品是不是「增加零用钱」的（不涨六维）。
+
+    **只认卡名**：效果文本「获得N零用钱」也会出现在「训练增强++」这类卡的
+    附带说明里（2026-11-13 实跑：`额外零用钱+` 那张卡的说明写着
+    「获得110零用钱」，但同一张卡名是别的）——按效果判会误伤。
+    """
+    name = name or ""
+    return any(k in name for k in MONEY_CARD_NAMES)
 
 
 def subject_priority(score, value=None, cap=None, y=0,

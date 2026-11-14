@@ -323,6 +323,41 @@ class GachaRules(unittest.TestCase):
         self.assertEqual(item_attr_target("弹跳升级包++"), "弹跳")
         self.assertIsNone(item_attr_target("专属饮料+"))
 
+    def test_money_card_beats_quality(self):
+        """2026-11-14 用户口径：增加零用钱的卡最高优先（扭蛋流）。
+
+        实跑：金「器材暴击++」赢了紫「额外零用钱+」——零用钱才是这些流派的瓶颈。
+        """
+        task = FakeTask(gacha_texts([
+            ("器材暴击++", "全部器材熟练度+10"),
+            ("额外零用钱+", "接下来每个周六开始前，获得80零用钱。"),
+            ("投射增加+", "主力投射+48，队友属性大幅提升"),
+        ], stamina="128/130", money="322", price="80"),
+            qualities=["金", "紫", "紫"])
+        task._style = "扭蛋流"
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions[0][1], 1100)      # 中间那张额外零用钱+
+
+    def test_money_card_not_first_for_training_style(self):
+        """训练流不消费零用钱 → 零用钱卡不享受最高优先。"""
+        task = FakeTask(gacha_texts([
+            ("器材暴击++", "全部器材熟练度+10"),
+            ("额外零用钱+", "接下来每个周六开始前，获得80零用钱。"),
+            ("投射增加+", "主力投射+48，队友属性大幅提升"),
+        ], stamina="128/130", money="322", price="80"),
+            qualities=["金", "紫", "紫"])
+        task._style = "训练流"
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertEqual(task.actions[0][1], 620)       # 左边那张金卡
+
+    def test_money_card_names(self):
+        from src.tasks.training.attributes import item_attr_target, is_money_card
+        for name in ("额外零用钱+", "额外零用钱++", "超前消费", "超可消费"):
+            self.assertEqual(item_attr_target(name), "CASH", name)
+            self.assertTrue(is_money_card(name), name)
+        self.assertIsNone(item_attr_target("训练增强++"))
+        self.assertFalse(is_money_card("投射增加+"))
+
     def test_mate_card_beats_stamina_recovery(self):
         """2026-11-03 10:11 实跑：三张卡全带「增强款」，买错了中间那张恢复卡。
 

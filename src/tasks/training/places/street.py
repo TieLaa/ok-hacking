@@ -229,6 +229,13 @@ class StreetPlace:
             c["attr_rank"] = (0 if target == "ALL"
                               else 1 if target in required
                               else 2 if target == "PREFERRED" else 3)
+            # 用户 2026-11-14：**增加零用钱的卡最高优先**（商店流/扭蛋流/小游戏流
+            # 都要零用钱买牛奶/秘籍）。它排在**品质之前** ——
+            # 2026-11-14 实跑「器材暴击++(金) vs 额外零用钱+(紫)」选了金卡，
+            # 零用钱才是这些流派的瓶颈。
+            # **训练流例外**：训练流不消费零用钱，零用钱卡没有价值。
+            money_first = self.style != "训练流"
+            c["money_rank"] = 1 if (money_first and target == "CASH") else 0
             ok.append(c)
 
         detail = "、".join(
@@ -243,13 +250,13 @@ class StreetPlace:
             return None, detail, cards
         # 取舍顺序（用户 2026-11-07 口径：**同等条件下恢复精力的优先级最低**，
         # 取代 2026-10-27/11-03 的「恢复卡同分要赢」；都相同再比价格）：
-        # 品质 → 增强款 → 队友 → **非恢复优先** → 恢复价值 → 便宜的。
+        # **零用钱卡** → 品质 → 增强款 → 队友 → **非恢复优先** → 恢复价值 → 便宜的。
         # 非恢复卡恒为 1、恢复卡恒为 0，恢复卡只有池里全是恢复卡时才轮得到。
         # 2026-11-08 修：判据从 `recover > 0` 改成按效果文本
         # （`is_stamina_recover_card`）——「精力补充」这类**全部恢复卡 recover=0**，
         # 旧判据把它当成非恢复卡，反而排在所有恢复卡前面（同类 bug 的前提已消失）。
         best = max(ok, key=lambda c: (
-            c["score"], -c.get("attr_rank", 2),
+            c.get("money_rank", 0), c["score"], -c.get("attr_rank", 2),
             bool(c.get("enhanced")), c["mate"],
             not self.is_stamina_recover_card(c.get("effect")),
             recover_bonus(c), -c["price"]))
