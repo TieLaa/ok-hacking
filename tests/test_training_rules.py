@@ -1251,7 +1251,7 @@ class EventRules(unittest.TestCase):
 
 
 class SubjectScoreWeights(unittest.TestCase):
-    """科目打分权重（用户 2026-10-27 定稿）：队友1 装备1 经理2.1 金框1.2 彩框1.3。"""
+    """科目打分权重（2026-10-27 定稿，2026-11-14 进 `strategy/params.json`）。"""
 
     def test_weights(self):
         r = {"mates": 2, "equip": 1, "manager": 1, "gold": 1, "color": 1}
@@ -1262,6 +1262,16 @@ class SubjectScoreWeights(unittest.TestCase):
         crit = {"mates": 1, "equip": 1, "manager": 0, "gold": 0, "color": 1}
         mgr = {"mates": 1, "equip": 1, "manager": 1, "gold": 0, "color": 0}
         self.assertGreater(FakeTask.subject_score(crit), FakeTask.subject_score(mgr))
+
+    def test_weights_live_in_params(self):
+        """2026-11-14：五个权重进策略参数表，代码不再写死。"""
+        from src.tasks.training import params
+        w = params.get("scoring")
+        for key in ("mate", "equip", "manager", "gold_ring", "color_ring"):
+            self.assertIn(key, w)
+        # 排序口径不变：彩框 > 经理 > 金框
+        self.assertGreater(w["color_ring"], w["manager"])
+        self.assertGreater(w["manager"], w["gold_ring"])
 
     def test_crit_border_excludes_gold_border(self):
         """彩框和金框互斥：彩虹边框里有一段橙黄，不能不互斥地双重计分。
