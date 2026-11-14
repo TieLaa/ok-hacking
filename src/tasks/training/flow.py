@@ -6,6 +6,7 @@
 
 import time
 
+from src.tasks.training import params
 from src.tasks.training.constants import THURSDAY_REST_THRESHOLD_BY_STYLE
 from src.tasks.training.queue import CaptainQueue
 from src.tasks.ui import labels
@@ -1277,11 +1278,12 @@ class TrainingFlowMixin:
 
         用户 2026-11-04：**扭蛋流 / 小游戏流**在周四有硬阈值 **60**
         （`THURSDAY_REST_THRESHOLD_BY_STYLE`，取代旧的「周二 65」）；**其它流派
-        （训练流 / 商店流）周四没有特殊限制**，只遵守配置里的「休息精力阈值」。
+        （训练流 / 商店流）周四没有特殊限制**，只遵守策略参数
+        `rest.stamina_threshold`（`strategy/params.json`）。
         周二现在没有任何特殊阈值（旧的周二 65 / 周二 60 已删除）。
-        有硬阈值时取 max(配置值, 硬阈值)，配置调高时以配置为准。
+        有硬阈值时取 max(策略参数, 硬阈值)，参数调高时以参数为准。
         """
-        base = int(self.config.get("休息精力阈值"))
+        base = int(params.get("rest.stamina_threshold"))
         if day == "四":
             hard = THURSDAY_REST_THRESHOLD_BY_STYLE.get(self.style)
             if hard is not None:

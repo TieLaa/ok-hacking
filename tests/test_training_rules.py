@@ -2971,7 +2971,7 @@ class ConfigSpecRules(unittest.TestCase):
         from src.tasks.training import config_spec
         task = FakeTask([])
         self.assertEqual(task.config["允许进步行街"], True)
-        self.assertEqual(task.config["休息精力阈值"], 50)
+        self.assertNotIn("休息精力阈值", task.config)   # 已升为策略参数（params.json）
         self.assertEqual(task.config["扭蛋清空精力阈值"], 30)
         self.assertEqual(task.config["周末野餐缺口"], 70)
         self.assertEqual(task.config["周末划船缺口"], 30)
@@ -3004,6 +3004,9 @@ class ConfigSpecRules(unittest.TestCase):
         顶栏那个数字在训练里叫 **精力**（打工/公园/扭蛋清空消耗它）。
         旧配置存过「体力」和「专注」，改名后 `Config.verify_config` 会把旧键
         连同值一起丢掉，所以 `migrate_saved_config()` 必须在 `load_config()` 之前搬。
+
+        2026-11-14：「休息精力阈值」升为策略参数（`strategy/params.json`），
+        不再是配置项，所以这里只剩「扭蛋清空精力阈值」。
         """
         import json
         import os
@@ -3014,32 +3017,24 @@ class ConfigSpecRules(unittest.TestCase):
         self.assertEqual([k for k in keys if "体力" in k or "专注" in k], [],
                          "配置键里不许再出现「体力」/「专注」")
 
+        # 2026-11-14：「休息精力阈值」升为策略参数（params.json），不再是配置项，
+        # 所以只剩「扭蛋清空精力阈值」需要改名；休息类的旧键由 verify_config 丢弃。
+        self.assertNotIn("休息精力阈值", keys)
+
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "TrainingTask.json")
             with open(path, "w", encoding="utf-8") as f:
-                json.dump({"休息体力阈值": 35, "扭蛋清空体力阈值": 12,
-                           "允许进步行街": False}, f, ensure_ascii=False)
+                json.dump({"扭蛋清空体力阈值": 12, "允许进步行街": False},
+                          f, ensure_ascii=False)
             self.assertTrue(config_spec.migrate_saved_config("TrainingTask", folder))
             with open(path, encoding="utf-8") as f:
                 saved = json.load(f)
             # 再跑一次不该有任何改动（幂等）
             self.assertFalse(config_spec.migrate_saved_config("TrainingTask", folder))
 
-            # 新键已经有值（用户配过）→ 保留新值，旧键只负责清掉
-            path2 = os.path.join(folder, "Other.json")
-            with open(path2, "w", encoding="utf-8") as f:
-                json.dump({"休息精力阈值": 55, "休息专注阈值": 45,
-                           "休息体力阈值": 35}, f, ensure_ascii=False)
-            self.assertTrue(config_spec.migrate_saved_config("Other", folder))
-            with open(path2, encoding="utf-8") as f:
-                other = json.load(f)
-
-        self.assertEqual(saved["休息精力阈值"], 35)
         self.assertEqual(saved["扭蛋清空精力阈值"], 12)
-        self.assertNotIn("休息体力阈值", saved)
         self.assertNotIn("扭蛋清空体力阈值", saved)
         self.assertEqual(saved["允许进步行街"], False)
-        self.assertEqual(other, {"休息精力阈值": 55})
 
     def test_legacy_shop_policy_is_migrated(self):
         """2026-11-08：旧的通用「购买策略」搬进「商店购买策略」，旧选项落到新顺序。"""
@@ -4657,10 +4652,8 @@ class StylePlanRules(unittest.TestCase):
         「周二的 65 改成周四精力低于 60 就休息」，流派白名单不变
         （扭蛋流 / 小游戏流）。**周二现在没有任何特殊阈值。**
         """
-        base = {"休息精力阈值": 50}
-
         def limit(style, day):
-            task = FakeTask([], config=dict(base))
+            task = FakeTask([])          # 阈值来自 params.json（rest.stamina_threshold = 50）
             task._style = style
             return task.rest_threshold(day)
 
@@ -4672,11 +4665,25 @@ class StylePlanRules(unittest.TestCase):
             self.assertEqual(limit(style, "二"), 50, style)
             self.assertEqual(limit(style, "五"), 50, style)
             self.assertEqual(limit(style, "一"), 50, style)
-        # 配置里的阈值更高时以配置为准（取 max，不能因为周四就下调）
+        # 参数调得更高时以参数为准（取 max，不能因为周四就下调）
+        from unittest import mock
         for style in ("扭蛋流", "小游戏流", "训练流"):
-            task = FakeTask([], config={"休息精力阈值": 80})
-            task._style = style
-            self.assertEqual(task.rest_threshold("四"), 80, style)
+            with mock.patch("src.tasks.training.params.get", return_value=80):
+                task = FakeTask([])
+                task._style = style
+                self.assertEqual(task.rest_threshold("四"), 80, style)
+
+    def test_rest_threshold_is_strategy_param(self):
+        """2026-11-14：休息阈值升为策略参数，旧配置键不再生效。
+
+        v0.1.13 把默认 40 改成 50，但 `verify_config` 保留旧值，
+        装了旧版的用户永远停在 40。改走 params.json 后发版即生效。
+        """
+        from src.tasks.training import params
+        self.assertEqual(int(params.get("rest.stamina_threshold")), 50)
+        # 旧配置里还留着 40：不能影响运行
+        task = FakeTask([], config={"休息精力阈值": 40})
+        self.assertEqual(task.rest_threshold("一"), 50)
 
     def test_thursday_low_stamina_rests(self):
         """周四 50 精力：扭蛋流直接休息（门槛 60）。"""
