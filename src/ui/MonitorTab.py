@@ -531,7 +531,7 @@ class MonitorTab(CustomTab):
 
     @staticmethod
     def _captains(captain: str = "") -> dict:
-        """流派 → [角色名]，数据来自业务常量 STYLE_BY_NAME。
+        """流派 → [角色名]，数据来自 `docs/roster/*.json`（`roster.style_by_name`）。
 
         显示哪些分组由 `CAPTAIN_DROPDOWN_STYLES` 决定（用户 2026-11-08：
         先只保留训练流 / 扭蛋流，商店流 / 小游戏流先隐藏）。
@@ -541,13 +541,13 @@ class MonitorTab(CustomTab):
         就会退回「第一个训练流角色」，把正在跑的队长悄悄换掉。
         """
         try:
-            from src.tasks.training.constants import (
-                CAPTAIN_DROPDOWN_STYLES, STYLE_BY_NAME)
+            from src.tasks.training import roster
+            from src.tasks.training.constants import CAPTAIN_DROPDOWN_STYLES
         except Exception as e:  # noqa: BLE001
             logger.error(f"读取角色表失败: {e}")
             return {}
         groups: dict[str, list[str]] = {}
-        for name, style in STYLE_BY_NAME.items():
+        for name, style in roster.style_by_name().items():
             groups.setdefault(style, []).append(name)
         order = ["训练流", "商店流", "扭蛋流", "小游戏流"]
         keys = [key for key in order if key in CAPTAIN_DROPDOWN_STYLES]

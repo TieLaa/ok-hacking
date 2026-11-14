@@ -25,9 +25,16 @@ def merge_and_save(rows, out_path):
         except Exception as e:                       # noqa: BLE001
             print("旧文件读不出来，直接覆盖：", e)
     for r in rows:
-        if r.get("name") and r["name"] not in merged:
-            order.append(r["name"])
-        merged[r.get("name")] = r
+        name = r.get("name")
+        if not name:
+            continue
+        if name not in merged:
+            order.append(name)
+        old = merged.get(name, {})
+        # 本次缺的字段沿用旧值：`style_tag` 要点开技能面板才采得到，滚动采集
+        # 常常读不到；整条覆盖会把已经补齐的值抹掉（2026-11-14）。
+        merged[name] = {**old, **{k: v for k, v in r.items()
+                                  if v not in (None, "", [])}}
     out = [merged[n] for n in order if n]
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)

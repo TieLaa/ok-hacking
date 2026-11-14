@@ -617,7 +617,7 @@ class TrainingFlowMixin:
     def note_run_score(self, texts):
         """在「恭喜获得 / 训练奖励」页读**这一局要判定的球员评分**（每局只记第一次）。
 
-        队长 → 位置（`constants.POSITION_BY_NAME`）→ 那一列的四位数评分。
+        队长 → 位置（`roster.position_by_name`）→ 那一列的四位数评分。
         读不到就返回 None 且**不改** `_run_score`：`target_met(None)` 恒为 False，
         这一局按「未达标」处理，同一个队长再练一局（宁可多练，不许假达标）。
         """
@@ -1256,7 +1256,7 @@ class TrainingFlowMixin:
         style = self.style_for_name(name)
         if not style:
             self.log_warning(
-                f"配置的队长「{name}」不在角色表（STYLE_BY_NAME）→ 仍按日历识别流派")
+                f"配置的队长「{name}」不在角色表（docs/roster）→ 仍按日历识别流派")
             return False
         self._style = style
         self._style_name = name

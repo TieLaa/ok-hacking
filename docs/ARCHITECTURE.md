@@ -76,7 +76,7 @@ handlers 里直接 `top_bar()` 取日期就报红。
 
 ```
 路径 A（配置里填了队长）
-    查 STYLE_BY_NAME → 找到 √（定流派）
+    查 docs/roster（roster.style_by_name）→ 找到 √（定流派）
                     → 找不到 → 弹窗「未能识别到队长」
 
 路径 B（配置为空 = 快速接手）

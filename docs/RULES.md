@@ -52,7 +52,8 @@
     `非大厅开局 → 流派以游戏内队长/日历为准` + `流派：训练流（待日历识别队长）`）。
   - 现在由 `flow.resolve_style()` 统一决定：配置里有队长 → 查表定流派（查不到才回落到日历）；
     配置为空（无队长模式）→ 清空流派，等日历认实际队长。
-- 角色表 `STYLE_BY_NAME` 抄自 `docs/roster/ssr_roster.json` 的 `style_tag`（18 个 SSR）。
+- 角色表读 `docs/roster/*.json` 的 `style_tag`（`roster.style_by_name()`，2026-11-14 起
+  SSR / SR / R 共 36 人；手抄的 `constants.STYLE_BY_NAME` 已删）。
 - **名字比较一律过 `Defs.norm_name` / `Defs.name_matches`**（2026-10-31）：游戏里读到的名字
   和表里的写法不一样 —— 实测 `SR-亚理纱贾斯敏` vs 表里 `亚理纱·贾斯敏`（间隔点被 OCR 吃掉、
   底部名字行还带稀有度）。旧判据 `want in name` 直接比字符串，16 张队长卡全被当成「不是她」，
@@ -613,7 +614,7 @@
 
 实现：`training/queue.py`、`flow.run` / `flow.run_one_round` / `flow.note_run_score` /
 `flow.advance_queue_after_round` / `flow.switch_captain`、`parsers.read_squad_ratings`、
-`constants.POSITION_BY_NAME`、`handlers/match.py:handle_register_player`
+`roster.position_by_name()`、`handlers/match.py:handle_register_player`
 
 用户原话拆成四条：**野上泷 → 7500 分；亚理纱·贾斯敏 → 7300；近江奏 → 7300；
 全部达标提前终止**（等前面的任务都跑完再开始）。
@@ -621,7 +622,7 @@
 | 问题 | 口径 |
 |---|---|
 | 「多角色」是什么 | **多局串行**，不是一局内换人。一局 = 一次养成，终点是「注册球员 → 回大厅」 |
-| 分数从哪读 | **「恭喜获得 / 训练奖励」页**上该球员的四位数评分。这一页只列五个位置 + 评级 + 评分、**没有名字**，所以按「队长 → 位置（`POSITION_BY_NAME`）→ 那一列」取 |
+| 分数从哪读 | **「恭喜获得 / 训练奖励」页**上该球员的四位数评分。这一页只列五个位置 + 评级 + 评分、**没有名字**，所以按「队长 → 位置（`roster.position_by_name()`）→ 那一列」取 |
 | 什么时候判定 | **一局结束**（注册球员六步走完、回大厅）才判定，中途达标也**不打断**这一局 |
 | 没达标怎么办 | **同一个队长**再开一局（这就是「反复训练」），最多 `最大局数` 局 |
 | 达标了怎么办 | 游标 +1 → 写 `指定队长` = 下一个队长 → `reset_run_state()` + 清流派 → 回大厅开新局 |

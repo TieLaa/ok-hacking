@@ -426,7 +426,7 @@ STAMINA_PILL_TOL = 0.10        # 药丸文字框与顶栏右半区的横向余�
 
 # ---------- 「恭喜获得 / 训练奖励」页的球队评分（2026-11-04）----------
 # 多角色队列的达标判据：这一页按**五个位置**列评级 + 四位数评分，没有名字，
-# 所以要靠 constants.POSITION_BY_NAME 把「队长」映射到某一列。
+# 所以要靠 roster.position_by_name 把「队长」映射到某一列。
 SQUAD_POSITIONS = ("控卫", "分卫", "小前", "大前", "中锋")
 SQUAD_RATING_RE = re.compile(r"^[SABCD]\s*[+\-]?$")
 SQUAD_SECTION_BAND = (0.55, 0.70)      # 这一段的 cy 才是球队评分行（画面比例）

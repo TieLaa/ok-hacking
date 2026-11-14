@@ -4994,7 +4994,7 @@ class CaptainRoster(unittest.TestCase):
     """队长列表（监控页下拉）的数据源：一个角色只能出现一次。
 
     2026-11-03 用户发现下拉里有两个「羽?川湊」——采集脚本把「濑」认成「漱」，
-    旧表为了兼容把两种写法都收进 STYLE_BY_NAME，而那张表同时是下拉的数据源。
+    旧表为了兼容把两种写法都收进角色表，而那张表同时是下拉的数据源。
     现在错字走 STYLE_ALIASES，只做查询兼容、不进列表。
     """
 
@@ -5034,11 +5034,16 @@ class CaptainRoster(unittest.TestCase):
         self.assertEqual(TrainingParsersMixin.style_for_name("羽濑川湊"), "扭蛋流")
 
     def test_every_roster_character_has_a_style(self):
-        """docs/roster 里的 SSR / SR 全部要能查到流派，否则当队长会掉回训练流。"""
-        from src.tasks.training.constants import STYLE_ALIASES, STYLE_BY_NAME
-        known = set(STYLE_BY_NAME) | set(STYLE_ALIASES)
+        """docs/roster 里的 SSR / SR / R 全部要能查到流派，否则当队长会掉回训练流。
+
+        2026-11-14 起流派直接读 `docs/roster/*.json` 的 `style_tag`，
+        所以这份 json 必须对每个角色都有值（缺的 10 个已补）。
+        """
+        from src.tasks.training import roster
+        from src.tasks.training.constants import STYLE_ALIASES
+        known = set(roster.style_by_name()) | set(STYLE_ALIASES)
         missing = []
-        for f in ("ssr_roster.json", "sr_roster.json"):
+        for f in ("ssr_roster.json", "sr_roster.json", "r_roster.json"):
             with open(os.path.join(ROOT, "docs", "roster", f),
                       encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -7758,11 +7763,11 @@ class MonitorButtons(unittest.TestCase):
         from PySide6.QtWidgets import QApplication
 
         from src.ui.monitor_view import MonitorActions, MonitorView
-        from src.tasks.training.constants import STYLE_BY_NAME
+        from src.tasks.training import roster
 
         app = QApplication.instance() or QApplication([])
         groups = {}
-        for name, style in STYLE_BY_NAME.items():
+        for name, style in roster.style_by_name().items():
             groups.setdefault(style, []).append(name)
         order = ["训练流", "商店流", "扭蛋流", "小游戏流"]
         caps = {k: sorted(groups[k]) for k in order if k in groups}
