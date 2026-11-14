@@ -86,10 +86,19 @@ class StreetPlace:
         退出 → 又回到训练日主界面，当天的外出白跑（用户：「进了出行地图然后
         就退回来了，又点了训练」）。
 
+        2026-11-14 修正：标题改成扭蛋页**专有**的「请选择1个扭蛋 / 超级扭蛋机」，
+        不再认「扭蛋」这种泛词 —— 「扭蛋加成」技能状态说明页（11:37:52 实跑）
+        会被误判成扭蛋页，在那页上找三张卡当然找不到，白丢一次扭蛋。
+        状态说明/结算页的字（「扭蛋加成」「获得了…」「购买了扭蛋…」）一律排除。
+
         地图上有 ≥2 个地点名，扭蛋页只有一个，用它区分。
         """
         if self.match_text(texts, labels.STREET_TITLE) is None:
             return False
+        for t in texts:
+            name = t.name.strip()
+            if any(w in name for w in labels.STREET_TITLE_EXCLUDE):
+                return False
         places = [t for t in texts
                   if t.name.strip() in labels.WEEKEND_PLACES]
         return len(places) < 2

@@ -358,6 +358,32 @@ class GachaRules(unittest.TestCase):
         self.assertIsNone(item_attr_target("训练增强++"))
         self.assertFalse(is_money_card("投射增加+"))
 
+    def test_street_page_rejects_boost_status_panel(self):
+        """2026-11-14：「扭蛋加成」状态说明页不是扭蛋页。
+
+        实跑 11:37:52：千圣·贝尔丝的「扭蛋加成」技能说明页，OCR 读到
+        「扭蛋加成 / 获得了扭蛋加成状态…」→ 旧判据（含「扭蛋」就认）把它
+        当成扭蛋页 → 在那页上找三张卡 → 一张都找不到 → 白丢一次扭蛋。
+        """
+        texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期四", 130, 40),
+                 box(305, 13, "87/130", 172, 43),
+                 box(200, 300, "获得状态", 160, 40),
+                 box(200, 340, "扭蛋加成", 160, 40),
+                 box(200, 400, "获得了扭蛋加成状态，所有扭蛋效果+10%(持续时间：7天)",
+                      700, 40)]
+        task = FakeTask(texts)
+        self.assertFalse(task.street_page(texts))
+        self.assertFalse(task.handle_street(texts))
+        self.assertEqual(task.actions, [])
+
+    def test_street_page_accepts_real_title(self):
+        """真扭蛋页的标题仍要认（OCR 把 1 读成 i）。"""
+        for title in ("请选择1个扭蛋", "请选择1个扭蛋i", "超级扭蛋机"):
+            texts = [box(760, 80, title, 400, 70),
+                     box(860, 950, "确定", 200, 60)]
+            task = FakeTask(texts)
+            self.assertTrue(task.street_page(texts), title)
+
     def test_mate_card_beats_stamina_recovery(self):
         """2026-11-03 10:11 实跑：三张卡全带「增强款」，买错了中间那张恢复卡。
 

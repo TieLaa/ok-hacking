@@ -205,12 +205,17 @@ def _is_restaurant(task, texts):
 
 
 def _is_street(task, texts):
-    """步行街扭蛋页：标题含「请选择1个扭蛋」或「扭蛋」。
+    """步行街扭蛋页：标题是「请选择1个扭蛋」或「超级扭蛋机」。
 
-    要排除周末地图（地图上有地点名、也有「扭蛋增强」标签）。
+    2026-11-14 修正：原来标题含「扭蛋」就行，「扭蛋加成」技能状态说明页
+    会被误判成扭蛋页（实跑 11:37:52）。现在只认扭蛋页专有标题。
     """
     if task.match_text(texts, labels.STREET_TITLE) is None:
         return False
+    for t in texts:
+        name = t.name.strip()
+        if any(w in name for w in labels.STREET_TITLE_EXCLUDE):
+            return False
     return len(_short_place_names(texts)) < 2
 
 
