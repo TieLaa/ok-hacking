@@ -2037,6 +2037,53 @@ class CaptainFilterFlow(unittest.TestCase):
         self.assertEqual(info.get("position"), "大前")
 
 
+class PageSignatures(unittest.TestCase):
+    """页面签名表（阶段 2）：互斥声明的唯一出处。
+
+    签名写错会让两个页面互相判错 —— 用回归图守住。
+    """
+
+    def test_event_page_not_taken_as_subject_page(self):
+        """事件页正文含「决定」→ 不能被判成训练科目页。
+
+        2026-10-27 事故：正文「成功后，决定通过广播站平台支持球队。」
+        里含「决定」，包含匹配把事件页判成科目页 → 事件选项没人认领。
+        """
+        from src.tasks.training.page_signatures import matched_signatures
+        task = FakeTask([box(400, 300, "成功后，决定通过广播站平台支持球队。", 600, 40)])
+        hits = matched_signatures(task, task._texts)
+        self.assertNotIn("training_subject", hits)
+
+    def test_weekly_summary_needs_all_three_words(self):
+        """本周总结页要「球员+位置+评分」同时出现才算。"""
+        from src.tasks.training.page_signatures import matched_signatures
+        task = FakeTask([box(400, 300, "球员", 80, 40),
+                         box(500, 300, "位置", 80, 40)])
+        self.assertNotIn("weekly_summary", matched_signatures(task, task._texts))
+        task = FakeTask([box(400, 300, "球员", 80, 40),
+                         box(500, 300, "位置", 80, 40),
+                         box(600, 300, "评分", 80, 40)])
+        self.assertIn("weekly_summary", matched_signatures(task, task._texts))
+
+    def test_match_detail_needs_both_columns(self):
+        """关卡详情页要「对手实力+前往挑战」同时出现。"""
+        from src.tasks.training.page_signatures import matched_signatures
+        task = FakeTask([box(400, 300, "对手实力", 100, 40)])
+        self.assertNotIn("match_detail", matched_signatures(task, task._texts))
+        task = FakeTask([box(400, 300, "对手实力", 100, 40),
+                         box(600, 300, "前往挑战", 100, 40)])
+        self.assertIn("match_detail", matched_signatures(task, task._texts))
+
+    def test_weekend_map_needs_two_place_labels(self):
+        """周末地图要 ≥2 个整框地点名；正文里的地名不算。"""
+        from src.tasks.training.page_signatures import matched_signatures
+        task = FakeTask([box(400, 300, "告诉她公园的草坪是假的", 400, 40)])
+        self.assertNotIn("weekend_map", matched_signatures(task, task._texts))
+        task = FakeTask([box(200, 300, "公园", 80, 40),
+                         box(400, 300, "餐厅", 80, 40)])
+        self.assertIn("weekend_map", matched_signatures(task, task._texts))
+
+
 class ResumeTrainingNeverWipes(unittest.TestCase):
     """「训练确认」弹窗只许点「继续训练」，永不删档（2026-11-02 用户口径）。
 

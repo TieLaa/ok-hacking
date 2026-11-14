@@ -6,6 +6,7 @@
 
 
 from src.tasks.training import roster
+from src.tasks.training import page_signatures
 from src.tasks.ui import Defs
 from src.tasks.ui import labels
 
@@ -86,15 +87,10 @@ class EntryHandlers:
           这条经验就是阶段 2 的判据：**排除条件分两类** ——
           「正文关键词」可删（靠顺序兜底），「页面级强特征」不可删。
         """
-        # 赛事关卡详情页（全国大赛关卡列表）右下角常有一片白色（卡片边缘/滚动条），
-        # has_story_arrow 会判成 ▼，于是每 0.5 秒点右下角（2026-10-27 实机）。
-        # 这一页的强特征：右侧信息栏「关卡加成」+「奖励预览」。
-        if (self.match_text(texts, "关卡加成") is not None
-                and self.match_text(texts, "奖励预览") is not None):
-            return False
         # 周末地图：地点名是导航，不是可推进的剧情。
         # 2026-10-26 卡死：地图上被当成剧情页连点 ▼，反复 50 秒才被看门狗救回来。
-        if len([t for t in texts if t.name.strip() in labels.WEEKEND_PLACES]) >= 2:
+        # （阶段 2：这条和上面的「关卡加成+奖励预览」都收口到 `page_signatures`。）
+        if page_signatures.page_is_other(self, texts, "story_arrow"):
             return False
 
         # 训练事件 / 只有 ▼ 的剧情页（实机 2026-10-26）：右下角白色 ▼ 是最可靠的信号。
