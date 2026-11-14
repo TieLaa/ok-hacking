@@ -476,10 +476,14 @@ class BreathDifficultyPage(unittest.TestCase):
         self.assertTrue(task.handle_breath_difficulty(page))
         clicks = [a for a in task.actions if a[0] == "click"]
         self.assertEqual(len(clicks), 1)
-        # 点到的是**卡身中部**（3分钟那张卡下面那行「有机会获得大量零用钱」），
-        # 不是「3分钟」标签本身 —— 标签上点不下去（2026-11-04 实机）。
+        # 点到的是**卡身空白区** —— 不是「3分钟」标签，也不是说明文字。
+        # 2026-11-14 实跑教训：点说明文字中心 (406,490) 被游戏吃掉，
+        # 「确定」一直是灰的、连点 4 次没反应。要落在
+        # 「标签下沿 ~ 说明文字上沿」之间（纯卡身空白）。
+        # 这不是「3分钟」标签本身 —— 标签上点不下去（2026-11-04 实机）。
         self.assertGreater(clicks[0][1], 850)
-        self.assertGreater(clicks[0][2], 460)
+        self.assertGreaterEqual(clicks[0][2], 391 + 35)   # 标签下沿
+        self.assertLessEqual(clicks[0][2], 471)           # 说明文字上沿
         task.actions.clear()
         self.assertTrue(task.handle_breath_difficulty(page))
         clicked = [a for a in task.actions if a[0] == "click_box"]

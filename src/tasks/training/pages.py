@@ -64,11 +64,12 @@ PRIORITY = {
     "lobby": 61,
     # 度假页要在 story_arrow 之前 —— 它也有右下角 ▼，但要点的是主按钮
     "vacation": 62,
+    "captain_filter": 63,
     # --- 靠通用关键词，排在标题页之后 ---
-    "match_result": 63,
-    "boost_status": 64,
-    "training_subject": 65,
-    "event_choice": 66,
+    "match_result": 64,
+    "boost_status": 65,
+    "training_subject": 66,
+    "event_choice": 67,
     "weekend_map": 66,
     "go_out": 67,
     "restaurant": 70,
@@ -78,6 +79,8 @@ PRIORITY = {
     "shop": 100,
     "story_arrow": 120,
     "popup": 125,
+    # 训练日主界面最后：很多页面都有「训练」这个词，必须让专属页面先认
+    "training_hub": 140,
     # --- 需要组合判据的（两三个词同时出现才算）---
     "stage_list": 130,
     "confirm_team": 131,
@@ -240,6 +243,29 @@ def _is_vacation(task, texts):
     if task.match_text(texts, "训练计划") is not None:
         return False
     return task.match_text(texts, labels.VACATION_TEXTS) is not None
+
+
+def _is_captain_filter(task, texts):
+    """选队长的「显示设定 → 筛选」面板：「显示设定」+ 排序维度。
+
+    2026-11-14 实跑：这一页在 20:17:12 掉进 unknown（`handle_captain_filter`
+    自己认得出来，但分类器没登记）。
+    「显示设定」是这一页独有的标题。
+    """
+    if task.match_text(texts, "显示设定") is None:
+        return False
+    return task.match_text(texts, ("稀有度", "位置", "排序", "筛选")) is not None
+
+
+def _is_training_hub(task, texts):
+    """训练日主界面：右下角主按钮区写着「训练 / 比赛 / VS」。
+
+    2026-11-14 实跑：这一页 16 帧掉进 unknown。
+    只看 `main_action` 区域（右下角）—— 全屏的台词里也会出现「比赛」「训练」，
+    用它判会把剧情页抢走。
+    """
+    action = task.texts_in_region(texts, "main_action")
+    return task.match_text(action, ("VS", "比赛", "训练")) is not None
 
 
 def _is_popup(task, texts):
@@ -505,13 +531,17 @@ def _is_boost_status(task, texts):
     被 `handle_event_choice` 兜底认领。它和事件选项页长得像（都在底部属性
     面板上方），但**没有可点选项**。
 
-    只认**标签**词，不能用泛词「加成」—— 正文里到处是「加成」
-    （「器材加成-70熟练度」「训练加成状态」「暴击训练的加成」都是效果描述，
-    见 `logs/.../1112-002441_handle_event_choice.jpg`）。
+    只认**这几个固定标签**，不能用「xx加成」泛匹配 ——
+    选队长页会显示流派名「扭蛋加成 / 训练加成」，也会被泛匹配命中
+    （2026-11-14 实跑 20:17:11 实测：那一帧是选队长页，被认成加成状态页）。
+    也不能用泛词「加成」—— 正文里到处是「器材加成-70熟练度」
+    「暴击训练的加成」这类效果描述。
     """
     for t in texts:
         s = t.name.strip()
-        if len(s) <= 6 and (s.endswith("加成") or s in ("额外队友", "Bonus", "Bonus:")):
+        if s in ("表情加成", "倍率加成", "额外队友", "Bonus", "Bonus:"):
+            return True
+        if s.startswith("属性加") and len(s) <= 5:
             return True
     return False
 
@@ -729,6 +759,8 @@ _ANCHORS = {
     "popup": _is_popup,
     "park_detail": _is_park_detail,
     "vacation": _is_vacation,
+    "captain_filter": _is_captain_filter,
+    "training_hub": _is_training_hub,
 }
 
 

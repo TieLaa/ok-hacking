@@ -1961,7 +1961,7 @@ class PageRegistry(unittest.TestCase):
         overlap = set(pages.PRIORITY) & set(page_signatures.SIGNATURES)
         known_equal = {"register_player", "training_plan", "weekend_map",
                        "announcement", "captain", "confirm_team",
-                       "equipment", "team", "stock_pick"}
+                       "equipment", "team", "stock_pick", "training_hub"}
         known_different = {"shop", "training_subject"}
         known_two_forms = {"stage_list"}
         self.assertEqual(
@@ -1972,6 +1972,38 @@ class PageRegistry(unittest.TestCase):
             "不等价就改名（如 match_result → stage_list）"
             % (sorted(overlap - known_equal - known_different - known_two_forms),
                sorted(known_equal | known_different | known_two_forms - overlap)))
+
+    def test_breath_card_click_avoids_text(self):
+        """憋气难度页：卡片点击点必须落在**空白区**，不能压在说明文字上。
+
+        2026-11-14 实跑事故（logs/1114-201708_野上泷/debug/
+        1114-202055_noresp3s）：旧算法取说明文字中心 (406,490)，
+        点在那行字上被游戏吃掉 ——「确定」一直是灰的，连点 4 次没反应，
+        看门狗接管 3 次后停任务。
+
+        修法：取「标签下沿」到「说明文字上沿」的中点（纯卡身空白）。
+        2026-11-04 实测能选中的坐标是 (400,450)，这次算出来正好 450。
+        """
+        from src.tasks.training.handlers.training import TrainingHandlers
+        # 那帧的真实 OCR 框（从 ocr.txt 抄的）
+        label = box(269, 391, "4分钟", 76, 35)
+        desc = box(250, 474, "更高概率获得大量零用钱", 313, 32)
+        texts = [
+            label,
+            box(640, 391, "2分钟", 78, 35),
+            box(1008, 384, "3分钟", 81, 44),
+            desc,
+            box(635, 474, "随机获得属性或零用钱", 286, 32),
+            box(1006, 474, "有机会获得大量零用钱", 286, 32),
+        ]
+        task = FakeTask(texts)
+        x, y = TrainingHandlers._breath_card_point(task, label, texts)
+        # 必须落在标签下沿和说明文字上沿之间（空白区）
+        self.assertGreaterEqual(y, label.y + label.height)
+        self.assertLessEqual(y, desc.y)
+        # 接近 2026-11-04 实测有效的 (400,450)
+        self.assertLessEqual(abs(x - 400), 30)
+        self.assertLessEqual(abs(y - 450), 30)
 
     def test_route_matches_sequence_scan(self):
         """路由（先分类、再分派）不能改变行为 —— 除非是登记过的「修 bug」。
