@@ -27,7 +27,7 @@ from src.tasks.training.handlers.popup import PopupHandlers
 from src.tasks.training.handlers.stamina import StaminaHandlers
 from src.tasks.training.handlers.training import TrainingHandlers
 from src.tasks.training.handlers.weekend import WeekendHandlers
-from src.tasks.training.handlers.match import MatchHandlers
+from src.tasks.training.handlers.match import MatchHandlers, new_match_flags
 from src.tasks.training.handlers.entry import EntryHandlers
 from src.tasks.training.handlers.talent import TalentHandlers
 from src.tasks.training.handlers.wheel import WheelHandlers
@@ -69,7 +69,7 @@ class TrainingTask(TrainingFlowMixin, TrainingParsersMixin, TrainingScoringMixin
         self._last_state = None
         self._picked_subject = False
         self._picked_index = 0
-        self._match_flags = {"manual_fixed": False, "fast_clicked": False, "last_fast_at": 0.0}
+        self._match_flags = new_match_flags()
         # 「点了没反应」检测：用户口径 —— 连续点 3 次界面没变化就要开始 debug
         self._recent_actions = deque(maxlen=10)
         self._no_change = 0             # 连续几次点击后界面指纹没变

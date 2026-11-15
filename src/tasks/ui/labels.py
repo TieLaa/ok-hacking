@@ -195,6 +195,12 @@ REST_CONFIRM_TEXTS = ("是否要休息", "休息需要消耗", "休息需要一�
 # 训练预览里站在场边的球队经理（名字牌就是「球队经理」，会被 OCR 当成队友名）
 MANAGER_TEXTS = ("球队经理",)
 MATCH_TEXTS = ("比赛", "VS")
+# 锦标赛对阵图（关卡列表页）的标记：handlers/match.py 与 pages.py 共用。
+# 这一页只有「下一步」和学校名，没有「结算/赛程」这种整词标题。
+STAGE_LIST_MARKS = ("赛程已完成", "距离下场比赛", "挑战中")
+# 「比赛日处理」下拉的三个选项：training/config_spec.py 与 QuickMatchTask.py 共用。
+MATCH_DAY_OPTIONS = ("自动（先跳过，跳不了就进比赛加速）",
+                     "总是跳过", "总是进比赛（外部战斗脚本）")
 POPUP_TEXTS = ("确认", "关闭", "取消", "跳过", "领取", "继续", "今日不再提示")
 SPEED_TEXTS = ("快进", "倍速", "自动", "手动")
 

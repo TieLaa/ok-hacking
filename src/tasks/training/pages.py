@@ -145,8 +145,7 @@ def _is_stage_list(task, texts):
     这一页只有「下一步」和学校名，没有「结算/赛程」这种整词标题，
     旧判据认不出来会被事件 handler 当成竖排选项。
     """
-    return task.match_text(texts, ("赛程已完成", "距离下场比赛",
-                                   "挑战中")) is not None
+    return task.match_text(texts, labels.STAGE_LIST_MARKS) is not None
 
 
 def _is_confirm_team(task, texts):

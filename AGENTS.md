@@ -33,6 +33,11 @@
 - **提交信息写给用户看。** subject 是一句话的「用户能感知的变化」——发版时 pyappify 直接拿两个 tag 之间的提交生成更新提示，`handler`、`TaskExecutor`、`ci/test/chore` 这些内部词会原样出现在用户面前。技术细节放正文；纯内部改动（测试 / CI / 死代码）发版前用 `git rebase -i` 合并或压掉。
   <!-- 变更 2026-11-10 · opencode · 新增提交信息口径 · 安装器更新提示由 tag 之间的 commit 生成，内部词会直接暴露给用户；v0.1.9 前已按此口径重写过一批提交 -->
 - 踩到新坑时，把「下次该怎么说」补进 `docs/PROMPT_PLAYBOOK.md`，不要只改代码。
+- **同一件事实第二次写进代码时，先找它的家**：数值→`training/strategy/params.json`、文案→`src/tasks/ui/labels.py`、角色→`docs/roster`、页面判据→`training/pages.py`、日志目录→`retention.py`；找不到再新建，并在同一次提交里补来源检查。**只用一次的事实不建家**，写注释说明即可。
+  <!-- 变更 2026-11-15 · opencode · 新增「事实先找家」 · 3 周内重复出现角色表 x3、属性名 x4、状态字典 x3；单靠重构会话收敛不住，必须在写入时归位 -->
+- 被否决过的方案写进 `docs/decisions.md`（方案 / 原因 / 重提条件），不要再提第二遍。
+  <!-- 变更 2026-11-15 · opencode · 新增 decisions.md 约定 · P1~P6 大重构被回滚但原因没记，下一轮 agent 会重提 -->
+
 
 ## 发版（双重发布，顺序有依赖）
 

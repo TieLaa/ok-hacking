@@ -7,6 +7,7 @@
 import time
 
 from src.tasks.training import params
+from src.tasks.training.handlers.match import new_match_flags
 from src.tasks.training.queue import CaptainQueue
 from src.tasks.ui import labels
 from src.util.emergency_stop import STOP
@@ -486,8 +487,7 @@ class TrainingFlowMixin:
         self._picked_subject = False
         self._picked_index = 0
         self._subject_confirmed_at = 0.0
-        self._match_flags = {"manual_fixed": False, "fast_clicked": False,
-                             "last_fast_at": 0.0}
+        self._match_flags = new_match_flags()
         self._subject_dumps = 0
         self._skill_dumps = 0
         self._stock_dumps = 0
