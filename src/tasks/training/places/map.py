@@ -104,6 +104,17 @@ class MapPlace:
         赚 240~420 零用钱**，而商店买牛奶/秘籍不占日期 —— 特训牛奶 50 币
         能让 3 天训练少耗 40% 精力（约 1 个训练日），对训练流严格更划算。
         """
+        # 2026-11-15 用户口径：最后一周周六，比赛开着就去公园比，否则去打工
+        # （第7周没有训练日，精力不再兑现；钱留给周日商店买属性）。
+        # 放在缺口判断之前：这条规则不依赖精力。
+        week = self.current_day()[0]
+        if week == SHOP_SEASON_WEEKS and (day or "六") == "六":
+            if self.venue_has_boat_race(texts):
+                self.log_info("周末（第7周周六）：有「划船比赛！」→ 去公园比")
+                return ["公园"]
+            self.log_info(
+                "周末（第7周周六）：没有划船比赛 → 去餐厅打工（钱留给周日商店）")
+            return ["餐厅"]
         gap = self.weekend_gap(texts)
         if gap is None:
             return None
@@ -483,6 +494,19 @@ class MapPlace:
         同一水平带内（Δcy ≈ 0.06 屏高）。几何跟 `venue_on_discount` 一致，
         只是关键字换成「急招」；标签必须在名字左边，别把台词里的「急招」算进来。
         """
+        return self._venue_label_left(texts, place, ("急招",))
+
+    def venue_has_boat_race(self, texts, place="公园"):
+        """地图上公园名字左侧有没有「划船比赛！」标签（2026-11-15）。
+
+        实拍（1115-104813_handle_weekend.jpg）：标签在公园图标左侧、
+        比「公园」名字高约 0.04 屏高 —— 和「急招」同一几何。
+        最后一周周六据此决定「进公园比赛」还是「去餐厅打工」。
+        """
+        return self._venue_label_left(texts, place, ("划船比赛",))
+
+    def _venue_label_left(self, texts, place, keywords):
+        """地点名字左侧、同一水平带内有没有某个标签。"""
         if not texts:
             return False
         box = self._venue_box(texts, place)
@@ -492,7 +516,7 @@ class MapPlace:
         cy = box.y + box.height / 2
         for t in texts or []:
             name = t.name.replace(" ", "")
-            if "急招" not in name:
+            if not any(k in name for k in keywords):
                 continue
             tcx = t.x + t.width / 2
             tcy = t.y + t.height / 2

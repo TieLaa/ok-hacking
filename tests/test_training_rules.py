@@ -3752,9 +3752,9 @@ class WeekendMapRules(unittest.TestCase):
     MAP = [box(814, 461, "游戏厅", 148, 57), box(1538, 606, "公园", 102, 51),
            box(258, 748, "餐厅", 104, 60), box(1010, 897, "步行街", 148, 58)]
 
-    def _map(self, day):
+    def _map(self, day, week=1):
         """地图页 + 顶栏日期（weekend_priority 现在按「星期+流派」排行程）。"""
-        return list(self.MAP) + [box(30, 20, "第1周", 120, 40),
+        return list(self.MAP) + [box(30, 20, f"第{week}周", 120, 40),
                                  box(200, 20, day, 130, 40)]
 
     def _home_texts(self, day):
@@ -3804,6 +3804,27 @@ class WeekendMapRules(unittest.TestCase):
         task2 = self.styled("扭蛋流", only_line)
         self.assertFalse(task2.handle_go_out(only_line))
         self.assertEqual(task2.actions, [])
+
+    def test_final_week_saturday_works_without_boat_race(self):
+        """第7周周六没有划船比赛 → 打工，钱留给周日商店买属性。"""
+        texts = self._weekend_map("星期六", week=7)
+        task = self.styled("训练流", texts)
+        self.assertEqual(task.today_places(day="六", texts=texts), ["餐厅"])
+
+    def test_final_week_saturday_goes_park_with_boat_race(self):
+        """第7周周六有「划船比赛！」→ 去公园比（钱和属性都拿）。"""
+        texts = self._weekend_map("星期六", week=7) + [
+            box(1250, 540, "划船比赛！", 260, 80)]
+        task = self.styled("训练流", texts)
+        self.assertEqual(task.today_places(day="六", texts=texts), ["公园"])
+
+    def test_week6_saturday_still_parks_by_gap(self):
+        """第6周有比赛标签也走普通缺口规则（最后一周规则不提前）。"""
+        texts = self._weekend_map("星期六", week=6) + [
+            box(380, 16, "72/130", 210, 53),
+            box(1250, 540, "划船比赛！", 260, 80)]
+        task = self.styled("训练流", texts)
+        self.assertEqual(task.today_places(day="六", texts=texts), ["公园"])
 
     def test_map_with_gacha_hint_is_not_gacha_page(self):
         """2026-10-31 实跑（野上泷额外周末 · 第3周星期五）：
@@ -4261,9 +4282,9 @@ class WeekendMapRules(unittest.TestCase):
             self.assertTrue(task.handle_weekend(task._texts), day)
             self.assertTrue(task.weekend_state().outing_done, day)
 
-    def _weekend_map(self, day, money=None):
+    def _weekend_map(self, day, money=None, week=1):
         """周末地图（扭蛋流 / 小游戏流共用）：可带顶栏零用钱（不传 = OCR 读不到）。"""
-        texts = self._map(day)
+        texts = self._map(day, week)
         if money is not None:
             texts.append(box(1000, 20, str(money), 120, 45))
         return texts
