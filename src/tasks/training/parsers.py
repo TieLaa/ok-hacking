@@ -1689,12 +1689,13 @@ class TrainingParsersMixin:
     def preview_stamina(self, texts):
         """科目页顶栏的「训练后精力」= 药丸上的数字（用户 2026-11-15 口径）。
 
-        药丸的画法是「黄 = 当前精力、绿 = 这一练能涨的、深橄榄 = 这一练要扣的、
-        灰 = 空的」，而**数字是训练后的值**：
-          - 130/130 满条时选「投射」→ 黄段到 107、后面深橄榄、数字 `107/130`；
-          - 102/130 时选加精力的科目 → 黄段到 102、接一小截绿、数字 `107/130`；
+        药丸的画法（三个实测帧，2026-11-15）：**黄段画到「当前精力」和「训练后精力」
+        里较小的那个**，两者之间的差额用深橄榄（要扣）或绿色（会涨）补上，
+        再往上是灰色的空余；**数字永远是训练后的值**：
+          - 103/130 选加 4 点的科目 → 黄到 103、绿 4、数字 `107/130`；
+          - 82/130 选扣 18 点的科目 → 黄到 64、深橄榄 18、数字 `64/130`；
           - 选「意识」（不扣精力）→ `130/130`。
-        所以只读数字，**不要按黄段比例算** —— 涨精力时黄段只是当前值，会少算那几点。
+        所以只读数字，**不要按黄段比例算** —— 黄段是「两者较小值」，两种情况下含义不同。
         """
         value = self._stamina_number(self.texts_in_region(texts or [], "top_bar"))
         if value is not None:
@@ -2193,11 +2194,15 @@ class TrainingParsersMixin:
                 found.append(s)
         return found
 
-    def read_captain_name(self):
-        """底部中间那行队长名字（区域见 Defs.CAPTAIN_NAME_AREA）。"""
+    def read_captain_name(self, texts=None):
+        """底部中间那行队长名字（区域见 Defs.CAPTAIN_NAME_AREA）。
+
+        传 `texts` 就复用本拍已识别的帧（`handle_captain` 第一拍判据），
+        不传才自己再 OCR 一次。
+        """
         x1, y1, x2, y2 = Defs.CAPTAIN_NAME_AREA
         best = None
-        for t in self._ocr_region():
+        for t in (self._ocr_region() if texts is None else texts):
             cx = (t.x + t.width / 2) / self.width
             cy = (t.y + t.height / 2) / self.height
             if not (x1 <= cx <= x2 and y1 <= cy <= y2):
