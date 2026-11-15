@@ -86,6 +86,30 @@ class ShopDecisionBaseline(unittest.TestCase):
         self.assertEqual(self.pick(
             [item("器材手册+", 100)], week=3), "器材手册+")
 
+    # ---------- 最后一天之前留 120 给扭蛋（2026-11-15 用户口径） ----------
+    def test_keeps_120_for_gacha_before_last_day(self):
+        # 149 块买 60 的卡，买完只剩 89 < 120 → 不买
+        self.assertIsNone(self.pick([item("投射秘籍", 60)], money=149, week=6))
+
+    def test_spends_only_above_the_floor(self):
+        # 200 块买 60，剩 140 ≥ 120 → 买
+        self.assertEqual(self.pick([item("投射秘籍", 60)], money=200, week=6),
+                         "投射秘籍")
+
+    def test_last_day_ignores_the_floor(self):
+        # 第 7 周周日是最后一天：149 也照样买
+        self.assertEqual(self.pick([item("投射秘籍", 60)], money=149,
+                                   week=7, day="日"), "投射秘籍")
+
+    def test_floor_does_not_block_free_items(self):
+        self.assertEqual(self.pick([item("赠品", 0, "蓝")], money=30, week=6),
+                         "赠品")
+
+    def test_floor_is_strategy_param(self):
+        from src.tasks.training import params
+        self.assertEqual(
+            int(params.get("shop.keep_money_before_last_day")), 120)
+
     # ---------- 品质与排序 ----------
     def test_quality_color_first(self):
         self.assertEqual(self.pick(

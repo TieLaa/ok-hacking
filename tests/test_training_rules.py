@@ -6195,9 +6195,13 @@ class PurchaseRules(unittest.TestCase):
             self.assertIn("买「老板的馈赠」", "".join(task.logs))
 
     def test_shop_week6_training_style_buys_normally(self):
-        """2026-11-11 用户口径：训练流/商店流前 6 周不设限制，进店按顺序买。"""
+        """2026-11-11 用户口径：训练流/商店流前 6 周没有「留钱给周末」那条。
+
+        2026-11-15 起只有一条限制：买完要留 120 给扭蛋（`shop.keep_money_before_last_day`），
+        所以这里给 300 —— 买 130 还剩 170。
+        """
         for style in ("训练流", "商店流"):
-            task, texts = self._shop([("弹跳秘籍++", 130)], money=200,
+            task, texts = self._shop([("弹跳秘籍++", 130)], money=300,
                                      week=6, style=style)
             self.assertTrue(task.handle_shop(texts))
             self.assertIn("买「弹跳秘籍++」", "".join(task.logs))
@@ -6306,7 +6310,7 @@ class PurchaseRules(unittest.TestCase):
 
     def test_shop_random_drink_ranked_after_determined(self):
         task, texts = self._shop(
-            [("偶然饮料+", 50), ("弹跳秘籍+", 100)], money=200, week=6,
+            [("偶然饮料+", 50), ("弹跳秘籍+", 100)], money=300, week=6,
             quality="紫")
         task.info["attrs"] = {"弹跳": 800}
         task._attr_caps = {"弹跳": 1575}
@@ -6322,12 +6326,12 @@ class PurchaseRules(unittest.TestCase):
         所以「只剩付费饮料」现在由**新规则**接管（关店理由不同）。
         """
         task, texts = self._shop([("精力饮料", 30), ("弹跳秘籍++", 100)],
-                                 money=120, week=7)
+                                 money=300, week=7)
         self.assertTrue(task.handle_shop(texts))
         self.assertNotIn("买「精力饮料」", "".join(task.logs))
         self.assertIn("买「弹跳秘籍++」", "".join(task.logs))
         # 只剩付费饮料 → 关店
-        task, texts = self._shop([("精力饮料", 30)], money=120, week=7)
+        task, texts = self._shop([("精力饮料", 30)], money=300, week=7)
         self.assertTrue(task.handle_shop(texts))
         self.assertNotIn("买「精力饮料」", "".join(task.logs))
 
@@ -6419,7 +6423,7 @@ class PurchaseRules(unittest.TestCase):
 
     def test_shop_missing_week_buys_normally(self):
         """顶栏 OCR 抖一下、周数读不到：按第 7 周以后处理，正常买（不整拍罢工）。"""
-        task, texts = self._shop([("精力饮料", 30)], money=120)
+        task, texts = self._shop([("精力饮料", 30)], money=300)
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「精力饮料」", "".join(task.logs))
 
@@ -6433,12 +6437,12 @@ class PurchaseRules(unittest.TestCase):
     def test_shop_stamina_drink_preferred_when_affordable(self):
         """精力 T2：同屏有买得起的属性货时也先买饮料。"""
         task, texts = self._shop([("精力饮料+", 50), ("旧货", 45)],
-                                 money=50, quality="紫")
+                                 money=200, quality="紫")
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「精力饮料+」", "".join(task.logs))
-        # 只剩饮料时照样买
+        # 只剩饮料买得起（留 120 之后预算 40，旧货 45 买不起）
         task, texts = self._shop([("精力饮料+", 35), ("旧货", 45)],
-                                 money=40, quality="紫")
+                                 money=160, quality="紫")
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「精力饮料+」", "".join(task.logs))
 
@@ -6587,11 +6591,11 @@ class PurchaseRules(unittest.TestCase):
         try:
             # 100+60 > 130 → 拒买饮料，买其余商品
             task, texts = self._shop([("测试精力饮料", 50), ("训练手册", 100)],
-                                     money=200, stamina="100/130")
+                                     money=300, stamina="100/130")
             self.assertTrue(task.handle_shop(texts))
             self.assertIn("买「训练手册」", "".join(task.logs))
             # 只剩饮料且溢出 → 关店，日志带拒因
-            task, texts = self._shop([("测试精力饮料", 50)], money=200,
+            task, texts = self._shop([("测试精力饮料", 50)], money=300,
                                      stamina="100/130")
             self.assertTrue(task.handle_shop(texts))
             self.assertIn("恢复精力商品不满足门槛", "".join(task.logs))
@@ -6636,8 +6640,12 @@ class PurchaseRules(unittest.TestCase):
         self.assertIn("买「精力饮料」", "".join(task.logs))
 
     def test_shop_buys_affordable_purple_without_gate(self):
-        """2026-10-29 实跑回归：零用钱 120、紫卡 100 —— 钱够就买，不再看 300 门槛。"""
-        task, texts = self._shop([("弹跳教科书", 100)], money=120, quality="紫",
+        """2026-10-29 实跑回归：钱够就买，没有 300 那种余额门槛。
+
+        2026-11-15 起只多一条「留 120 给扭蛋」的储备线，所以给 300 测「没有别的门槛」；
+        储备线本身见 `test_shop_decision.test_keeps_120_for_gacha_before_last_day`。
+        """
+        task, texts = self._shop([("弹跳教科书", 100)], money=300, quality="紫",
                                  style="训练流")
         self.assertTrue(task.handle_shop(texts))
         self.assertIn("买「弹跳教科书」", "".join(task.logs))
