@@ -36,7 +36,32 @@ ALLOWED = {
         (12, "修 bug：周末首页误点「训练」→ 点「出行」"),
     ("handle_match_result", "handle_result"):
         (2, "两者动作相同（都点「下一步」）"),
+    ("handle_popup", "handle_match_result"):
+        (50, "通用弹窗叠在比赛结算上：路由把结算提到前面（和 event_choice 同一类）"
+             "；存证帧每局增长，上限放宽"),
 }
+
+# 「商店面板叠在训练日那一页上」这一族（2026-11-15 实跑帧）：顺序遍历会点到
+# 底下那页的主按钮（训练/休息），路由到 handle_shop 才是对的。存证帧每跑一局就多
+# 一批，pair 会不断冒新的（training_hub / training_day / popup …），所以按族放行，
+# 不再一帧一个 pair。上限放宽到 50：它只防「突然整类失效」，不卡具体帧数。
+SHOP_OVERLAY_LEFT = {
+    "handle_training_hub", "handle_training_day", "handle_popup", "handle_go_out",
+}
+# 面板（商店 / 出行地图）叠在训练日那一页上时，路由会把面板 handler 提到前面；
+# 这两个也算同一族。
+SHOP_OVERLAY_TARGET = {"handle_shop", "handle_go_out"}
+SHOP_OVERLAY_MAX = 50
+
+
+def allowance(a, b):
+    """这一对 (顺序, 路由) 允许多少帧。"""
+    if (a, b) in ALLOWED:
+        return ALLOWED[(a, b)]
+    if b in SHOP_OVERLAY_TARGET and a in SHOP_OVERLAY_LEFT:
+        return (SHOP_OVERLAY_MAX,
+                "面板叠在训练日页面上：顺序路点到主按钮，路由到面板 handler 才对")
+    return (0, "★未登记的差异")
 
 
 def norm(actions):

@@ -2111,7 +2111,7 @@ class PageRegistry(unittest.TestCase):
             if seq[0] != rt[0] or seq[1] != rt[1]:
                 diffs[(seq[0], rt[0])] += 1
         for (a, b), n in diffs.items():
-            limit, why = check_route.ALLOWED.get((a, b), (0, "★未登记的差异"))
+            limit, why = check_route.allowance(a, b)
             self.assertLessEqual(
                 n, limit,
                 "路由引入了未登记的行为差异 %d 帧：顺序=%s → 路由=%s（%s）"
@@ -4865,14 +4865,72 @@ class GachaTopCardRules(unittest.TestCase):
         self.assertEqual(best["name"], "笔记继承")
 
     def test_probe_mode_rejects_non_top_cards(self):
+        """余额刚好不够留 120：彩卡也不买。"""
         task = FakeTask([])
         cards = [self._card("运控增加+++"),
                  self._card("运控增加++", quality="金")]
         best, detail, _ = task.gacha_candidates(
-            cards, stamina=100, stamina_max=130, money=500, week=6,
+            cards, stamina=100, stamina_max=130, money=200, week=6,
             allow_others=False)
         self.assertIsNone(best)
-        self.assertIn("探卡池只买", detail)
+        self.assertIn("留 120", detail)
+
+    def test_probe_mode_buys_color_with_spare_money(self):
+        """2026-11-15 用户口径：探卡池里彩卡也买，但只用「留够 120 以上的闲钱」。"""
+        task = FakeTask([])
+        cards = [self._card("运控增加+++", price=120),
+                 self._card("运控增加++", quality="金", price=100)]
+        best, _detail, _ = task.gacha_candidates(
+            cards, stamina=100, stamina_max=130, money=500, week=6,
+            allow_others=False)
+        self.assertEqual(best["name"], "运控增加+++")
+
+    def test_probe_mode_color_keeps_120(self):
+        """240 买 120 的彩卡 → 正好剩 120，可以买；239 就买不了。"""
+        cards = [self._card("运控增加+++", price=120)]
+        for money, want in ((240, True), (239, False)):
+            task = FakeTask([])
+            best, _detail, _ = task.gacha_candidates(
+                cards, stamina=100, stamina_max=130, money=money, week=6,
+                allow_others=False)
+            self.assertEqual(best is not None, want, money)
+
+    def test_probe_mode_color_blocked_when_money_unknown(self):
+        task = FakeTask([])
+        cards = [self._card("运控增加+++", price=120)]
+        best, _detail, _ = task.gacha_candidates(
+            cards, stamina=100, stamina_max=130, money=None, week=6,
+            allow_others=False)
+        self.assertIsNone(best)
+
+    def test_probe_mode_still_rejects_gold_and_purple(self):
+        task = FakeTask([])
+        cards = [self._card("运控增加++", quality="金", price=100),
+                 self._card("运控增加+", quality="紫", price=80)]
+        best, _detail, _ = task.gacha_candidates(
+            cards, stamina=100, stamina_max=130, money=999, week=6,
+            allow_others=False)
+        self.assertIsNone(best)
+
+    def test_probe_mode_color_ignores_reserve_after_both_top_got(self):
+        """两张目标卡都到手之后，彩卡不再受 120 储备限制。"""
+        task = FakeTask([])
+        task._top_gacha_got = {"笔记继承", "球员位置"}
+        cards = [self._card("运控增加+++", price=120)]
+        best, _detail, _ = task.gacha_candidates(
+            cards, stamina=100, stamina_max=130, money=150, week=6,
+            allow_others=False)
+        self.assertEqual(best["name"], "运控增加+++")
+
+    def test_probe_mode_color_reserved_until_both_top_got(self):
+        """只拿到一张时还要留 120（150 买 120 只剩 30 → 不买）。"""
+        task = FakeTask([])
+        task._top_gacha_got = {"笔记继承"}
+        cards = [self._card("运控增加+++", price=120)]
+        best, _detail, _ = task.gacha_candidates(
+            cards, stamina=100, stamina_max=130, money=150, week=6,
+            allow_others=False)
+        self.assertIsNone(best)
 
     def test_top_card_beats_everything(self):
         """压过同屏彩卡和「额外零用钱」卡。"""
@@ -4907,12 +4965,12 @@ class GachaTopCardRules(unittest.TestCase):
         self.assertIn("选「笔记继承」", log)
 
     def test_handle_street_probe_skips_other_cards(self):
-        """探卡池模式：没有这两张就退出，不买彩/金属性卡。"""
+        """探卡池模式：没有这两张就退出；余额不够留 120 时，彩/金/紫都不买。"""
         texts = gacha_texts([
             ("运控增加+++", "主力运控+72"),
             ("运控增加++", "主力运控+48"),
             ("运控增加", "主力运控+24"),
-        ], stamina="100/130", money="500", price="120")
+        ], stamina="100/130", money="200", price="120")
         task = FakeTask(texts, qualities=["彩", "金", "紫"])
         task.day_state().current_step = WeekendStep("步行街", False, True)
         self.assertTrue(task.handle_street(texts))

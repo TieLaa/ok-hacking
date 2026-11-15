@@ -210,6 +210,9 @@ class TrainingFlowMixin:
 
     def _run_one_round(self):
         self._steps = 0
+        # 每局重置：这一局已经买到过哪几张「笔记继承 / 球员位置」（见
+        # `places/street.top_gacha_got`）。不清就会拿上一局的记录少留 120。
+        self._top_gacha_got = set()
         # 日志文件自检（2026-11-10）：GUI 跑任务时 ok 的 FileHandler 会失踪，
         # 整场运行没有日志落盘。这里每次开局确认一次，没有就由我们补一个
         # 写 logs/run.log 的 handler（细节见 src/util/log_fallback.py）。

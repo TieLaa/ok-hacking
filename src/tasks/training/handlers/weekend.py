@@ -14,6 +14,7 @@ from src.tasks.ui import labels
 from src.tasks.training import attributes, roster
 from src.tasks.training.constants import SHOP_SEASON_WEEKS
 from src.tasks.training.places import activities
+from src.tasks.training.places import street
 
 
 class WeekendHandlers:
@@ -603,6 +604,13 @@ class WeekendHandlers:
             self.log_info("扭蛋：确定")
             # 今天花过钱了：扭蛋流周末不必再去餐厅打工（flow.weekend_priority 用）
             self.mark_spent()
+            # 目标卡「笔记继承 / 球员位置」到手就记一笔：两张齐了以后探卡池
+            # 就不用再为它们留 120（用户 2026-11-15 口径）。
+            key = street.top_gacha_key(best["name"])
+            if key:
+                self.top_gacha_got().add(key)
+                self.log_info(f"扭蛋：目标卡「{key}」已到手"
+                              f"（{len(self.top_gacha_got())}/{len(street.TOP_GACHA_NAMES)}）")
         else:
             self.click(int(self.width * 0.5), int(self.height * 0.93), after_sleep=0.8)
             self.log_warning("扭蛋：没认出「确定」，按底部中间兜底")

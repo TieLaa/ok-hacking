@@ -64,6 +64,7 @@
 
 from src.tasks.ui import labels
 from src.tasks.training import attributes
+from src.tasks.training import params
 from src.tasks.training.constants import SHOP_SEASON_WEEKS
 
     # 地点名（地图上的按钮文字 / 状态里的键）
@@ -80,10 +81,18 @@ SURGE_NAMES = tuple(f"{a}暴涨" for a in labels.TRAINING_SUBJECTS)
 TOP_GACHA_NAMES = ("笔记继承", "球员位置")
 
 
+def top_gacha_key(name):
+    """「笔记继承 / 球员位置」→ 它的关键字；不是这两张返回 None。"""
+    for key in TOP_GACHA_NAMES:
+        if key in (name or ""):
+            return key
+    return None
+
+
 def is_top_gacha(card):
     """这张扭蛋卡是不是「笔记继承 / 球员位置」的**彩色**版本？"""
     return (card.get("quality") == "彩"
-            and any(n in card.get("name", "") for n in TOP_GACHA_NAMES))
+            and top_gacha_key(card.get("name")) is not None)
 
 
 class StreetPlace:
@@ -132,6 +141,17 @@ class StreetPlace:
         return bool(self.config.get("允许进步行街"))
 
     # ---------- 买哪张卡（纯判断，不点击） ----------
+
+    def top_gacha_got(self):
+        """这一局已经买到过哪几张「笔记继承 / 球员位置」（存关键字）。
+
+        用户 2026-11-15 口径：两张都到手之后，探卡池就不用再为它们留 120 了。
+        每局重置在 `flow._run_one_round`。
+        """
+        got = getattr(self, "_top_gacha_got", None)
+        if got is None:
+            got = self._top_gacha_got = set()
+        return got
 
     def gacha_candidates(self, cards, stamina, stamina_max, money,
                          required=None, attrs=None, caps=None, gap_limit=100,
@@ -223,11 +243,26 @@ class StreetPlace:
             return None
 
         ok = []
+        # 探卡池要留的零花钱：和商店同一条储备线（`shop.keep_money_before_last_day`），
+        # 钱留给「笔记继承 / 球员位置」。
+        probe_reserve = int(params.shop.keep_money_before_last_day)
+        # 两张目标卡**都到手之后**就不用再留了（用户 2026-11-15 口径）。
+        got = self.top_gacha_got()
+        need_reserve = any(key not in got for key in TOP_GACHA_NAMES)
         for c in cards:
-            # 探卡池模式只买「笔记继承 / 球员位置」的彩色版本（用户 2026-11-15）。
+            # 探卡池模式（用户 2026-11-15 口径）：
+            #   - 目标卡「笔记继承 / 球员位置」的彩色版：照买；
+            #   - **其它彩色卡也买**：彩是最高品质（商店同价只能买紫/金）；
+            #   - 但两张目标卡还没到手时，只能用「留够 120 以上的闲钱」——
+            #     花它不能动那 120 的储备，否则目标卡真出现时买不起。
             if not allow_others and not is_top_gacha(c):
-                c["reject"] = "探卡池只买笔记继承/球员位置"
-                continue
+                price = c["price"]
+                spare = (money is not None and price is not None
+                         and money - price >= probe_reserve)
+                if not (c["quality"] == "彩" and (spare or not need_reserve)):
+                    c["reject"] = (f"探卡池只买笔记继承/球员位置"
+                                   f"（彩卡要留 {probe_reserve}）")
+                    continue
             # 品质白名单对**所有**卡生效，清空卡也不例外（用户 2026-11-04：
             # 「怎么买了一个蓝色的，不是不买吗」）。
             # 2026-11-04 23:56 实跑就是这么买错的：这两条以前写成 `if clear / elif
@@ -256,7 +291,7 @@ class StreetPlace:
             # 符合本流派的**优先买**，不符的**跳过**。
             card_style = attributes.card_style_target(c.get("name"), c.get("effect"))
             if card_style is not None and card_style != self.style:
-                c["reject"] = f"{card_style}流专属"
+                c["reject"] = f"{card_style}专属"
                 continue
             # 属性取向（2026-11-13）：该属性缺口不足阈值 → 不买（加了会溢出）。
             target = attributes.item_attr_target(c.get("name"))
