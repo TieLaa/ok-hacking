@@ -577,6 +577,17 @@ def check_config():
     from src.tasks.training import config_spec
     declared = {s.key for s in config_spec.ALL}
 
+    # `attributes.py` 里有两个 fallback 默认值（测试直接调用时用），必须和
+    # config_spec 的默认值一致；否则调了配置、测试还按旧值跑（2026-11-15）。
+    from src.tasks.training import attributes
+    for key, value in (("属性减半门槛", attributes.DEFAULT_SOFT_CAP),
+                       ("缺口排除阈值", attributes.DEFAULT_GAP_LIMIT)):
+        spec = next((s for s in config_spec.ALL if s.key == key), None)
+        if spec is not None and spec.default != value:
+            problems.append(
+                f"config_spec.py: {key!r} 默认 {spec.default} 与 "
+                f"attributes.py 的 fallback {value} 不一致 —— 改一处要改两处")
+
     read_keys = set()
     src_root = os.path.join(ROOT, "src")
     for dp, _, files in os.walk(src_root):

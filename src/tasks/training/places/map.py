@@ -245,7 +245,7 @@ class MapPlace:
                 return places
             money = self.read_money(texts)
             week, _ = self.current_day()
-            gate = int(params.get("weekend.work_money_gate"))
+            gate = int(params.weekend.work_money_gate)
             # 2026-11-14 用户口径（游戏设置）：第 7 周周六是最后一次出行，
             # **不看零花钱**直接去主地点；没消费再退出回餐厅打工（下一站）。
             if day == "六" and week == SHOP_SEASON_WEEKS:
@@ -328,8 +328,8 @@ class MapPlace:
         存进去就要跟着 OCR 校准、还要把每个扣减点接进来，架构更重。
         """
         money = self.read_money(texts)
-        work_gate = int(params.get("weekend.work_money_gate"))
-        discount_gate = int(params.get("weekend.discount_money_gate"))
+        work_gate = int(params.weekend.work_money_gate)
+        discount_gate = int(params.weekend.discount_money_gate)
         street_discount = bool(
             self.venue_on_discount(texts, self._venue_box(texts, "步行街")))
         week, day = st.date or (None, None)
@@ -402,7 +402,7 @@ class MapPlace:
         week, day = st.date or (None, None)
         if week != 3 or day not in ("六", "日"):
             return None
-        return int(params.get("vacation.stamina_target"))
+        return int(params.vacation.stamina_target)
 
     def vacation_eve_guard(self, steps, texts, st=None):
         """第3周周末：体力不够时把打工换成公园，保证周日结束 ≥ 目标。

@@ -1282,9 +1282,9 @@ class TrainingFlowMixin:
         周二现在没有任何特殊阈值（旧的周二 65 / 周二 60 已删除）。
         有硬阈值时取 max(策略参数, 硬阈值)，参数调高时以参数为准。
         """
-        base = int(params.get("rest.stamina_threshold"))
+        base = int(params.rest.stamina_threshold)
         if day == "四":
-            hard = params.get("rest.thursday_threshold_by_style").get(self.style)
+            hard = params.rest.thursday_threshold_by_style.get(self.style)
             if hard is not None:
                 return max(base, hard)
         return base

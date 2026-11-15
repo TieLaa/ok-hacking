@@ -19,7 +19,7 @@ class TrainingScoringMixin:
     # （按卡上的金框算会和「装备」重复计分）。
     @classmethod
     def _weights(cls):
-        return params.get("scoring")
+        return params.scoring
 
     @classmethod
     def empty_preview(cls):

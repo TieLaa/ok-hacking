@@ -4748,18 +4748,18 @@ class StylePlanRules(unittest.TestCase):
             self.assertEqual(limit(style, "五"), 50, style)
             self.assertEqual(limit(style, "一"), 50, style)
         # 参数调得更高时以参数为准（取 max，不能因为周四就下调）；
-        # 只覆盖基础阈值，周四的按流派表保持不变
+        # 只覆盖基础阈值，周四的按流派表保持不变。
+        # 2026-11-15：flow 改成属性式访问（params.rest.*），这里要换掉整个 rest 节点。
+        from types import SimpleNamespace
         from unittest import mock
         from src.tasks.training import params as _params
-        real_get = _params.get
-
-        def base_80(path, default=None):
-            if path == "rest.stamina_threshold":
-                return 80
-            return real_get(path, default)
+        real_rest = _params.rest
+        fake_rest = SimpleNamespace(
+            stamina_threshold=80,
+            thursday_threshold_by_style=real_rest.thursday_threshold_by_style)
 
         for style in ("扭蛋流", "小游戏流", "训练流"):
-            with mock.patch("src.tasks.training.params.get", side_effect=base_80):
+            with mock.patch.object(_params, "rest", fake_rest):
                 task = FakeTask([])
                 task._style = style
                 self.assertEqual(task.rest_threshold("四"), 80, style)

@@ -838,6 +838,29 @@
 
 ---
 
+## 天赋 → 角色（2026-11-05 口径，只记了一部分）
+
+> 原来放在 `handlers/talent.py: TALENT_OWNERS`，但代码从未读取它；
+> 2026-11-15 挪到这里，避免和 `docs/roster` 各自漂移。
+
+| 天赋 | 角色 | 实现 |
+|---|---|---|
+| 股神! | 闪堂电 / 亚理纱·贾斯敏 | `handle_stock_pick` / `handle_stock_result` |
+| 钓鱼 | 真崎辉世 / 佐久间雨乃 | `handle_fishing_ground` |
+| 写小说 | 望月透 | `handle_theme_select` / `handle_manuscript_submit` |
+| 做饭 | 千圣·贝尔丝 | `handle_ingredient_select` |
+| 人气主播 | 和泉香织 | `handle_live_stream` |
+| 占卜 | 卧云真昼 | `handle_divination` |
+| 建设达人 | 百目鬼剑 | `handle_construction` |
+| 潜水 | — | 未实现（占位） |
+| 跑团 | 羽濑川湊 / 近江奏 | 未实现 |
+| 异世界碎片 | 羽田朱志香 | 未实现 |
+| 演唱会 | 远野桐 | 未实现 |
+| 汉堡券 | 澪奈·贾妮丝 | 未实现 |
+| 龙宫寺集团 | 龙宫寺心叶 | 未实现 |
+
+---
+
 ## 改动规则
 
 1. 先改本文件，再改代码，最后补单测（`tests/test_training_rules.py`）和回归图。
