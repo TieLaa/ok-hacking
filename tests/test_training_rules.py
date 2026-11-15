@@ -3242,7 +3242,7 @@ class PlaceModulesRules(unittest.TestCase):
 
     # ---------- 公园：划船的队友比野餐多 2 个 → 优先划船（2026-11-08） ----------
 
-    def _park(self, stamina=None):
+    def _park(self, stamina=None, race=False):
         """真实布局（docs/shots/2026-10-26-park.png）：散步 / 划船 / 野餐 横排。"""
         texts = [box(760, 80, "在公园干点什么好呢?", 460, 60),
                  box(430, 400, "散步", 120, 40),
@@ -3252,11 +3252,14 @@ class PlaceModulesRules(unittest.TestCase):
                  box(200, 20, "星期日", 130, 40)]
         if stamina:
             texts.append(box(380, 16, stamina, 210, 53))
+        if race:
+            # 「划船比赛！」浮层贴在划船图标上方（实拍 y 比选项文字高约 40px）
+            texts.append(box(790, 360, "划船比赛！", 170, 36))
         return texts
 
-    def _park_task(self, stamina="20/130", mates=None, style="训练流"):
+    def _park_task(self, stamina="20/130", mates=None, style="训练流", race=False):
         """`mates` 按选项名给队友个数（测试帧是黑的，数脸数不出人 → 直接覆盖判据）。"""
-        task = FakeTask(self._park(stamina))
+        task = FakeTask(self._park(stamina, race))
         task._style = style
         task.weekend_state()
         counts = dict(mates or {})
@@ -3281,6 +3284,17 @@ class PlaceModulesRules(unittest.TestCase):
         """训练流缺口 110 ≥ 70 → 野餐；划船队友多 2 个也不改（缺口规则优先）。"""
         task = self._park_task(mates={"划船": 2, "野餐": 0})
         self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "野餐")
+
+    def test_boat_race_badge_prefers_boat(self):
+        """2026-11-15 用户口径：公园页有「划船比赛！」→ 优先划船（压过缺口）。"""
+        task = self._park_task(race=True)     # 20/130，缺口 110 本来会选野餐
+        self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "划船")
+
+    def test_boat_race_badge_prefers_boat_other_styles(self):
+        """其它流派同样：标签优先于默认野餐和队友判断。"""
+        task = self._park_task(mates={"划船": 0, "野餐": 0},
+                               style="扭蛋流", race=True)
+        self.assertEqual(task.park_order(task._texts, "扭蛋流", day="日")[0], "划船")
 
     def test_park_boat_with_one_more_teammate_still_picnic(self):
         """训练流缺口 110 ≥70 → 野餐；划船只多 1 个也不改（缺口规则优先）。"""

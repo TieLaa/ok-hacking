@@ -120,6 +120,13 @@ class ParkPlace:
                     f"海边前周末：体力 {stamina} 距目标 {target} 差 {gap} → 划船")
                 return "划船"
 
+        # 2026-11-15 用户口径：公园页选项上方出现「划船比赛！」→ 优先划船
+        # （比赛有额外收益，压过缺口/队友判断）。
+        # 放在海边守卫**之后**：RULES 里「事件不能推翻第3周体力目标」仍然有效。
+        if self.match_text(texts, labels.PARK_BOAT_RACE) is not None:
+            self.log_info("公园：有「划船比赛！」→ 优先划船")
+            return "划船"
+
         if style == "训练流":
             gap = self.weekend_gap(texts)
             if gap is not None:
