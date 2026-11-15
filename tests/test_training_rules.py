@@ -3242,14 +3242,14 @@ class PlaceModulesRules(unittest.TestCase):
 
     # ---------- 公园：划船的队友比野餐多 2 个 → 优先划船（2026-11-08） ----------
 
-    def _park(self, stamina=None, race=False):
+    def _park(self, stamina=None, race=False, week=1, day="日"):
         """真实布局（docs/shots/2026-10-26-park.png）：散步 / 划船 / 野餐 横排。"""
         texts = [box(760, 80, "在公园干点什么好呢?", 460, 60),
                  box(430, 400, "散步", 120, 40),
                  box(790, 400, "划船", 120, 40),
                  box(1150, 400, "野餐", 120, 40),
-                 box(30, 20, "第1周", 120, 40),
-                 box(200, 20, "星期日", 130, 40)]
+                 box(30, 20, f"第{week}周", 120, 40),
+                 box(200, 20, f"星期{day}", 130, 40)]
         if stamina:
             texts.append(box(380, 16, stamina, 210, 53))
         if race:
@@ -3257,9 +3257,10 @@ class PlaceModulesRules(unittest.TestCase):
             texts.append(box(790, 360, "划船比赛！", 170, 36))
         return texts
 
-    def _park_task(self, stamina="20/130", mates=None, style="训练流", race=False):
+    def _park_task(self, stamina="20/130", mates=None, style="训练流", race=False,
+                   week=1, day="日"):
         """`mates` 按选项名给队友个数（测试帧是黑的，数脸数不出人 → 直接覆盖判据）。"""
-        task = FakeTask(self._park(stamina, race))
+        task = FakeTask(self._park(stamina, race, week, day))
         task._style = style
         task.weekend_state()
         counts = dict(mates or {})
@@ -3314,6 +3315,16 @@ class PlaceModulesRules(unittest.TestCase):
         task._style = "训练流"
         task.weekend_state()
         self.assertEqual(task.park_order(texts, "训练流", day="日")[0], "划船")
+
+    def test_final_week_park_prefers_boat(self):
+        """第7周周六：没有训练日了，精力不再兑现 → 划船（属性+），不按缺口野餐。"""
+        task = self._park_task(stamina="58/130", week=7, day="六")
+        self.assertEqual(task.park_order(task._texts, "训练流", day="六")[0], "划船")
+
+    def test_week6_park_still_picnic_on_big_gap(self):
+        """第6周同样缺口仍按缺口野餐（最后一周规则不影响前面）。"""
+        task = self._park_task(stamina="58/130", week=6, day="六")
+        self.assertEqual(task.park_order(task._texts, "训练流", day="六")[0], "野餐")
 
     def test_park_boat_with_one_more_teammate_still_picnic(self):
         """训练流缺口 110 ≥70 → 野餐；划船只多 1 个也不改（缺口规则优先）。"""

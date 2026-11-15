@@ -48,7 +48,8 @@
     所以：标题只当**判据**，实际点击永远走选项文字框。
 """
 
-from src.tasks.training.constants import PARK_BOAT_STAMINA, WEEKEND_PICNIC_FALLBACK
+from src.tasks.training.constants import (PARK_BOAT_STAMINA, SHOP_SEASON_WEEKS,
+                                          WEEKEND_PICNIC_FALLBACK)
 from src.tasks.ui import labels
 
 # 地点名（地图上的按钮文字 / 状态里的键）
@@ -129,6 +130,12 @@ class ParkPlace:
         # 放在海边守卫**之后**：RULES 里「事件不能推翻第3周体力目标」仍然有效。
         if self.boat_race_badge(texts):
             self.log_info("公园：划船选项上方有「划船比赛！」→ 优先划船")
+            return "划船"
+
+        # 2026-11-15 用户口径：最后一周没有训练日了，精力不再兑现 → 划船拿属性。
+        week = self.top_bar(texts).get("week")
+        if week is not None and week >= SHOP_SEASON_WEEKS:
+            self.log_info("公园：最后一周没有训练日，精力不再兑现 → 划船（属性+）")
             return "划船"
 
         if style == "训练流":
