@@ -554,8 +554,13 @@ class WeekendHandlers:
         # 「买没买成」交给 gacha_spent 决定要不要去餐厅打工。
         self.mark_visited("步行街")
         self.mark_tried()
+        # 探卡池（所有流派出行日的第一步）：只买「笔记继承 / 球员位置」的彩色版本，
+        # 其他卡一张不买（用户 2026-11-15）。`handle_weekend` 点「步行街」时
+        # 把带 probe=True 的 WeekendStep 写进 current_step。
+        probe = bool(getattr(self._ensure_day().current_step, "probe", False))
         if not cards:
-            self.log_warning("扭蛋：三张卡都没认出来，退出不买")
+            self.log_warning("扭蛋：" + ("探卡池" if probe else "三张卡都没认出来")
+                             + "，退出不买")
             self.leave_street()
             return True
 
@@ -577,10 +582,15 @@ class WeekendHandlers:
             attrs=dict(self.info.get("attrs") or {}),
             caps=getattr(self, "_attr_caps", None) or {},
             gap_limit=int(self.config.get("缺口排除阈值")),
-            week=bar.get("week"))
+            week=bar.get("week"),
+            allow_others=not probe)
         if best is None:
-            self.log_info(f"扭蛋：{detail} → 没有可买的"
-                          f"（零用钱 {money}，精力 {stamina}），退出")
+            if probe:
+                self.log_info(f"扭蛋探卡池：{detail} → 没有笔记继承/球员位置，退出"
+                              f"（零用钱 {money}，精力 {stamina}）")
+            else:
+                self.log_info(f"扭蛋：{detail} → 没有可买的"
+                              f"（零用钱 {money}，精力 {stamina}），退出")
             self.leave_street()
             return True
 

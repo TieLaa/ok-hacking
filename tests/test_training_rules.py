@@ -2265,6 +2265,36 @@ class CaptainFilterFlow(unittest.TestCase):
         self.assertEqual(info.get("rarity"), "SR")
         self.assertEqual(info.get("position"), "大前")
 
+    def test_first_beat_skips_filter_when_captain_already_selected(self):
+        """底部中间已经是目标队长 → 第一拍不开筛选，直接下一步。
+
+        用户 2026-11-15 口径：反复跑同一队长时，游戏会沿用上次的选择，
+        名字早就在那儿（实跑首帧 OCR 就有 `SSR闪堂电_1.00`）。
+        """
+        texts = [
+            box(200, 100, "训练核心", 300, 50),
+            box(1500, 800, "下一步", 100, 40),
+            box(820, 730, "SSR 闪堂电", 300, 50),     # 底部中间的当前队长
+        ]
+        task = FakeTask(texts, config={"指定队长": "闪堂电"})
+        self.assertTrue(task.handle_captain(texts))
+        self.assertEqual([a[1] for a in task.actions if a[0] == "click_box"], [])
+        self.assertTrue(task._captain_filter_done)
+        self.assertTrue(task._captain_matched_config)
+
+    def test_first_beat_opens_filter_when_other_captain_selected(self):
+        """底部中间是别人（上一位队长的残留）→ 照旧开筛选。"""
+        texts = [
+            box(200, 100, "训练核心", 300, 50),
+            box(1400, 100, "筛选", 100, 40),
+            box(820, 730, "SR-先斗月绮", 300, 50),
+        ]
+        task = FakeTask(texts, config={"指定队长": "闪堂电"})
+        self.assertTrue(task.handle_captain(texts))
+        self.assertEqual([a[1] for a in task.actions if a[0] == "click_box"],
+                         ["筛选"])
+        self.assertFalse(getattr(task, "_captain_filter_done", False))
+
 
 class PageSignatures(unittest.TestCase):
     """页面签名表（阶段 2）：互斥声明的唯一出处。
@@ -3771,10 +3801,17 @@ class WeekendMapRules(unittest.TestCase):
                 box(1150, 700, "出行", 160, 70)]
 
     @staticmethod
-    def styled(style, texts, **kwargs):
-        """流派现在只由队长决定：测试里直接写运行期变量（= 日历已解析）。"""
+    def styled(style, texts, probe=False, **kwargs):
+        """流派现在只由队长决定：测试里直接写运行期变量（= 日历已解析）。
+
+        默认跳过探卡池（`gacha_probe` 直接原样返回）：本类绝大多数用例测的是
+        主计划/改道，探卡池由 `GachaProbeRules` 专门测（构造时传 `probe=True`）。
+        不能靠 `gacha_tried` 跳过 —— 那会把步行街从主计划里一起过滤掉。
+        """
         task = FakeTask(texts, **kwargs)
         task._style = style
+        if not probe:
+            task.gacha_probe = lambda steps, st=None: steps
         return task
 
     def test_sunday_never_enters_shop(self):
@@ -4713,6 +4750,175 @@ class WeekendMapRules(unittest.TestCase):
         task = FakeTask(list(self.MAP))
         self.assertFalse(task.handle_story_arrow(task._texts))
         self.assertEqual(task.actions, [])
+
+
+class GachaProbeRules(unittest.TestCase):
+    """所有流派的出行日：第一步先去步行街找「笔记继承/球员位置」（2026-11-15）。
+
+    卡池进店才知道（三张随机），所以只能靠「先看一眼」实现「不管什么流派
+    都买得到」；看一眼没买到就退出，不耗一天，继续走原计划。
+    """
+
+    def _map(self, day, week=1, money=None, stamina=None):
+        texts = [box(30, 20, f"第{week}周", 120, 40),
+                 box(200, 20, day, 130, 40),
+                 box(814, 461, "游戏厅", 148, 57),
+                 box(1538, 606, "公园", 102, 51),
+                 box(258, 748, "餐厅", 104, 60),
+                 box(1010, 897, "步行街", 148, 58)]
+        if money is not None:
+            texts.append(box(1000, 20, str(money), 120, 45))
+        if stamina is not None:
+            texts.append(box(380, 16, "%d/130" % stamina, 210, 53))
+        return texts
+
+    @staticmethod
+    def _task(style, texts):
+        return WeekendMapRules.styled(style, texts, probe=True)
+
+    def test_training_style_probes_street_first(self):
+        texts = self._map("星期六", stamina=110)
+        task = self._task("训练流", texts)
+        plan = task.weekend_plan("星期六", task.weekend_state(), texts)
+        self.assertEqual(plan[0], WeekendStep("步行街", False, True))
+        self.assertIn(WeekendStep("公园", False), plan)
+
+    def test_shop_style_probes_street_first(self):
+        texts = self._map("星期日")
+        task = self._task("商店流", texts)
+        plan = task.weekend_plan("星期日", task.weekend_state(), texts)
+        self.assertEqual(plan[0], WeekendStep("步行街", False, True))
+        self.assertEqual(plan[1], WeekendStep("餐厅", False))
+
+    def test_minigame_style_probes_then_arcade(self):
+        texts = self._map("星期六", money=WEEKEND_WORK_MONEY_GATE)
+        task = self._task("小游戏流", texts)
+        plan = task.weekend_plan("星期六", task.weekend_state(), texts)
+        self.assertEqual(plan[0], WeekendStep("步行街", False, True))
+        self.assertEqual(plan[1], WeekendStep("游戏厅", False))
+
+    def test_gacha_style_with_money_does_not_duplicate(self):
+        """扭蛋流钱够：主计划本来就是步行街，不再插探卡池（进店正常买）。"""
+        texts = self._map("星期六", money=WEEKEND_WORK_MONEY_GATE)
+        task = self._task("扭蛋流", texts)
+        plan = task.weekend_plan("星期六", task.weekend_state(), texts)
+        self.assertEqual(plan[0], WeekendStep("步行街", False))
+        self.assertFalse(plan[0].probe)
+
+    def test_gacha_style_low_money_probes_then_works(self):
+        """扭蛋流钱不够 360：先探卡池（只买这两张），没有就去餐厅。"""
+        texts = self._map("星期六", money=WEEKEND_DISCOUNT_MONEY_GATE)
+        task = self._task("扭蛋流", texts)
+        plan = task.weekend_plan("星期六", task.weekend_state(), texts)
+        self.assertEqual(plan[0], WeekendStep("步行街", False, True))
+        self.assertEqual(plan[1], WeekendStep("餐厅", False))
+
+    def test_probe_once_per_day(self):
+        texts = self._map("星期六", stamina=110)
+        task = self._task("训练流", texts)
+        st = task.weekend_state()
+        st.gacha_tried.add("步行街")
+        plan = task.weekend_plan("星期六", st, texts)
+        self.assertNotIn("步行街", [s.place for s in plan])
+
+    def test_final_week_sunday_never_probes(self):
+        """第7周周日不能出行：计划为空，不插探卡池。"""
+        texts = self._map("星期日", week=7)
+        task = self._task("训练流", texts)
+        plan = task.weekend_plan("星期日", task.weekend_state(), texts)
+        self.assertEqual(plan, [])
+
+    def test_vacation_eve_low_stamina_still_probes(self):
+        """第3周海边前周末体力不足也照探：这是最高优先级（2026-11-15）。"""
+        texts = self._map("星期日", week=3, stamina=90)
+        task = self._task("商店流", texts)
+        plan = task.weekend_plan("星期日", task.weekend_state(), texts)
+        self.assertEqual(plan[0], WeekendStep("步行街", False, True))
+        self.assertIn(WeekendStep("公园", False), plan)
+
+    def test_handle_weekend_clicks_street_with_probe_step(self):
+        texts = self._map("星期六", stamina=110)
+        task = self._task("训练流", texts)
+        self.assertTrue(task.handle_weekend(texts))
+        self.assertEqual(task.actions[-1][1], "步行街")
+        self.assertTrue(task.day_state().current_step.probe)
+
+
+class GachaTopCardRules(unittest.TestCase):
+    """「笔记继承 / 球员位置」彩色版：全局第一优先（用户 2026-11-15）。"""
+
+    @staticmethod
+    def _card(name, quality="彩", price=120, effect="", mate=False):
+        return {"name": name, "quality": quality, "price": price, "mate": mate,
+                "enhanced": False, "clear": False, "effect": effect,
+                "recover": 0, "recover_immediate": 0, "full_recover": False,
+                "x": 0, "y": 0}
+
+    def test_probe_mode_only_buys_top_cards(self):
+        task = FakeTask([])
+        cards = [self._card("笔记继承", effect="继承一个学习笔记"),
+                 self._card("运控增加+++"),
+                 self._card("运控增加++", quality="金", price=100)]
+        best, _detail, _ = task.gacha_candidates(
+            cards, stamina=100, stamina_max=130, money=500, week=6,
+            allow_others=False)
+        self.assertEqual(best["name"], "笔记继承")
+
+    def test_probe_mode_rejects_non_top_cards(self):
+        task = FakeTask([])
+        cards = [self._card("运控增加+++"),
+                 self._card("运控增加++", quality="金")]
+        best, detail, _ = task.gacha_candidates(
+            cards, stamina=100, stamina_max=130, money=500, week=6,
+            allow_others=False)
+        self.assertIsNone(best)
+        self.assertIn("探卡池只买", detail)
+
+    def test_top_card_beats_everything(self):
+        """压过同屏彩卡和「额外零用钱」卡。"""
+        task = FakeTask([])
+        cards = [self._card("额外零用钱+", effect="获得110零用钱"),
+                 self._card("运控增加+++"),
+                 self._card("球员位置", effect="增加一个比赛位置")]
+        best, _detail, _ = task.gacha_candidates(
+            cards, stamina=100, stamina_max=130, money=500, week=6)
+        self.assertEqual(best["name"], "球员位置")
+
+    def test_non_color_top_name_is_not_special(self):
+        """只认彩色版本：金色同名卡按普通金卡走，探卡池不买。"""
+        task = FakeTask([])
+        card = self._card("笔记继承", quality="金", price=100)
+        best, _detail, _ = task.gacha_candidates(
+            [card], stamina=100, stamina_max=130, money=500, week=6,
+            allow_others=False)
+        self.assertIsNone(best)
+
+    def test_handle_street_probe_buys_only_top_card(self):
+        """接线：探卡池进店，同屏有彩属性卡也选「笔记继承」。"""
+        texts = gacha_texts([
+            ("运控增加+++", "主力运控+72"),
+            ("笔记继承", "继承一个学习笔记"),
+            ("运控增加++", "主力运控+48"),
+        ], stamina="100/130", money="500", price="120")
+        task = FakeTask(texts, qualities=["彩", "彩", "金"])
+        task.day_state().current_step = WeekendStep("步行街", False, True)
+        self.assertTrue(task.handle_street(texts))
+        log = "".join(task.logs)
+        self.assertIn("选「笔记继承」", log)
+
+    def test_handle_street_probe_skips_other_cards(self):
+        """探卡池模式：没有这两张就退出，不买彩/金属性卡。"""
+        texts = gacha_texts([
+            ("运控增加+++", "主力运控+72"),
+            ("运控增加++", "主力运控+48"),
+            ("运控增加", "主力运控+24"),
+        ], stamina="100/130", money="500", price="120")
+        task = FakeTask(texts, qualities=["彩", "金", "紫"])
+        task.day_state().current_step = WeekendStep("步行街", False, True)
+        self.assertTrue(task.handle_street(texts))
+        log = "".join(task.logs)
+        self.assertIn("没有笔记继承/球员位置", log)
+        self.assertNotIn("选「", log)
 
 
 class StylePlanRules(unittest.TestCase):

@@ -58,7 +58,7 @@ class DayState:
         self.gacha_spent = False
         # 训练日里出现「出行」时先外出（野上泷周五也能出行），一天只做一次
         self.outing_done = False
-        # 地图上刚点的这一步（WeekendStep）：place + urgent。
+        # 地图上刚点的这一步（WeekendStep）：place + urgent + probe（探卡池）。
         # 餐厅 handler 靠 urgent 区分「主计划」和「急招临时插队」。
         self.current_step = None
         # 今天已经证实点不动的打工选项 / 地点
