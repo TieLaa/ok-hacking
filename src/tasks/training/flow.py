@@ -1288,3 +1288,14 @@ class TrainingFlowMixin:
             if hard is not None:
                 return max(base, hard)
         return base
+
+    def stamina_gate_day(self, texts=None):
+        """今天选科目要不要保证「训练后精力 ≥ 休息阈值」。
+
+        用户 2026-11-15 口径：**第4周周三**。第4周是海边合宿，周四那天是
+        全队友参与的训练（收益最高），周三练完精力掉到 50 以下就只能休息，
+        那天就白丢了（1115 实跑：周三 73 → 练完 33 → 周四休息）。
+        别把这条推广到每一天：「换下一个科目」只在日程价值最高的那一天划算。
+        """
+        week, day = self.current_day(texts)
+        return week == 4 and day == "三"

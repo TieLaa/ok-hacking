@@ -1673,13 +1673,39 @@ class TrainingParsersMixin:
             for ix, iy in icons)
 
     def probe_subject(self, box):
-        """点开一个科目，返回预览信息：队友数 / 装备数 / 满经验数 / 彩虹边框。"""
+        """点开一个科目，返回预览信息：队友数 / 装备数 / 满经验数 / 彩虹边框。
+
+        另外带一个 `after` = 科目页顶栏读到的**训练后精力**（见 `preview_stamina`）。
+        """
         name = (box.name or "").strip()
         self.click_box(box, after_sleep=0.55)
         texts = self._ocr_region()
         self.log_debug(f"场上角色名：{self.scene_names(texts)}")
         self.dump_subject_frame(name, texts)
-        return self.analyze_preview(texts, subject=name)
+        preview = self.analyze_preview(texts, subject=name)
+        preview["after"] = self.preview_stamina(texts)
+        return preview
+
+    def preview_stamina(self, texts):
+        """科目页顶栏的「训练后精力」= 药丸上的数字（用户 2026-11-15 口径）。
+
+        实测（1115 实跑）：130/130 满条时选「投射」→ 顶栏 `107/130`，
+        改选「意识」→ `130/130`。也就是药丸显示的是**这个科目练完之后**的精力，
+        不是当前精力 —— 每换一个科目就能直接读到它的预测值，不用估算消耗。
+
+        只用**文字**读，不走 `top_bar`：那条路会用像素条仲裁、还会把结果写进
+        `info["stamina"]`（监控页的「当前精力」会被预测值污染）。
+        """
+        for t in self.texts_in_region(texts or [], "top_bar"):
+            m = labels.STAMINA_RE.search(t.name.replace(" ", ""))
+            if m:
+                return int(m.group(1))
+        # 斜杠被读成数字（`1071130`）时退回像素条：药丸的黄色填充段本身就是预测值
+        bar = self.stamina_bar()
+        mx = getattr(self, "_stamina_max_seen", None)
+        if bar and mx:
+            return int(round(bar[0] * mx + 0.5))
+        return None
 
     def dump_subject_frame(self, subject, texts):
         """把科目预览帧存一份（限流），用于事后校准金框/彩框。

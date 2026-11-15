@@ -461,6 +461,9 @@ class TrainingHandlers:
         current = self.current_subject(texts)
         candidates = [n for n in boxes
                       if n in with_team or n in ring_hit or n == current]
+        if self.stamina_gate_day(texts):
+            # 要「换下一个」就得先知道每个科目的训练后精力 → 这一天六项全测
+            candidates = list(boxes)
         self.log_info("候选科目（小人 " + ("、".join(with_team) if with_team else "无")
                       + "｜圈亮 " + ("、".join(ring_hit) if ring_hit else "无")
                       + "｜当前 " + (current or "无") + "）：" + "、".join(candidates))
@@ -470,11 +473,13 @@ class TrainingHandlers:
         results = {}
         if current in boxes:
             results[current] = self.analyze_preview(texts, subject=current)
+            results[current]["after"] = self.preview_stamina(texts)
             r = results[current]
             self.log_info(
                 f"当前已选「{current}」：队友 {r['mates']}｜经理 {r['manager']}"
                 f"｜装备 {r['equip']}｜满经验 {r['full']}｜金框 {r['gold']}"
-                f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}")
+                f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}"
+                f"｜训练后精力 {r['after'] if r['after'] is not None else '?'}")
 
         last_probed = None
         for name in candidates:
@@ -493,7 +498,8 @@ class TrainingHandlers:
             self.log_info(
                 f"探测「{name}」：队友 {r['mates']}｜经理 {r['manager']}"
                 f"｜装备 {r['equip']}｜满经验 {r['full']}｜金框 {r['gold']}"
-                f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}")
+                f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}"
+                f"｜训练后精力 {r['after'] if r['after'] is not None else '?'}")
 
         # 六维当前值：进休息室时已经拍过快照（`parsers.snapshot_lounge`），
         # 这里**优先用那一份**，只有独立调用（回归 / 不带主循环）时才现场补读一次。
@@ -528,6 +534,24 @@ class TrainingHandlers:
             ranked = {n: (self.subject_score(results.get(n)), 0, 0)
                       for n in pool}
         name = max(ranked, key=ranked.get)
+        # 2026-11-15 用户口径：第4周周三要保住周四那一练（精力低于休息阈值就练不了），
+        # 所以按权重顺序挑第一个「训练后精力 ≥ 休息阈值」的科目，不够就换下一个。
+        # 预测值来自科目页顶栏（`parsers.preview_stamina`），是游戏自己算的，不是估的。
+        if self.stamina_gate_day(texts):
+            limit = self.rest_threshold("三")
+            after = {n: (results.get(n) or {}).get("after") for n in ranked}
+            picked = self.pick_by_stamina(ranked, after, limit)
+            if picked is None:
+                self.log_warning(
+                    f"第4周周三：所有科目训练后都 < {limit} 精力 → 今天休息")
+                self._force_rest = True
+                self.exit_page(after_sleep=0.8)
+                return True
+            if picked != name:
+                self.log_info(
+                    f"第4周周三：「{name}」训练后 {after.get(name)} < {limit}"
+                    f" → 改选「{picked}」（{after.get(picked)}）")
+            name = picked
         r = results.get(name) or self.empty_preview()
         # 2026-10-27：这一行必须同时打「金框」和「彩虹」。
         # 代码里彩框会让金框恒为 0（互斥），只打金框时彩框会被统计成「无框」，

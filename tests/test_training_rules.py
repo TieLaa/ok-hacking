@@ -4909,6 +4909,45 @@ class StylePlanRules(unittest.TestCase):
         task = FakeTask([], config={"休息精力阈值": 40})
         self.assertEqual(task.rest_threshold("一"), 50)
 
+    # ---------- 第4周周三：选科目要保证训练后精力（用户 2026-11-15） ----------
+
+    def test_stamina_gate_day_is_week4_wednesday_only(self):
+        """只有第4周周三要「按训练后精力挑科目」，别推广到别的日子。"""
+        cases = ((4, "三", True), (4, "二", False), (4, "四", False),
+                 (3, "三", False), (5, "三", False))
+        for week, day, want in cases:
+            task = FakeTask([box(30, 20, "第%d周" % week, 120, 40),
+                             box(200, 20, "星期" + day, 130, 40)])
+            self.assertEqual(task.stamina_gate_day(task._texts), want, (week, day))
+
+    def test_preview_stamina_reads_subject_page_number(self):
+        """科目页药丸的数字是**训练后**精力（实测 130/130 选投射 → 107/130）。"""
+        task = FakeTask([box(380, 16, "107/130", 210, 53)])
+        self.assertEqual(task.preview_stamina(task._texts), 107)
+
+    def test_pick_by_stamina_skips_subject_below_threshold(self):
+        """按权重顺序挑，不够 50 就换下一个。"""
+        ranked = {"投射": (3.0, 0, 0), "防守": (2.0, 0, 0), "意识": (1.0, 0, 0)}
+        after = {"投射": 30, "防守": 48, "意识": 70}
+        self.assertEqual(FakeTask([]).pick_by_stamina(ranked, after, 50), "意识")
+
+    def test_pick_by_stamina_keeps_best_when_enough(self):
+        ranked = {"投射": (3.0, 0, 0), "防守": (2.0, 0, 0)}
+        after = {"投射": 50, "防守": 90}
+        self.assertEqual(FakeTask([]).pick_by_stamina(ranked, after, 50), "投射")
+
+    def test_pick_by_stamina_unreadable_does_not_block(self):
+        """读不到训练后精力 → 不拦（沿用「读不到就不拦」的惯例）。"""
+        ranked = {"投射": (3.0, 0, 0), "防守": (2.0, 0, 0)}
+        after = {"投射": None, "防守": 20}
+        self.assertEqual(FakeTask([]).pick_by_stamina(ranked, after, 50), "投射")
+
+    def test_pick_by_stamina_all_below_returns_none(self):
+        """全都低于阈值 → None（调用方改休息）。"""
+        ranked = {"投射": (3.0, 0, 0), "防守": (2.0, 0, 0)}
+        after = {"投射": 10, "防守": 20}
+        self.assertIsNone(FakeTask([]).pick_by_stamina(ranked, after, 50))
+
     def test_thursday_low_stamina_rests(self):
         """周四 50 精力：扭蛋流直接休息（门槛 60）。"""
         texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期四", 130, 40),
