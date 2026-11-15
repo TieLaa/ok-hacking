@@ -1276,11 +1276,13 @@ class TrainingFlowMixin:
         return self.today_places(day, st, texts)
 
     def rest_threshold(self, day=None):
-        """「训练后精力」的门槛（**不再决定今天要不要休息**）。
+        """「精力」门槛（**默认只给两处用，不再决定普通训练日是否休息**）。
 
         2026-11-15 用户口径：训练日一律先进科目页，精力低也先试
-        （`daycycle.training_day_action`）；这里只剩第4周周三挑科目时用
-        （`stamina_gate_day`），要求「训练后精力 ≥ 这个值」。
+        （`daycycle.training_day_action`）；本函数的门槛还剩两处：
+          1. **周四硬阈值**：扭蛋流 / 小游戏流 60 —— 低精力休息是为了保证
+             周五能进出行地图（`training_day_action` 的例外分支）；
+          2. **第4周周三挑科目**：要求「训练后精力 ≥ 这个值」（`stamina_gate_day`）。
 
         用户 2026-11-04：**扭蛋流 / 小游戏流**在周四有硬阈值 **60**
         （`rest.thursday_threshold_by_style`，取代旧的「周二 65」）；**其它流派

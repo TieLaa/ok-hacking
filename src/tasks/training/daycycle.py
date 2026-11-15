@@ -30,6 +30,7 @@
 import time
 
 from src.tasks.ui import Defs, labels
+from src.tasks.training import params
 from src.tasks.training.constants import (SHOP_ENTRY_TRIES,
                                           SHOP_SEASON_WEEKS)
 
@@ -171,14 +172,25 @@ class DayCycleMixin:
         会退出来并置 `_force_rest`，下一拍到这里就是休息 —— 周六加训页没有休息按钮，
         走「出行」（用户原话：有就进，不行就退出来休息）。
 
+        **例外**（用户 2026-11-15 补充）：扭蛋流 / 小游戏流**周四**的硬阈值（60）
+        不是上面这条旧设计，而是保证**周五能进出行地图**的专用规则，照旧生效。
+
         注意用词（2026-11-15 用户口径）：这里是训练条上的**精力**（上限 130，
         每次训练扣它），不是大厅那个**专注**（上限 150，只用来开训练）。
         """
         state = self.top_bar(texts)
         cur = state.get("stamina")
+        day = state.get("day")
         if self._force_rest:
             self._force_rest = False
             return "休息", f"强制休息（{getattr(self, '_force_reason', '') or '见上一条日志'}）"
+        # 周四硬阈值：扭蛋流 / 小游戏流低精力休息 → 周五才进得去出行地图。
+        if (day == "四" and cur is not None
+                and params.rest.thursday_threshold_by_style.get(self.style) is not None):
+            limit = self.rest_threshold(day)
+            if cur < limit:
+                return "休息", (f"周四 {self.style} 精力 {cur} < {limit}"
+                                "（低精力休息，保周五出行地图）")
         return "训练", f"进入训练科目（精力 {cur if cur is not None else '?'}，失败率在科目页判）"
 
     # ---------- 一天的入口 ②：出行前（跟队长说话那页） ----------
