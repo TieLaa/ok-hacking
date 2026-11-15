@@ -434,6 +434,8 @@ STAMINA_PILL_TOL = 0.10        # 药丸文字框与顶栏右半区的横向余�
 # 多角色队列的达标判据：这一页按**五个位置**列评级 + 四位数评分，没有名字，
 # 所以要靠 roster.position_by_name 把「队长」映射到某一列。
 SQUAD_POSITIONS = ("控卫", "分卫", "小前", "大前", "中锋")
+# 同一批五个位置，给「选队长筛选」「位置→列」等通用场景用（2026-11-15 收敛）。
+POSITION_NAMES = SQUAD_POSITIONS
 SQUAD_RATING_RE = re.compile(r"^[SABCD]\s*[+\-]?$")
 SQUAD_SECTION_BAND = (0.55, 0.70)      # 这一段的 cy 才是球队评分行（画面比例）
 SQUAD_SCORE_MIN, SQUAD_SCORE_MAX = 1000, 15000

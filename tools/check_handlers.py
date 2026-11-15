@@ -649,6 +649,50 @@ def check_config():
     return problems
 
 
+def check_roster():
+    """`docs/roster/*.json` 的角色数据完整性（2026-11-15）。
+
+    为什么进门禁：2026-11-14 实跑发现 10 个角色缺 `style_tag` —— 当队长时
+    `roster.style_by_name()` 查不到流派，程序**不报错**，只是静默掉回训练流。
+    缺字段/同名重复都属于「不崩但行为错」，必须在提交前拦住。
+    """
+    from src.tasks.ui.labels import norm_name
+
+    problems = []
+    roster_dir = os.path.join(ROOT, "docs", "roster")
+    seen = {}
+    total = 0
+    for fn in ("ssr_roster.json", "sr_roster.json", "r_roster.json"):
+        path = os.path.join(roster_dir, fn)
+        if not os.path.exists(path):
+            continue
+        try:
+            rows = json.load(open(path, encoding="utf-8"))
+        except ValueError as e:
+            problems.append(f"{fn}: JSON 解析失败（{e}）")
+            continue
+        for i, row in enumerate(rows):
+            name = (row.get("name") or "").strip()
+            if not name:
+                problems.append(f"{fn}[{i}]: 缺 name")
+                continue
+            total += 1
+            for field in ("position", "preferred", "style_tag"):
+                if not row.get(field):
+                    problems.append(f"{fn}:「{name}」缺 {field}")
+            key = norm_name(name)
+            if key in seen:
+                problems.append(f"{fn}:「{name}」与 {seen[key]} 重复")
+            else:
+                seen[key] = fn
+
+    print("-" * 96)
+    print(f"角色数据：违规 {len(problems)} 处（{total} 个角色）")
+    for p in problems:
+        print("  ✗ " + p)
+    return problems
+
+
 # ---------- 判据单一来源（文案门禁）----------
 # 受管按钮词：出现在这些方法的 names 参数里、且是**内联字面量**，就算违规。
 # 为什么是这几个：它们是「按钮」，必须全等匹配且来自 labels.BUTTONS
@@ -921,12 +965,14 @@ def main():
     place_problems = check_places()
     inter_problems = check_interactions()
     config_problems = check_config()
+    roster_problems = check_roster()
     moji_problems = check_mojibake()
     name_problems = check_undefined_names()
 
     failed = bool(fails or misses or arch_problems or label_problems
                   or date_problems or place_problems or inter_problems
-                  or config_problems or moji_problems or name_problems)
+                  or config_problems or roster_problems or moji_problems
+                  or name_problems)
     # 中文结果落盘（UTF-8）：stdout 可能被父进程按 cp936 解码（见 tools/_console.py）。
     lines = ["# check_handlers 报告",
              f"结果：{'失败' if failed else '通过'}",
