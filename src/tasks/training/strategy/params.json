@@ -5,7 +5,7 @@
     "stamina_target": 100
   },
   "rest": {
-    "_doc": "stamina_threshold：精力低于这个值就休息一天。thursday_threshold_by_style：周四只对表里的流派生效，取 max(两者)；没列出的流派周四无特殊阈值。",
+    "_doc": "stamina_threshold：**不再是「今天要不要休息」的判据**（2026-11-15 起训练日一律先进科目页，科目页判失败率/科目不合适才退出来休息）；只剩第4周周三挑科目时要求「训练后精力 ≥ 这个值」。thursday_threshold_by_style：历史遗留（旧版周四休息阈值），当前没有调用点。",
     "stamina_threshold": 50,
     "thursday_threshold_by_style": {
       "扭蛋流": 60,

@@ -18,7 +18,8 @@
 - 配置项跟着改名：`扭蛋清空精力阈值`。旧配置里的「体力 / 专注」键由
   `config_spec.migrate_saved_config()` 在 `load_config()` 之前搬过去，值不丢。
   「休息精力阈值」2026-11-14 起不再是配置项，已升为策略参数
-  `strategy/params.json: rest.stamina_threshold`（旧配置键由 verify_config 丢弃）。
+  `strategy/params.json: rest.stamina_threshold`（旧配置键由 verify_config 丢弃；
+  2026-11-15 起它不再决定「今天休息」，只剩第4周周三挑科目时用）。
 - 2026-11-02 之前的日志与 `docs/RUN_REPORT_*` 里写的是「体力」，读老记录时按上表换算
   （大厅语境 → 专注，训练语境 → 精力）。
 
@@ -575,13 +576,12 @@
   需求属性按队长**位置**取（`attributes.POSITION_TARGETS`），不读角色的 `preferred`
   （2026-11-13 口径；细则见 [属性优先级](ATTRIBUTE_PRIORITY.md)）。
 - 失败率 > `失败率上限(%)`（默认 50）→ 退出科目页并强制休息（`_force_rest`）。
-- 训练日精力 < 阈值 → 休息（`flow.rest_threshold`）：
-  - 平时：策略参数 `rest.stamina_threshold`（`strategy/params.json`，默认 50）；
-  - **周四**（2026-11-04 用户口径：原来的「周二 65」改到这里）：**扭蛋流 / 小游戏流**
-    有硬阈值 **60**（`rest.thursday_threshold_by_style`），取 `max(参数值, 60)`；
-    **训练流 / 商店流周四没有任何特殊限制**，只遵守 `rest.stamina_threshold`；
-  - **周二没有任何特殊阈值**（旧的「周二 65」「周二一律 60」都已删除），
-    任何流派周二都只遵守 `rest.stamina_threshold`。
+- **训练日不再按精力数字预判休息**（2026-11-15 用户口径：有就进，不行再退出来）：
+  精力再低也先点「训练」进科目页（万一是意识训练还能回一点精力）；科目页判
+  「失败率超限 / 没有合适的科目」才退出来休息（`_force_rest`）。周六加训页没有
+  「休息」按钮，退出来点「出行」。
+  `rest.stamina_threshold`（`strategy/params.json`，默认 50）只剩第4周周三挑科目时用
+  （见下条）；`rest.thursday_threshold_by_style` 是历史遗留，当前没有调用点。
 - **第4周周三：按「训练后精力」挑科目（2026-11-15 用户口径）**。
   第4周是海边合宿，周四那场是「全队友参与」的训练；周三练完如果掉到 50 以下，
   周四只能休息，那天就白丢（1115 实跑：周三 73 → 练完 33 → 周四休息）。

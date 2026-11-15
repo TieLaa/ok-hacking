@@ -2935,30 +2935,30 @@ class DayCycleRules(unittest.TestCase):
         self.assertNotIn("步行街", st.visited)
         self.assertEqual(st.date, (1, "六"))
 
-    def test_training_day_action_rest_when_low_stamina(self):
-        """训练日入口①：专注低于阈值 → 休息。"""
-        task = FakeTask([box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
-                         box(380, 16, "20/130", 210, 53)])
-        action, reason = task.training_day_action(task._texts)
-        self.assertEqual(action, "休息")
-        self.assertIn("20", reason)
+    def test_training_day_action_always_enters_training(self):
+        """训练日入口①：精力再低也先进科目页（2026-11-15 用户口径）。
 
-    def test_training_day_action_trains_when_enough(self):
-        """训练日入口①：专注够 → 训练。"""
-        task = FakeTask([box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
-                         box(380, 16, "120/130", 210, 53)])
-        action, _ = task.training_day_action(task._texts)
-        self.assertEqual(action, "训练")
-
-    def test_training_day_action_rest_threshold_is_50(self):
-        """2026-11-11：训练流休息阈值 50（50+ 失败率 0%，47/49 已 11%/27%）。"""
-        cases = (("45/130", "休息"), ("50/130", "训练"))
-        for stamina, want in cases:
+        旧的「精力 < 50 直接休息」已删除 —— 万一是意识训练还能回一点精力；
+        科目页里「失败率超限 / 没有合适的科目」才退出来休息。
+        `rest.stamina_threshold` 只剩第4周周三挑科目时用。
+        """
+        for stamina in ("20/130", "45/130", "50/130", "120/130"):
             task = FakeTask([box(30, 20, "第1周", 120, 40),
                              box(200, 20, "星期五", 130, 40),
                              box(380, 16, stamina, 210, 53)])
             action, reason = task.training_day_action(task._texts)
-            self.assertEqual(action, want, (stamina, reason))
+            self.assertEqual(action, "训练", (stamina, reason))
+
+    def test_training_day_action_forced_rest_still_wins(self):
+        """科目页判了「失败率超限」→ 下一拍回主界面就是休息（不再进科目页）。"""
+        task = FakeTask([box(30, 20, "第1周", 120, 40),
+                         box(200, 20, "星期五", 130, 40),
+                         box(380, 16, "120/130", 210, 53)])
+        task._force_rest = True
+        task._force_reason = "失败率 56% 超过上限 50%"
+        action, reason = task.training_day_action(task._texts)
+        self.assertEqual(action, "休息")
+        self.assertIn("失败率", reason)
 
     def test_outing_offer_requires_button_not_dialogue(self):
         """出行入口②：只有**按钮**才算，台词不算。"""
@@ -5267,57 +5267,27 @@ class StylePlanRules(unittest.TestCase):
         after = {"投射": 10, "防守": 20}
         self.assertIsNone(FakeTask([]).pick_by_stamina(ranked, after, 50))
 
-    def test_thursday_low_stamina_rests(self):
-        """周四 50 精力：扭蛋流直接休息（门槛 60）。"""
-        texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期四", 130, 40),
-                 box(380, 16, "50/130", 210, 53),
-                 box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
-        task = FakeTask(texts)
-        task._style = "扭蛋流"
-        task.ensure_speed = lambda *a, **k: False   # 零帧永远判不出 2x，跳过那一拍
-        task._hub_ticks = task.HUB_SETTLE_TICKS     # 模拟「出行」按钮已淡入
-        self.assertTrue(task.handle_training_day(texts))
-        self.assertEqual(task.actions[-1][1], "休息")
+    def test_any_style_trains_regardless_of_thursday_threshold(self):
+        """2026-11-15：训练日不再按精力阈值休息（旧的「扭蛋流周四 60」已失效）。
 
-    def test_thursday_gacha_rests_10_points_earlier(self):
-        """2026-11-04 用户口径：扭蛋流 / 小游戏流周四门槛 60，其它流派周四没有特殊限制。
-
-        精力 59：扭蛋流、小游戏流（< 60）→ 休息；训练流/商店流（只守全局 40）→ 训练。
+        所有流派、所有天数都先进科目页（精力 50/59/60 都进）；「不练」由科目页
+        的失败率决定（`_force_rest`）。
         """
-        def run(style, stamina, day="星期四"):
-            texts = [box(30, 20, "第3周", 120, 40), box(200, 20, day, 130, 40),
-                     box(380, 16, f"{stamina}/130", 210, 53),
-                     box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
-            task = FakeTask(texts)
-            task._style = style
-            task.ensure_speed = lambda *a, **k: False
-            task._hub_ticks = task.HUB_SETTLE_TICKS
-            self.assertTrue(task.handle_training_day(texts))
-            return task.actions[-1][1]
-
-        self.assertEqual(run("扭蛋流", 59), "休息")
-        self.assertEqual(run("小游戏流", 59), "休息")
-        self.assertEqual(run("训练流", 59), "训练")
-        self.assertEqual(run("商店流", 59), "训练")
-        # 60 是下限（不含）：精力 60 仍照常训练
-        self.assertEqual(run("扭蛋流", 60), "训练")
-        self.assertEqual(run("小游戏流", 60), "训练")
-        # 周二不再有任何硬阈值：精力 59（< 旧的 65）也照常训练
-        self.assertEqual(run("扭蛋流", 59, day="星期二"), "训练")
-        self.assertEqual(run("小游戏流", 59, day="星期二"), "训练")
-
-    def test_training_and_shop_styles_thursday_below_60_train(self):
-        """周四 50 精力：训练流 / 商店流回落到配置的 40 → 照常训练。"""
-        texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期四", 130, 40),
-                 box(380, 16, "50/130", 210, 53),
-                 box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
-        for style in ("训练流", "商店流"):
-            task = FakeTask(texts)
-            task._style = style
-            task.ensure_speed = lambda *a, **k: False
-            task._hub_ticks = task.HUB_SETTLE_TICKS
-            self.assertTrue(task.handle_training_day(texts), style)
-            self.assertEqual(task.actions[-1][1], "训练", style)
+        for style in ("扭蛋流", "小游戏流", "训练流", "商店流"):
+            for day in ("星期四", "星期二"):
+                for stamina in (50, 59, 60):
+                    texts = [box(30, 20, "第3周", 120, 40),
+                             box(200, 20, day, 130, 40),
+                             box(380, 16, f"{stamina}/130", 210, 53),
+                             box(1450, 900, "训练", 120, 60),
+                             box(1600, 900, "休息", 120, 60)]
+                    task = FakeTask(texts)
+                    task._style = style
+                    task.ensure_speed = lambda *a, **k: False
+                    task._hub_ticks = task.HUB_SETTLE_TICKS
+                    self.assertTrue(task.handle_training_day(texts), style)
+                    self.assertEqual(task.actions[-1][1], "训练",
+                                     (style, day, stamina))
 
     # ---------- 餐厅：默认当服务员，桌游GM 队友多 2 人才改选左边 ----------
 

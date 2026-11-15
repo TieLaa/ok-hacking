@@ -218,9 +218,9 @@ class TrainingHandlers:
         「今天练还是休」「今天要不要外出」这两个**新一天入口**是同级的，
         都归那个模块；这里只负责「照它说的做」。
 
-        例外：百目鬼「周六加训」页（上一格「训练」、下一格「出行」）**有就进** ——
-        用户 2026-11-15 口径：不看精力阈值（万一是意识训练还能回一点精力），
-        连点几次没翻页才退出来改「出行」（`EXTRA_TRAIN_TRIES`）。
+        2026-11-15 用户口径：训练日**一律先进科目页**（不看精力数字），
+        科目页判「失败率超限 / 没有合适的科目」才退出来休息；周六加训页
+        没有「休息」按钮，那里改点「出行」。
         """
         if self.match_text(texts, "星期") is None:
             return False
@@ -259,8 +259,8 @@ class TrainingHandlers:
         # 出行的两种身份（2026-11-15 用户口径）：
         #   - 有「休息」按钮 → 这是**额外的一次外出**（野上泷周五）：先出行，
         #     回来再按训练/休息走；
-        #   - 没有「休息」按钮（百目鬼「周六加训」）→ 这一页只负责**进训练**，
-        #     不看精力阈值（详见下面的 `extra_train`）。
+        #   - 没有「休息」按钮（百目鬼「周六加训」）→ 出行就是**休息的替代**：
+        #     先点「训练」进科目页，科目页判不合适才退出来点「出行」。
         extra_train = not has_rest and top_train is not None
         action, reason = self.outing_offer(texts) if has_rest else (None, "")
         if action == "点按钮":
@@ -322,7 +322,7 @@ class TrainingHandlers:
                     f"周六加训：连点 {self.EXTRA_TRAIN_TRIES} 次「训练」都没进科目页"
                     " → 退出来改「出行」")
                 return True
-        action, reason = self.training_day_action(texts, ignore_stamina=extra_train)
+        action, reason = self.training_day_action(texts)
         if action == "休息":
             target = self.match_text(area, "休息")
             if target is None:

@@ -50,7 +50,7 @@ src/tasks/training/
 | `current_day(texts)` | 返回 `(week, day)`；**每帧只读一次**并缓存 |
 | `day_name()` / `is_weekend()` | 星期几 / 是不是周末 |
 | `day_state()` | 当天行程实例 `DayState`（`visited` / `gacha_spent` / `current_step` …）；只放一天最多变一次的值，钱/精力不进来 |
-| `training_day_action(texts, ignore_stamina=False)` | **入口①**：今天练还是休 → `("训练"/"休息", 理由)`；`ignore_stamina` 只给周六加训页用（有训练就进，不看精力阈值） |
+| `training_day_action(texts)` | **入口①**：今天练还是休 → `("训练"/"休息", 理由)`；2026-11-15 起不按精力阈值预判，只有 `_force_rest`（失败率超限）才休息 |
 | `outing_offer(texts)` | **入口②**：这一页要不要外出 → `("点按钮"/"推进对话", 理由)` |
 | `resolve_style_by_config()` | **路径 A**：配置里的队长 → 查表定流派 |
 | `resolve_style_by_calendar_name(name)` | **路径 B**：日历上的队长 → 查表定流派 |

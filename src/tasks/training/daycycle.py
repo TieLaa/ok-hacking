@@ -161,34 +161,25 @@ class DayCycleMixin:
 
     # ---------- 一天的入口 ①：训练日主界面 ----------
 
-    def training_day_action(self, texts, ignore_stamina=False):
+    def training_day_action(self, texts):
         """训练日主界面：今天练还是休？返回 ("训练"/"休息", 理由) 或 (None, 理由)。
 
-        判据都在这里（**精力**阈值、失败率上限、强制休息…），
-        别的地方不重复判「今天该不该休息」。
+        判据都在这里（**强制休息**、失败率上限），别的地方不重复判「今天该不该休息」。
 
-        `ignore_stamina`：周六加训页（上一格「训练」、下一格「出行」）专用。
-        用户 2026-11-15 口径：「有就进，万一是意识训练还能回复一点精力，
-        不行就退出来继续出行」——所以有训练按钮就不看精力阈值；
-        强制休息（失败率超限）仍然优先，那是另一条规则。
+        2026-11-15 用户口径：**不再按精力数字预判休息**。精力低也先点「训练」进科目页
+        （万一是意识训练还能回一点精力）；科目页里「失败率超限 / 没有合适的科目」
+        会退出来并置 `_force_rest`，下一拍到这里就是休息 —— 周六加训页没有休息按钮，
+        走「出行」（用户原话：有就进，不行就退出来休息）。
 
         注意用词（2026-11-15 用户口径）：这里是训练条上的**精力**（上限 130，
         每次训练扣它），不是大厅那个**专注**（上限 150，只用来开训练）。
         """
         state = self.top_bar(texts)
         cur = state.get("stamina")
-        day = state.get("day")
-        limit = self.rest_threshold(day)
         if self._force_rest:
             self._force_rest = False
             return "休息", f"强制休息（{getattr(self, '_force_reason', '') or '见上一条日志'}）"
-        if cur is None:
-            return "训练", "精力读不到 → 照常训练"
-        if ignore_stamina:
-            return "训练", f"精力 {cur}，周六加训有训练就进（不看 {limit} 阈值）"
-        if cur < limit:
-            return "休息", f"精力 {cur} < {limit}（{self.style}·星期{day}）→ 休息"
-        return "训练", f"精力 {cur}，进入训练科目"
+        return "训练", f"进入训练科目（精力 {cur if cur is not None else '?'}，失败率在科目页判）"
 
     # ---------- 一天的入口 ②：出行前（跟队长说话那页） ----------
 
