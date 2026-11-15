@@ -1689,22 +1689,28 @@ class TrainingParsersMixin:
     def preview_stamina(self, texts):
         """科目页顶栏的「训练后精力」= 药丸上的数字（用户 2026-11-15 口径）。
 
-        实测（1115 实跑）：130/130 满条时选「投射」→ 顶栏 `107/130`，
-        改选「意识」→ `130/130`。也就是药丸显示的是**这个科目练完之后**的精力，
-        不是当前精力 —— 每换一个科目就能直接读到它的预测值，不用估算消耗。
-
-        只用**文字**读，不走 `top_bar`：那条路会用像素条仲裁、还会把结果写进
-        `info["stamina"]`（监控页的「当前精力」会被预测值污染）。
+        药丸的画法是「黄 = 当前精力、绿 = 这一练能涨的、深橄榄 = 这一练要扣的、
+        灰 = 空的」，而**数字是训练后的值**：
+          - 130/130 满条时选「投射」→ 黄段到 107、后面深橄榄、数字 `107/130`；
+          - 102/130 时选加精力的科目 → 黄段到 102、接一小截绿、数字 `107/130`；
+          - 选「意识」（不扣精力）→ `130/130`。
+        所以只读数字，**不要按黄段比例算** —— 涨精力时黄段只是当前值，会少算那几点。
         """
-        for t in self.texts_in_region(texts or [], "top_bar"):
-            m = labels.STAMINA_RE.search(t.name.replace(" ", ""))
+        value = self._stamina_number(self.texts_in_region(texts or [], "top_bar"))
+        if value is not None:
+            return value
+        # 斜杠常被主 OCR 读成数字（`3 1071130`）→ 药丸这一块放大重读一次
+        again = zoom_reread.reread_region(self.frame, self, Defs.region("top_bar"))
+        return self._stamina_number(again)
+
+    @staticmethod
+    def _stamina_number(texts):
+        """OCR 结果里的 `107/130` → 107。兼容 Box 和 `(文字, 置信度)` 两种。"""
+        for t in texts or []:
+            name = t[0] if isinstance(t, tuple) else getattr(t, "name", "")
+            m = labels.STAMINA_RE.search((name or "").replace(" ", ""))
             if m:
                 return int(m.group(1))
-        # 斜杠被读成数字（`1071130`）时退回像素条：药丸的黄色填充段本身就是预测值
-        bar = self.stamina_bar()
-        mx = getattr(self, "_stamina_max_seen", None)
-        if bar and mx:
-            return int(round(bar[0] * mx + 0.5))
         return None
 
     def dump_subject_frame(self, subject, texts):
