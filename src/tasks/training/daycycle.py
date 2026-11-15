@@ -164,8 +164,11 @@ class DayCycleMixin:
     def training_day_action(self, texts):
         """训练日主界面：今天练还是休？返回 ("训练"/"休息", 理由) 或 (None, 理由)。
 
-        判据都在这里（专注阈值、失败率上限、强制休息…），
+        判据都在这里（**精力**阈值、失败率上限、强制休息…），
         别的地方不重复判「今天该不该休息」。
+
+        注意用词（2026-11-15 用户口径）：这里是训练条上的**精力**（上限 130，
+        每次训练扣它），不是大厅那个**专注**（上限 150，只用来开训练）。
         """
         state = self.top_bar(texts)
         cur = state.get("stamina")
@@ -173,12 +176,12 @@ class DayCycleMixin:
         limit = self.rest_threshold(day)
         if self._force_rest:
             self._force_rest = False
-            return "休息", "失败率过高，强制休息"
+            return "休息", f"强制休息（{getattr(self, '_force_reason', '') or '见上一条日志'}）"
         if cur is None:
-            return "训练", f"专注读不到 → 照常训练"
+            return "训练", "精力读不到 → 照常训练"
         if cur < limit:
-            return "休息", f"专注 {cur} < {limit}（{self.style}·星期{day}）→ 休息"
-        return "训练", f"专注 {cur}，进入训练科目"
+            return "休息", f"精力 {cur} < {limit}（{self.style}·星期{day}）→ 休息"
+        return "训练", f"精力 {cur}，进入训练科目"
 
     # ---------- 一天的入口 ②：出行前（跟队长说话那页） ----------
 

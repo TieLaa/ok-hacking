@@ -3134,14 +3134,12 @@ class ConfigSpecRules(unittest.TestCase):
                       "json 里要有它（GUI 才能配上）")
 
     def test_legacy_stamina_keys_are_migrated(self):
-        """2026-11-02 规范用词：配置键里不许再有「体力」/「专注」，旧值要能搬过来。
+        """配置键改名后旧值要能搬过来；键名不许再出现「体力」。
 
-        顶栏那个数字在训练里叫 **精力**（打工/公园/扭蛋清空消耗它）。
-        旧配置存过「体力」和「专注」，改名后 `Config.verify_config` 会把旧键
-        连同值一起丢掉，所以 `migrate_saved_config()` 必须在 `load_config()` 之前搬。
-
-        2026-11-14：「休息精力阈值」升为策略参数（`strategy/params.json`），
-        不再是配置项，所以这里只剩「扭蛋清空精力阈值」。
+        2026-11-15 用户口径（纠正 2026-11-02 的旧结论）：**专注和精力是两个资源** ——
+        专注只用来「开」训练（顶栏 150 上限，靠「+」页饮料补）；精力是每次训练扣的
+        （训练条 130 上限，靠商品/扭蛋/事件/休息补）。所以专注相关的键叫「专注」，
+        训练相关的叫「精力」，不再用一个词套两个数。
         """
         import json
         import os
@@ -3149,8 +3147,12 @@ class ConfigSpecRules(unittest.TestCase):
         from src.tasks.training import config_spec
 
         keys = {s.key for s in config_spec.ALL}
-        self.assertEqual([k for k in keys if "体力" in k or "专注" in k], [],
-                         "配置键里不许再出现「体力」/「专注」")
+        self.assertEqual([k for k in keys if "体力" in k], [],
+                         "配置键里不许再出现「体力」")
+        # 专注是独立资源，这两个键按资源命名（不是打错的「精力」）
+        self.assertIn("自动恢复专注", keys)
+        self.assertIn("恢复专注下限", keys)
+        self.assertNotIn("自动恢复精力", keys)
 
         # 2026-11-14：「休息精力阈值」升为策略参数（params.json），不再是配置项，
         # 所以只剩「扭蛋清空精力阈值」需要改名；休息类的旧键由 verify_config 丢弃。
@@ -3159,7 +3161,8 @@ class ConfigSpecRules(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "TrainingTask.json")
             with open(path, "w", encoding="utf-8") as f:
-                json.dump({"扭蛋清空体力阈值": 12, "允许进步行街": False},
+                json.dump({"扭蛋清空体力阈值": 12, "允许进步行街": False,
+                           "自动恢复精力": False, "恢复精力下限": 45},
                           f, ensure_ascii=False)
             self.assertTrue(config_spec.migrate_saved_config("TrainingTask", folder))
             with open(path, encoding="utf-8") as f:
@@ -3170,6 +3173,11 @@ class ConfigSpecRules(unittest.TestCase):
         self.assertEqual(saved["扭蛋清空精力阈值"], 12)
         self.assertNotIn("扭蛋清空体力阈值", saved)
         self.assertEqual(saved["允许进步行街"], False)
+        # 2026-11-15：专注相关的两个键改名，值必须搬过去
+        self.assertEqual(saved["自动恢复专注"], False)
+        self.assertEqual(saved["恢复专注下限"], 45)
+        self.assertNotIn("自动恢复精力", saved)
+        self.assertNotIn("恢复精力下限", saved)
 
     def test_legacy_shop_policy_is_migrated(self):
         """2026-11-08：旧的通用「购买策略」搬进「商店购买策略」，旧选项落到新顺序。"""

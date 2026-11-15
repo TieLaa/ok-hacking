@@ -432,6 +432,7 @@ class TrainingHandlers:
         if fail is not None and fail > limit:
             if self.config.get("失败率超限改休息"):
                 self._force_rest = True
+                self._force_reason = f"失败率 {fail}% 超过上限 {limit}%"
                 self.log_warning(f"失败率 {fail}% > {limit}% → 退出科目页，回主界面休息")
                 # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
                 self.exit_page(after_sleep=0.8)
@@ -545,6 +546,7 @@ class TrainingHandlers:
                 self.log_warning(
                     f"第4周周三：所有科目训练后都 < {limit} 精力 → 今天休息")
                 self._force_rest = True
+                self._force_reason = f"第4周周三：所有科目训练后都 < {limit} 精力"
                 self.exit_page(after_sleep=0.8)
                 return True
             if picked != name:
