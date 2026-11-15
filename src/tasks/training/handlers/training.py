@@ -30,6 +30,11 @@ class TrainingHandlers:
     # 代价：每天多等一拍（≈0.5 秒）。换的是一次不可撤销的错误点击。
     HUB_SETTLE_TICKS = 1
 
+    # 周六加训页（上一格「训练」、下一格「出行」）：点「训练」最多试几次。
+    # 用户 2026-11-15 口径：「有就进，万一是意识训练还能回复一点精力，不行就退出来
+    # 继续出行」——所以不看精力阈值，但点了没翻页（精力真不够时游戏不认）就改出行。
+    EXTRA_TRAIN_TRIES = 2
+
     # 训练日「出行」按钮最多点几次。
     # 2026-11-03 14:48 实测（用户：「星期5没进出行地图」）：那一拍点「出行」
     # @(1373,465) 没生效，下一拍页面还停在训练日主界面、直接去点了「训练」；
@@ -212,17 +217,25 @@ class TrainingHandlers:
         **判断在 `training/daycycle.py`**（用户 2026-11-01 的架构）：
         「今天练还是休」「今天要不要外出」这两个**新一天入口**是同级的，
         都归那个模块；这里只负责「照它说的做」。
+
+        例外：百目鬼「周六加训」页（上一格「训练」、下一格「出行」）**有就进** ——
+        用户 2026-11-15 口径：不看精力阈值（万一是意识训练还能回一点精力），
+        连点几次没翻页才退出来改「出行」（`EXTRA_TRAIN_TRIES`）。
         """
         if self.match_text(texts, "星期") is None:
             return False
         # 2026-11-15 用户口径（百目鬼的「周六加训」）：那一页**没有「休息」**，
-        # 休息按钮的位置被「出行」替换了。所以判这一页 = 有「休息」**或**
-        # 按钮区里有「训练」。
-        # 「训练」必须只看 `main_action` 区域（右下角按钮区）：整页搜会把
-        # 扭蛋页/器材页抢过来（`check_handlers` 的「抢错人」直接报红）。
+        # 上一格是带彩框的「训练」，下一格被「出行」占掉。所以判这一页 =
+        # 有「休息」**或**按钮区里有「训练」。
+        # 「训练」只看**两格按钮区**：`main_action`（下一格）+ `extra_train`（上一格）。
+        # 整页搜会把扭蛋页/器材页抢过来（`check_handlers` 的「抢错人」直接报红）。
+        # 彩框（里面有彩框科目时按钮会亮一圈）不参与识别：那是科目属性，不是按钮身份。
         area = self.texts_in_region(texts, "main_action")
+        top = self.texts_in_region(texts, "extra_train")
         has_rest = self.match_text(texts, "休息") is not None
-        has_train = self.match_text(area, "训练") is not None
+        top_train = self.match_text(top, "训练")
+        has_train = (self.match_text(area, "训练") is not None
+                     or top_train is not None)
         if not (has_rest or has_train):
             return False
         # 这一页的第几次命中（0 = 刚出现的第一拍）。离开这页时由 LEAVE_RESETS 清零。
@@ -246,8 +259,9 @@ class TrainingHandlers:
         # 出行的两种身份（2026-11-15 用户口径）：
         #   - 有「休息」按钮 → 这是**额外的一次外出**（野上泷周五）：先出行，
         #     回来再按训练/休息走；
-        #   - 没有「休息」按钮（百目鬼「周六加训」）→ 出行就是**休息的替代**，
-        #     不在这儿抢先，交给下面的决策：精力够就训练、不够才出行。
+        #   - 没有「休息」按钮（百目鬼「周六加训」）→ 这一页只负责**进训练**，
+        #     不看精力阈值（详见下面的 `extra_train`）。
+        extra_train = not has_rest and top_train is not None
         action, reason = self.outing_offer(texts) if has_rest else (None, "")
         if action == "点按钮":
             self._outing_wait = 0
@@ -298,21 +312,37 @@ class TrainingHandlers:
         if not getattr(self, "_lounge_snapshot_done", False):
             self._lounge_snapshot_done = True
             self.snapshot_lounge(texts)
-        action, reason = self.training_day_action(texts)
+        # 周六加训：连点几次「训练」页面都没翻（精力真的不够时游戏不认）→
+        # 退出来按「出行」处理（用户 2026-11-15 口径：有就进，不行就继续出行）。
+        if extra_train and getattr(self, "_extra_train_tries", 0) >= self.EXTRA_TRAIN_TRIES:
+            out = self.match_text(area, "出行")
+            if out is not None:
+                self.click_box(out, after_sleep=0.6)
+                self.log_warning(
+                    f"周六加训：连点 {self.EXTRA_TRAIN_TRIES} 次「训练」都没进科目页"
+                    " → 退出来改「出行」")
+                return True
+        action, reason = self.training_day_action(texts, ignore_stamina=extra_train)
         if action == "休息":
             target = self.match_text(area, "休息")
             if target is None:
-                # 周六加训：休息按钮的位置被「出行」替换，精力不够就出去
+                # 周六加训：没有「休息」，下一格是「出行」（强制休息 / 进不去训练时走这里）
                 target = self.match_text(area, "出行")
                 if target is not None:
-                    self.log_info("周六加训：精力不够，休息按钮被「出行」替代 → 出行")
+                    self.log_info("周六加训：没有「休息」按钮 → 出行")
             if target is not None:
                 self.click_box(target, after_sleep=0.6)
             else:
                 self.flow_click("day_rest", after_sleep=0.6)
         else:
-            target = self.match_text(area, "训练")
+            # 周六加训：「训练」在上一格（平时「休息」的位置，可能带彩框），
+            # 按文字点它自己那个框；`day_train` 固定坐标是**下一格**，那天会点成「出行」。
+            target = None if has_rest else top_train
+            if target is None:
+                target = self.match_text(area, "训练")
             if target is not None:
+                if extra_train:
+                    self._extra_train_tries = getattr(self, "_extra_train_tries", 0) + 1
                 self.click_box(target, after_sleep=0.6)
             else:
                 self.flow_click("day_train", after_sleep=0.6)

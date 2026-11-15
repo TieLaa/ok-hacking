@@ -6820,19 +6820,22 @@ class OutingOnTrainingDay(unittest.TestCase):
         self.assertTrue(task.handle_training_day(task._texts))
         self.assertEqual(task.actions[-1][1], "出行")
 
-    # ---------- 百目鬼「周六加训」：这一页没有「休息」，位置被「出行」替换 ----------
+    # ---------- 百目鬼「周六加训」：训练在**上一格**，下一格是「出行」 ----------
 
     def _saturday_texts(self, stamina):
-        # 坐标要落在 `main_action` 区域里（FakeTask 的画布是 1920x1080，
-        # 这个区域是 x>0.70w、y>0.78h），否则 `texts_in_region` 会把按钮滤掉
+        # 实拍版式（1548x871 实测，换算到 FakeTask 的 1920x1080）：
+        #   训练框 (1332,548,119,64) → 中心 ≈ (0.90w, 0.67h)，落在 `extra_train`
+        #   出行框 (1296,702,162,93) → 中心 ≈ (0.89w, 0.86h)，落在 `main_action`
+        # 上一格平时是「休息」，那天换成「训练」；按钮带不带彩框不影响识别
+        # （彩框只说明里面有彩框科目，用户 2026-11-15 口径）。
         return [
             box(37, 18, "第1周", 120, 33),
             box(163, 18, "星期六", 130, 35),
             box(310, 16, stamina, 185, 38),
             box(850, 21, "80", 55, 30),
             box(980, 300, "周六加训！", 200, 44),
-            box(1400, 860, "训练", 156, 83),
-            box(1400, 950, "出行", 110, 40),
+            box(1660, 700, "训练", 200, 50),
+            box(1605, 900, "出行", 200, 60),
         ]
 
     def _saturday_task(self, stamina):
@@ -6843,17 +6846,54 @@ class OutingOnTrainingDay(unittest.TestCase):
         task._lounge_snapshot_done = True     # 跳过休息室快照（这里不需要）
         return task, texts
 
-    def test_saturday_extra_training_trains_when_stamina_enough(self):
-        """百目鬼「周六加训」：精力够就训练，不能因为页面上有「出行」就先出门。"""
-        task, texts = self._saturday_task("80/130")
-        self.assertTrue(task.handle_training_day(texts))
-        self.assertEqual(task.actions[-1][1], "训练")
+    def test_saturday_extra_training_always_trains(self):
+        """精力够不够都先训练（用户 2026-11-15 口径：「有就进」）。
 
-    def test_saturday_extra_training_goes_out_when_stamina_low(self):
-        """精力不够：没有「休息」按钮，点「出行」当休息（用户 2026-11-15 口径）。"""
-        task, texts = self._saturday_task("30/130")
+        训练按钮在**上一格**（实拍 1332,548），点它自己那个框；
+        `day_train` 的固定坐标是下一格，那天会点成「出行」。
+        真进不去会在下一拍退出来改「出行」
+        （见 `test_saturday_extra_training_falls_back_to_outing`）。
+        """
+        for stamina in ("80/130", "30/130"):
+            task, texts = self._saturday_task(stamina)
+            self.assertTrue(task.handle_training_day(texts))
+            action = task.actions[-1]
+            self.assertEqual(action[1], "训练", stamina)
+            self.assertLess(action[3], task.height * 0.78,
+                            "点到下一格去了（那里是「出行」）：%s" % (action,))
+
+    def test_saturday_extra_training_falls_back_to_outing(self):
+        """连点「训练」都没进科目页 → 退出来改「出行」（不再死盯这一页）。"""
+        task, texts = self._saturday_task("5/130")
+        for _ in range(task.EXTRA_TRAIN_TRIES):
+            # 每拍都当成「同一页还在」：点训练 → 页面没翻
+            self.assertTrue(task.handle_training_day(texts))
+        self.assertTrue(task.handle_training_day(texts))
+        action = task.actions[-1]
+        self.assertEqual(action[1], "出行")
+        self.assertGreater(action[3], task.height * 0.78)   # 下一格那个「出行」
+        self.assertTrue(any("都没进科目页" in m for m in task.logs), task.logs)
+
+    def test_saturday_extra_training_keeps_forced_rest(self):
+        """「有就进」只跳过精力阈值：失败率超限的强制休息照旧。"""
+        task, texts = self._saturday_task("80/130")
+        task._force_rest = True
+        task._force_reason = "失败率 90% 超过上限 50%"
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "出行")
+
+    def test_saturday_extra_training_page_is_not_go_out(self):
+        """分类器：上一格有「训练」时这是训练日，不是周末首页。
+
+        2026-11-15 实跑（logs/1115-155619_百目鬼剑 16:01:20）只查 main_action，
+        整页判成 `go_out` → 路由先跑 handle_go_out → 直接点「出行」，
+        周六的加训一次都没做。
+        """
+        from src.tasks.training.pages import classify_page
+        task, texts = self._saturday_task("80/130")
+        page, candidates = classify_page(task, texts)
+        self.assertEqual(page, "training_hub")
+        self.assertNotIn("go_out", candidates)
 
     def test_go_out_click_is_retried_then_given_up(self):
         """点了「出行」页面没翻 → 下一拍重试；点够上限才放弃（放弃时记账+告警）。"""

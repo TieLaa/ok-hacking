@@ -56,7 +56,7 @@ EXPECT = {
     "handle_skill_select": "skill_select",
     "handle_training_plan": "training_plan",
     "handle_training_hub": "training_hub",
-    "handle_training_day": "training_day",
+    "handle_training_day": "training_hub",
     "handle_confirm_team": "confirm_team",
     "handle_note_study": "note_study",
     "handle_note_select": "note_select",
@@ -261,6 +261,11 @@ def run(sample=False, min_rate=90.0):
                      confidence=1.0) for d in data]
         task = DryRunTask(frame, texts)
         page, _cands = classify_page(task, texts)
+        # 百目鬼「周六加训」页（上一格「训练」+ 下一格「出行」）历史上是
+        # handle_go_out 赢的（旧 bug：只认 main_action），那些帧的文件名标签
+        # 是旧行为。修好后它们归 training_hub —— 按新页面记账，不算回归。
+        if htag == "handle_go_out" and page == "training_hub":
+            gt = "training_hub"
         by_gt[gt][page or "unknown"] += 1
         if page != gt:
             wrong[(gt, page or "unknown")] += 1
