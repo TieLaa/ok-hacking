@@ -2033,7 +2033,9 @@ class PageRegistry(unittest.TestCase):
         现在两表允许重名，但重名分三类：
         - **判据等价**（在 docs/shots 人工确认过的图上两表都命中）：
           register_player / training_plan / weekend_map / announcement /
-          captain / confirm_team / equipment / team / stock_pick；
+          captain / confirm_team / equipment / team / stock_pick /
+          training_hub / **stamina_recover**（签名表直接 `Anchor` 复用页面锚点，
+          结构上就是同一份判据，见 2026-11-15 事件三选一抢拍事故）；
         - **有意不等价**：shop / training_subject —— 认页要严（能独立认出
           这一页），排除要宽（宁可多排），理由写在两张表的 docstring 里；
         - **同一页面的两种形态**：stage_list —— 签名表认「关卡加成+奖励预览」，
@@ -2043,7 +2045,8 @@ class PageRegistry(unittest.TestCase):
         overlap = set(pages.PRIORITY) & set(page_signatures.SIGNATURES)
         known_equal = {"register_player", "training_plan", "weekend_map",
                        "announcement", "captain", "confirm_team",
-                       "equipment", "team", "stock_pick", "training_hub"}
+                       "equipment", "team", "stock_pick", "training_hub",
+                       "stamina_recover"}
         known_different = {"shop", "training_subject"}
         known_two_forms = {"stage_list"}
         self.assertEqual(

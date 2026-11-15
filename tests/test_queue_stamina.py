@@ -628,5 +628,81 @@ class AttrPanelReading(unittest.TestCase):
         self.assertEqual(merged["意识"], 1114)
 
 
+class StaminaRecoverRouting(unittest.TestCase):
+    """「专注恢复」页必须被认成**自己的页面**，不能落进事件三选一。
+
+    2026-11-15 用户实跑（v0.1.20，`run.log` 20:13:24–20:15:58）：
+    这一页没登记锚点 → 分类器认成 event_choice → 路由把
+    `handle_event_choice` 提到最前 → 它把「钻石购买」当作竖排三选一的第一个，
+    每秒点一次标题框 (656,226)，连点 112 下，直到用户手动关窗口。
+    """
+
+    def test_page_is_classified_as_stamina_recover(self):
+        from src.tasks.training.pages import classify_page
+        page = recover_page()
+        task = task_with(page)
+        found, candidates = classify_page(task, page)
+        self.assertEqual(found, "stamina_recover")
+        self.assertNotEqual(candidates[0], "event_choice")
+
+    def test_router_sends_this_page_to_stamina_handler(self):
+        from src.tasks.training import page_handlers
+        self.assertEqual(page_handlers.handlers_for("stamina_recover"),
+                         ("handle_stamina_recover",))
+
+    def test_event_choice_backs_off(self):
+        from src.tasks.training import page_signatures
+        page = recover_page()
+        task = task_with(page)
+        self.assertTrue(page_signatures.page_has(task, page, "stamina_recover"))
+        self.assertTrue(page_signatures.page_is_other(task, page, "event_choice"))
+
+    def test_plain_event_page_is_not_excluded(self):
+        """普通事件二选一不能被 exclusive_page 误伤（误伤 = 没人认领 → 点屏幕中央）。"""
+        from src.tasks.training import page_signatures
+        page = [box(500, 400, "放弃按摩", 160, 50),
+                box(500, 520, "安心按摩", 160, 50)]
+        task = task_with(page)
+        self.assertFalse(page_signatures.page_is_other(task, page, "event_choice"))
+
+
+class PageSignatureSemantics(unittest.TestCase):
+    """签名表：组内是「且」，所以「任一命中」必须拆成一词一组（`any_of`）。
+
+    2026-11-15 事故：`exclusive_page` / `gacha_page` / `match_event` /
+    `weekly_summary` 第一组都是从旧代码 `match_text(元组)`（或）搬过来的，
+    裹成一整组后变成「所有词同时出现」→ 永不命中。
+    """
+
+    def test_any_of_matches_single_word(self):
+        from src.tasks.training import page_signatures
+        page = [box(400, 300, "小游戏强化", 100, 30)]
+        task = task_with(page)
+        self.assertIn("gacha_page", page_signatures.matched_signatures(task, page))
+
+    def test_event_effect_word_is_not_gacha_page(self):
+        """事件选项的效果文字「器材加成-100熟练度」不能算扭蛋页（2026-11-15 回放）。
+
+        旧代码的扭蛋签名里写着 `熟练度。`（带句号），搬进签名表时丢了句号 →
+        16 帧事件页被 `handle_event_choice` 以「这是别的页面」排掉，没人认领。
+        """
+        from src.tasks.training import page_signatures
+        page = [box(500, 600, "器材加成-100熟练度", 220, 30)]
+        task = task_with(page)
+        self.assertNotIn("gacha_page", page_signatures.matched_signatures(task, page))
+
+    def test_match_event_needs_only_one_word(self):
+        from src.tasks.training import page_signatures
+        page = [box(400, 300, "暂时退出", 100, 30)]
+        task = task_with(page)
+        self.assertIn("match_event", page_signatures.matched_signatures(task, page))
+
+    def test_weekly_summary_first_group_is_or(self):
+        from src.tasks.training import page_signatures
+        page = [box(400, 300, "本周总结", 100, 30)]
+        task = task_with(page)
+        self.assertIn("weekly_summary", page_signatures.matched_signatures(task, page))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
