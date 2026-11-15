@@ -66,6 +66,10 @@ def main():
     # src/util/log_fallback.py 接管写 logs/run.log（2026-11-13 实跑就是这种）。
     ap.add_argument("--log", default=None,
                     help="日志文件；默认取 run.log / ok-script.log 里更新的那个")
+    # 安装版的运行目录在 %LOCALAPPDATA% 旁边（D:\\ok-hacking\\data\\...\\working），
+    # 点击流水不在仓库 logs/ 下；外部观察安装版时要显式指过来。
+    ap.add_argument("--clicks", default=None,
+                    help="点击流水；默认 logs/clicks.jsonl（安装版在 working/logs 下）")
     ap.add_argument("--idle", type=float, default=5.0)
     ap.add_argument("--heartbeat", type=float, default=30.0)
     # 断流兜底：日志和点击同时停了这么久 → 判「彻底卡死」，主动退出叫醒盯的人
