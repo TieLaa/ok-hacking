@@ -10,8 +10,9 @@
 用法：
     python tools/probe_subject_stamina.py
 
-要求游戏停在**训练科目页**（有「失败率」和六个科目按钮）。工具只点科目按钮，
-**不会点「决定」**，所以不会真的开练；当前已选中的那一格直接读、不重复点。
+要求游戏停在**训练科目页**（有「失败率」和六个科目按钮），**并且任务已暂停** ——
+它会点科目按钮，任务同时在跑就会互相抢点击。工具只点科目按钮，**不会点「决定」**；
+当前已选中的那一格直接读、不重复点；一旦发现页面被翻走就立刻停手。
 
 产物：屏幕一份表格 + `logs/subject_stamina/<时间戳>.txt`
 """
@@ -51,7 +52,8 @@ def ocr_items(engine, img, region=None):
         x0, y0 = int(w * rx1), int(h * ry1)
         img = img[y0:int(h * ry2), x0:int(w * rx2)]
     out = []
-    for text, x, y, bw, bh, _score in _ocr.items(img, eng=engine, min_score=0.5):
+    # 0.4：右下角「决定」的置信度常年在 0.5 上下抖（实测 0.56 / 0.44），卡 0.5 会时有时无
+    for text, x, y, bw, bh, _score in _ocr.items(img, eng=engine, min_score=0.4):
         out.append((text.strip(), x0 + x + bw // 2, y0 + y + bh // 2))
     return out
 
@@ -71,10 +73,20 @@ def subject_boxes(img, engine):
             if name in labels.TRAINING_SUBJECTS}
 
 
+def on_subject_page(img, engine):
+    """还在科目页吗（「失败率」是这一页的必经文案）。"""
+    return "失败率" in "".join(t for t, _x, _y in ocr_items(engine, img))
+
+
 def selected_subject(img, engine, boxes):
-    """当前已选中的科目 = 和「决定」同一行、在它左边的那个按钮。"""
+    """当前已选中的科目 = 和「决定」同一行、在它左边的那个按钮。
+
+    「决定」常被 OCR 读成「快定 / 決 定」，所以按「两个字、尾字是 定」认。
+    认不出来时返回 None —— 调用方会把六格各点一次；单点已选中的那格实测
+    不会开练（2026-11-15 复验两次），开练要连点两下。
+    """
     decide = next(((cx, cy) for text, cx, cy in ocr_items(engine, img)
-                   if text == "决定"), None)
+                   if text.replace(" ", "") in ("决定", "快定", "決 定")), None)
     if decide is None or not boxes:
         return None
     dx, dy = decide
@@ -101,8 +113,7 @@ def main():
     img = grab(hwnd)
     if img is None:
         raise SystemExit("抓帧失败")
-    page = "".join(t for t, _x, _y in ocr_items(engine, img))
-    if "失败率" not in page:
+    if not on_subject_page(img, engine):
         raise SystemExit("当前不是训练科目页（没读到「失败率」）")
 
     boxes = subject_boxes(img, engine)
@@ -122,7 +133,13 @@ def main():
             continue
         click_at(hwnd, pos)
         time.sleep(SETTLE)
-        rows.append((name, read_stamina(grab(hwnd), engine), "点选后读"))
+        img = grab(hwnd)
+        if not on_subject_page(img, engine):
+            # 页面被翻走（任务抢了点击 / 已经开练）→ 立刻停手，别继续瞎点
+            rows.append((name, None, "页面已翻走，停止"))
+            print("点击后页面变了 → 停止（任务在跑的话会互相抢点击）")
+            break
+        rows.append((name, read_stamina(img, engine), "点选后读"))
 
     known = [v for _n, v, _w in rows if v is not None]
     best = max(known) if known else None
