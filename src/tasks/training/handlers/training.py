@@ -215,7 +215,15 @@ class TrainingHandlers:
         """
         if self.match_text(texts, "星期") is None:
             return False
-        if self.match_text(texts, "休息") is None:
+        # 2026-11-15 用户口径（百目鬼的「周六加训」）：那一页**没有「休息」**，
+        # 休息按钮的位置被「出行」替换了。所以判这一页 = 有「休息」**或**
+        # 按钮区里有「训练」。
+        # 「训练」必须只看 `main_action` 区域（右下角按钮区）：整页搜会把
+        # 扭蛋页/器材页抢过来（`check_handlers` 的「抢错人」直接报红）。
+        area = self.texts_in_region(texts, "main_action")
+        has_rest = self.match_text(texts, "休息") is not None
+        has_train = self.match_text(area, "训练") is not None
+        if not (has_rest or has_train):
             return False
         # 这一页的第几次命中（0 = 刚出现的第一拍）。离开这页时由 LEAVE_RESETS 清零。
         self._hub_ticks = getattr(self, "_hub_ticks", 0) + 1
@@ -235,7 +243,12 @@ class TrainingHandlers:
         #      （`weekend.handle_weekend`）。旧写法点完就记，一点空，
         #      周五当天就被 `handle_go_out`（`outing_done and 非周末 → 退出`）锁死；
         #   3. **点了没进地图 → 下一拍重试**，最多 `OUTING_CLICK_LIMIT` 次。
-        action, reason = self.outing_offer(texts)
+        # 出行的两种身份（2026-11-15 用户口径）：
+        #   - 有「休息」按钮 → 这是**额外的一次外出**（野上泷周五）：先出行，
+        #     回来再按训练/休息走；
+        #   - 没有「休息」按钮（百目鬼「周六加训」）→ 出行就是**休息的替代**，
+        #     不在这儿抢先，交给下面的决策：精力够就训练、不够才出行。
+        action, reason = self.outing_offer(texts) if has_rest else (None, "")
         if action == "点按钮":
             self._outing_wait = 0
             if hub_seen < self.HUB_SETTLE_TICKS:
@@ -286,9 +299,13 @@ class TrainingHandlers:
             self._lounge_snapshot_done = True
             self.snapshot_lounge(texts)
         action, reason = self.training_day_action(texts)
-        area = self.texts_in_region(texts, "main_action")
         if action == "休息":
             target = self.match_text(area, "休息")
+            if target is None:
+                # 周六加训：休息按钮的位置被「出行」替换，精力不够就出去
+                target = self.match_text(area, "出行")
+                if target is not None:
+                    self.log_info("周六加训：精力不够，休息按钮被「出行」替代 → 出行")
             if target is not None:
                 self.click_box(target, after_sleep=0.6)
             else:

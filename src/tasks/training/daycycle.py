@@ -204,16 +204,7 @@ class DayCycleMixin:
         按钮被挡）。所以 `mark_outing_used()` 只在 `handle_weekend` **看到地图**时
         调用；点空了下一拍这里仍然返回 "点按钮"，会自动重试
         （`handle_training_day` 用 `OUTING_CLICK_LIMIT` 限次）。
-
-        2026-11-15 用户口径（百目鬼剑的天赋「周六加训」）：周六页面上出现
-        「周六加训！」时**先训练、不出行**。依据是 11-13 实拍那局
-        （`logs/1113-124507_百目鬼剑/events/1113-124637_handle_go_out.json`）：
-        「周六加训！」「训练」「出行」三样都在屏上，程序点了出行，周六整天被
-        餐厅打工吃掉，一次训练都没做。
         """
-        if self.match_text(texts, labels.SATURDAY_EXTRA_TRAINING) is not None:
-            self.log_info("页面有「周六加训！」→ 今天先训练，不点出行")
-            return None, "周六加训：今天先训练，不出行"
         if self.match_text(texts, "出行") is None:
             return None, "这一页没有「出行」"
         if block_if_used and self.outing_used():

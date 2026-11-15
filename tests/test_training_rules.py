@@ -2943,24 +2943,8 @@ class DayCycleRules(unittest.TestCase):
         self.assertEqual(action, "推进对话")
         self.assertIn("对话", reason)
 
-    def test_saturday_extra_training_blocks_outing(self):
-        """百目鬼剑天赋「周六加训！」：周六先训练，不点「出行」。
-
-        11-13 实拍（`1113-124637_handle_go_out.json`）：「周六加训！」「训练」
-        「出行」三样都在屏上，程序点了出行，周六整天被餐厅打工吃掉。
-        """
-        texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期六", 130, 40),
-                 box(380, 16, "86/130", 210, 53),
-                 box(980, 300, "周六加训！", 200, 44),
-                 box(1300, 660, "训练", 120, 50),
-                 box(1377, 748, "出行", 120, 50)]
-        task = FakeTask(texts)
-        action, reason = task.outing_offer(texts)
-        self.assertIsNone(action)
-        self.assertIn("周六加训", reason)
-
     def test_saturday_without_the_label_still_goes_out(self):
-        """没有「周六加训！」（普通队长）：周六照旧出行。"""
+        """普通队长的周六：没有「休息」按钮也照旧出行（这条是既有行为）。"""
         texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期六", 130, 40),
                  box(380, 16, "86/130", 210, 53),
                  box(1300, 660, "训练", 120, 50),
@@ -6834,6 +6818,41 @@ class OutingOnTrainingDay(unittest.TestCase):
         self.assertEqual(task.actions, [])
         # 第二拍按钮已经画稳 → 正常外出
         self.assertTrue(task.handle_training_day(task._texts))
+        self.assertEqual(task.actions[-1][1], "出行")
+
+    # ---------- 百目鬼「周六加训」：这一页没有「休息」，位置被「出行」替换 ----------
+
+    def _saturday_texts(self, stamina):
+        # 坐标要落在 `main_action` 区域里（FakeTask 的画布是 1920x1080，
+        # 这个区域是 x>0.70w、y>0.78h），否则 `texts_in_region` 会把按钮滤掉
+        return [
+            box(37, 18, "第1周", 120, 33),
+            box(163, 18, "星期六", 130, 35),
+            box(310, 16, stamina, 185, 38),
+            box(850, 21, "80", 55, 30),
+            box(980, 300, "周六加训！", 200, 44),
+            box(1400, 860, "训练", 156, 83),
+            box(1400, 950, "出行", 110, 40),
+        ]
+
+    def _saturday_task(self, stamina):
+        texts = self._saturday_texts(stamina)
+        task = FakeTask(texts)
+        task.ensure_speed = lambda t: False
+        task._hub_ticks = task.HUB_SETTLE_TICKS
+        task._lounge_snapshot_done = True     # 跳过休息室快照（这里不需要）
+        return task, texts
+
+    def test_saturday_extra_training_trains_when_stamina_enough(self):
+        """百目鬼「周六加训」：精力够就训练，不能因为页面上有「出行」就先出门。"""
+        task, texts = self._saturday_task("80/130")
+        self.assertTrue(task.handle_training_day(texts))
+        self.assertEqual(task.actions[-1][1], "训练")
+
+    def test_saturday_extra_training_goes_out_when_stamina_low(self):
+        """精力不够：没有「休息」按钮，点「出行」当休息（用户 2026-11-15 口径）。"""
+        task, texts = self._saturday_task("30/130")
+        self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "出行")
 
     def test_go_out_click_is_retried_then_given_up(self):
