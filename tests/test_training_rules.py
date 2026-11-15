@@ -3296,6 +3296,25 @@ class PlaceModulesRules(unittest.TestCase):
                                style="扭蛋流", race=True)
         self.assertEqual(task.park_order(task._texts, "扭蛋流", day="日")[0], "划船")
 
+    def test_boat_race_label_elsewhere_does_not_trigger(self):
+        """地图上的同一个标签不在划船选项上方 → 不触发（按缺口选野餐）。"""
+        texts = self._park("20/130")
+        texts.append(box(430, 200, "划船比赛！", 170, 36))   # 散步那一列上方
+        task = FakeTask(texts)
+        task._style = "训练流"
+        task.weekend_state()
+        self.assertEqual(task.park_order(texts, "训练流", day="日")[0], "野餐")
+
+    def test_boat_race_label_merged_into_option_counts(self):
+        """标签和选项被 OCR 读成一整块（框名本身带「划船比赛」）也算。"""
+        texts = self._park("20/130")
+        texts = [t for t in texts if t.name.strip() != "划船"]
+        texts.append(box(790, 400, "划船比赛！ 划船", 220, 60))
+        task = FakeTask(texts)
+        task._style = "训练流"
+        task.weekend_state()
+        self.assertEqual(task.park_order(texts, "训练流", day="日")[0], "划船")
+
     def test_park_boat_with_one_more_teammate_still_picnic(self):
         """训练流缺口 110 ≥70 → 野餐；划船只多 1 个也不改（缺口规则优先）。"""
         task = self._park_task(mates={"划船": 1, "野餐": 0})

@@ -127,8 +127,8 @@ class ParkPlace:
         # 2026-11-15 用户口径：公园页选项上方出现「划船比赛！」→ 优先划船
         # （比赛有额外收益，压过缺口/队友判断）。
         # 放在海边守卫**之后**：RULES 里「事件不能推翻第3周体力目标」仍然有效。
-        if self.match_text(texts, labels.PARK_BOAT_RACE) is not None:
-            self.log_info("公园：有「划船比赛！」→ 优先划船")
+        if self.boat_race_badge(texts):
+            self.log_info("公园：划船选项上方有「划船比赛！」→ 优先划船")
             return "划船"
 
         if style == "训练流":
@@ -158,6 +158,31 @@ class ParkPlace:
         self.log_info(f"公园：默认野餐 → 划船（队友比野餐多 {diff} 人，按{how}："
                       f"划船 {counts[0]} / 野餐 {counts[1]}）")
         return "划船"
+
+    def boat_race_badge(self, texts):
+        """「划船比赛！」是不是贴在**划船选项正上方**？
+
+        2026-11-15：地图上的公园图标也挂同一个标签，整页子串匹配会在页面
+        误判时把地图当成公园页。所以判据连位置一起判（同 `shop_fresh_badge`）：
+        - 标签中心在划船选项中心正上方（|Δcx| ≤ 0.15，Δcy ∈ [0.005, 0.15]）；
+        - 标签和选项被 OCR 读成一整块（框名本身带「划船比赛」）也算。
+        """
+        boat, _picnic = self.park_option_boxes(texts)
+        if boat is None:
+            return False
+        if "划船比赛" in (boat.name or ""):
+            return True
+        bx = (boat.x + boat.width / 2) / self.width
+        by = (boat.y + boat.height / 2) / self.height
+        for t in texts:
+            name = (t.name or "").strip()
+            if "划船比赛" not in name:
+                continue
+            cx = (t.x + t.width / 2) / self.width
+            cy = (t.y + t.height / 2) / self.height
+            if abs(cx - bx) <= 0.15 and 0.005 <= (by - cy) <= 0.15:
+                return True
+        return False
 
     def park_default_pick(self, texts, style, day=None):
         """缺口读不到时的旧回退：训练流「周六划船 / 周日看精力」，其它流派用配置项。"""
