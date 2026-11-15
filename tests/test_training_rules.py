@@ -2220,6 +2220,33 @@ class DivinationEvent(unittest.TestCase):
         self.assertFalse(task.handle_divination(task._texts))
 
 
+class ConstructionNoMaterial(unittest.TestCase):
+    """工地页钢材不足（2026-11-15）：点「进行施工」只弹提示，要关弹窗。"""
+
+    def test_insufficient_material_closes_popup(self):
+        from src.tasks.ui import labels
+        texts = [box(173, 154, "工地", 91, 54),
+                 box(861, 255, "消耗获得奖励", 245, 38),
+                 box(666, 416, "建筑材料不足", 214, 37),
+                 box(901, 591, "进行施工", 147, 45)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_construction(texts))
+        self.assertEqual(task.actions, [(
+            "click",
+            int(task.width * labels.CONSTRUCTION_CLOSE[0]),
+            int(task.height * labels.CONSTRUCTION_CLOSE[1]))])
+
+    def test_material_available_still_constructs(self):
+        texts = [box(173, 154, "工地", 91, 54),
+                 box(861, 255, "消耗获得奖励", 245, 38),
+                 box(979, 532, "-21", 42, 30),
+                 box(901, 591, "进行施工", 147, 45)]
+        task = FakeTask(texts)
+        self.assertTrue(task.handle_construction(texts))
+        self.assertEqual(task.actions[-1][0], "click_box")
+        self.assertEqual(task.actions[-1][1], "进行施工")
+
+
 class CaptainFilterFlow(unittest.TestCase):
     """选队长前的「显示设定 → 筛选」四步（2026-11-13 用户口径）。"""
 
