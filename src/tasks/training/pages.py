@@ -798,6 +798,16 @@ _ANCHORS = {
 }
 
 
+def is_page(task, texts, page):
+    """`page` 的锚点判据（`page_signatures` 复用，判据只写一份）。
+
+    2026-11-15：签名表原来自己写「训练计划」裸词，事件选项页正文里
+    一句「独一无二的训练计划」就把整页排成日历页 → 事件 handler 让位 →
+    全表无人认领 → 兜底点屏幕中央（对话框）→ 3 轮无变化停任务。
+    """
+    return _ANCHORS[page](task, texts)
+
+
 def classify_page(task, texts):
     """返回 `(page_id, candidates)`。
 
