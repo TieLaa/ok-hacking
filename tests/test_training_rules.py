@@ -3894,9 +3894,40 @@ class WeekendMapRules(unittest.TestCase):
         self.assertEqual(task2.actions, [])
 
     def test_final_week_saturday_works_without_boat_race(self):
-        """第7周周六没有划船比赛 → 打工，钱留给周日商店买属性。"""
+        """第7周周六零花钱读不到 → 打工（不赌），钱留给周日商店买属性。"""
         texts = self._weekend_map("星期六", week=7)
         task = self.styled("训练流", texts)
+        self.assertEqual(task.today_places(day="六", texts=texts), ["餐厅"])
+
+    def test_final_week_saturday_probes_street_when_rich(self):
+        """第7周周六零花钱 > 120 → 先去步行街刷最后一次彩卡，没买成再打工。"""
+        texts = self._weekend_map("星期六", money=300, week=7)
+        task = self.styled("训练流", texts)
+        self.assertEqual(task.today_places(day="六", texts=texts),
+                         ["步行街", "餐厅"])
+
+    def test_final_week_saturday_works_when_poor(self):
+        """零花钱只有 120（不够买彩卡）→ 直接打工，不去白跑一趟。"""
+        texts = self._weekend_map("星期六", money=120, week=7)
+        task = self.styled("训练流", texts)
+        self.assertEqual(task.today_places(day="六", texts=texts), ["餐厅"])
+
+    def test_final_week_saturday_stops_after_buying(self):
+        """步行街买到卡了 → 今天不再去餐厅。"""
+        texts = self._weekend_map("星期六", money=300, week=7)
+        task = self.styled("训练流", texts)
+        st = task.day_state()
+        st.visited.add("步行街")
+        st.gacha_spent = True
+        self.assertEqual(task.today_places(day="六", texts=texts), [])
+
+    def test_final_week_saturday_works_after_empty_street(self):
+        """步行街没买成（卡都买不起/不要）→ 回餐厅打工。"""
+        texts = self._weekend_map("星期六", money=300, week=7)
+        task = self.styled("训练流", texts)
+        st = task.day_state()
+        st.visited.add("步行街")
+        st.gacha_spent = False
         self.assertEqual(task.today_places(day="六", texts=texts), ["餐厅"])
 
     def test_final_week_saturday_works_even_with_boat_race(self):
