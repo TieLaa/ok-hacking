@@ -42,6 +42,7 @@ nav:
       - 界面地图: UI_MAP.md
       - MCP 开发循环: MCP_DEV.md
       - 提示词手册: PROMPT_PLAYBOOK.md
+      - 属性优先级: ATTRIBUTE_PRIORITY.md
       - 规则: RULES.md
   - 打包与发布: release.md
   - English:

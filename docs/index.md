@@ -30,6 +30,7 @@
 | [界面地图](UI_MAP.md) | 游戏各界面与对应 handler 的对照 |
 | [MCP 开发循环](MCP_DEV.md) | 改 handler 不重启 GUI 的验证流程 |
 | [提示词手册](PROMPT_PLAYBOOK.md) | 踩过的坑与下次该怎么说 |
+| [属性优先级](ATTRIBUTE_PRIORITY.md) | 练哪个科目、买哪张属性卡、事件选哪个 |
 | [规则](RULES.md) | 项目内的硬规则 |
 | [打包与发布](release.md) | 构建产物、tag 流程、依赖锁定 |
 
