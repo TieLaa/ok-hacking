@@ -1,5 +1,5 @@
-# 同步到更新仓库的文件列表（partial-sync-repo 用）。
-# 目前未启用更新仓库（build.yml 里没有 Sync Repositories 步骤），这里是备用的最小集合。
+# 同步到更新仓库的文件列表：更新仓库 TieLaa/ok-hacking-update 的 sync.yml
+# 会按这份清单从源仓库 tag 里 cp -a 过来（不在这里的目录，安装版就没有）。
 # 注意：`ok` 由 ok.update.inline_ok_requirements 在打包时生成（把 ok-script 源码复制到仓库根），
 # 仓库里并不存在这个目录，不要因为"找不到"就删掉。
 src
@@ -11,6 +11,10 @@ icons
 requirements.txt
 README.md
 assets
+# 运行时数据，不是文档：`src/tasks/training/roster.py` 读 `docs/roster/*.json`
+# 认流派 / 位置 / 推荐属性；漏了它安装版的「指定队长」整组控件会被禁用
+# （v0.1.15~v0.1.19 的实况，2026-11-15 修）。
+docs/roster
 pyappify.yml
 CHANGELOG.md
 CHANGELOG.zh-CN.md
