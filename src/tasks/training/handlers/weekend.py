@@ -576,7 +576,8 @@ class WeekendHandlers:
             required=attributes.required_attrs(info.get("position")),
             attrs=dict(self.info.get("attrs") or {}),
             caps=getattr(self, "_attr_caps", None) or {},
-            gap_limit=int(self.config.get("缺口排除阈值")))
+            gap_limit=int(self.config.get("缺口排除阈值")),
+            week=bar.get("week"))
         if best is None:
             self.log_info(f"扭蛋：{detail} → 没有可买的"
                           f"（零用钱 {money}，精力 {stamina}），退出")

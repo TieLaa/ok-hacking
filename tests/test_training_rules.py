@@ -1003,6 +1003,74 @@ class GachaRules(unittest.TestCase):
         self.assertEqual(task.actions[0][1], 1100)
 
 
+class GachaSurgeCards(unittest.TestCase):
+    """2026-11-15 用户口径：六维「XX暴涨」第 7 周（赛季最后一周）之前不买。
+
+    它给一次性 +250 该属性，代价是之后不能再从训练中获得该属性；
+    前期买等于封掉一门训练。名单只列六维，**不带「熟练度暴涨」**
+    （那是器材熟练度），所以生产代码里没有「例外」分支。
+    """
+
+    @staticmethod
+    def _surge_card(name="防守暴涨",
+                    effect="获得250防守，主力不再能从训练中获得防守"):
+        return {"name": name, "quality": "金", "price": 100, "mate": False,
+                "enhanced": False, "clear": False, "effect": effect,
+                "recover": 0, "x": 0, "y": 0}
+
+    def test_names_are_six_attributes_only(self):
+        from src.tasks.training.places.street import SURGE_NAMES
+        self.assertEqual(set(SURGE_NAMES),
+                         {a + "暴涨" for a in ("投射", "弹跳", "防守",
+                                               "体能", "运控", "意识")})
+        self.assertNotIn("熟练度暴涨", SURGE_NAMES)
+
+    def test_not_bought_before_week7(self):
+        task = FakeTask([])
+        best, detail, _ = task.gacha_candidates(
+            [self._surge_card()], stamina=100, stamina_max=130, money=500, week=6)
+        self.assertIsNone(best)
+        self.assertIn("属性暴涨卡", detail)
+
+    def test_week_unreadable_is_not_bought(self):
+        task = FakeTask([])
+        best, _detail, _ = task.gacha_candidates(
+            [self._surge_card()], stamina=100, stamina_max=130, money=500, week=None)
+        self.assertIsNone(best)
+
+    def test_bought_from_week7(self):
+        task = FakeTask([])
+        best, _detail, _ = task.gacha_candidates(
+            [self._surge_card()], stamina=100, stamina_max=130, money=500, week=7)
+        self.assertIsNotNone(best)
+        self.assertEqual(best["name"], "防守暴涨")
+
+    def test_non_attribute_surge_is_normal_card(self):
+        """「熟练度暴涨」只是名字里带「暴涨」：第 6 周照常买。"""
+        task = FakeTask([])
+        card = self._surge_card(name="熟练度暴涨",
+                                effect="立刻将随机1个器材的熟练度提升至100")
+        best, _detail, _ = task.gacha_candidates(
+            [card], stamina=100, stamina_max=130, money=500, week=6)
+        self.assertIsNotNone(best)
+
+    def test_handle_street_passes_week(self):
+        """接线：周数从顶栏传到选卡；第 6 周不买，第 7 周才买。"""
+        for week, should_buy in ((6, False), (7, True)):
+            texts = gacha_texts([
+                ("防守暴涨", "获得250防守，主力不再能从训练中获得防守"),
+            ], stamina="100/130", money="500", price="100")
+            texts.append(box(60, 20, f"第{week}周", 120, 40))
+            task = FakeTask(texts, qualities=["金"])
+            self.assertTrue(task.handle_street(texts))
+            log = "".join(task.logs)
+            if should_buy:
+                self.assertIn("选「防守暴涨」", log)
+            else:
+                self.assertNotIn("选「防守暴涨」", log)
+                self.assertIn("属性暴涨卡", log)
+
+
 class EventRules(unittest.TestCase):
 
     def test_result_page_not_vertical_choice(self):
@@ -4887,6 +4955,14 @@ class StylePlanRules(unittest.TestCase):
         task = self._restaurant_task(
             stamina="10/130", urgent="当服务员",
             step=WeekendStep("餐厅", True))
+        self.assertEqual(task.restaurant_order(task._texts,
+                                               allow_fallback=False), ())
+        self.assertTrue(task.handle_restaurant(task._texts))
+        self.assertEqual(task.actions[-1][0], "click")      # exit_page 的返回
+
+    def test_restaurant_urgent_unreadable_detour_exits(self):
+        """急招插队但没认出急招卡 → 不赌普通卡（吃不到双倍就没意义）。"""
+        task = self._restaurant_task(step=WeekendStep("餐厅", True))
         self.assertEqual(task.restaurant_order(task._texts,
                                                allow_fallback=False), ())
         self.assertTrue(task.handle_restaurant(task._texts))

@@ -11,6 +11,7 @@ import os
 import sys
 
 import cv2
+import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -34,6 +35,8 @@ class Probe(TrainingParsersMixin, TrainingScoringMixin, StreetPlace):
         self.width = frame.shape[1]
         self.height = frame.shape[0]
         self.config = dict(DEFAULT_CONFIG, **(config or {}))
+        # `gacha_candidates` 2026-11-14 起按流派判断专属卡；离线探针默认按扭蛋流。
+        self.style = "扭蛋流"
 
     def log_info(self, msg, *a, **kw):
         print("[info]", msg)
@@ -41,7 +44,8 @@ class Probe(TrainingParsersMixin, TrainingScoringMixin, StreetPlace):
 
 def grab_frame(path=None):
     if path:
-        frame = cv2.imread(path)
+        # cv2.imread 不认中文路径（本项目的存证目录带中文局名），用 fromfile 解码。
+        frame = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
         if frame is None:
             raise SystemExit("读不到帧：" + path)
         return frame
@@ -68,8 +72,11 @@ def main():
     stamina = int(os.environ.get("STAMINA", "54"))
     stamina_max = int(os.environ.get("STAMINA_MAX", "130"))
     money = int(os.environ.get("MONEY", "398"))
-    best, detail, _ = probe.gacha_candidates(cards, stamina, stamina_max, money)
-    print(f"候选明细（精力 {stamina}/{stamina_max}，零用钱 {money}）：{detail}")
+    # WEEK=7 用来复盘「第 7 周以后才买六维暴涨卡」；不填 = 读不到周数（按不买）。
+    week = int(os.environ.get("WEEK", "0")) or None
+    best, detail, _ = probe.gacha_candidates(
+        cards, stamina, stamina_max, money, week=week)
+    print(f"候选明细（精力 {stamina}/{stamina_max}，零用钱 {money}，周 {week}）：{detail}")
     print("选中：", None if best is None else
           f"{best['name']}（{best['quality']}，{best['price']}币，score={best['score']}）")
     return 0
