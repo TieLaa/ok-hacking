@@ -3286,10 +3286,13 @@ class PlaceModulesRules(unittest.TestCase):
         task = self._park_task(mates={"划船": 2, "野餐": 0})
         self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "野餐")
 
-    def test_boat_race_badge_prefers_boat(self):
-        """2026-11-15 用户口径：公园页有「划船比赛！」→ 优先划船（压过缺口）。"""
-        task = self._park_task(race=True)     # 20/130，缺口 110 本来会选野餐
-        self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "划船")
+    def test_training_gap_beats_boat_race_badge(self):
+        """2026-11-15 实跑修正：标签是添头 → 训练流缺口 110 照样野餐。
+
+        比赛只把推荐属性 +20/+10 换成 +40（多 10 点），换不回野餐那 40 点精力。
+        """
+        task = self._park_task(race=True)     # 20/130，缺口 110 → 野餐
+        self.assertEqual(task.park_order(task._texts, "训练流", day="日")[0], "野餐")
 
     def test_boat_race_badge_prefers_boat_other_styles(self):
         """其它流派同样：标签优先于默认野餐和队友判断。"""
@@ -3307,14 +3310,17 @@ class PlaceModulesRules(unittest.TestCase):
         self.assertEqual(task.park_order(texts, "训练流", day="日")[0], "野餐")
 
     def test_boat_race_label_merged_into_option_counts(self):
-        """标签和选项被 OCR 读成一整块（框名本身带「划船比赛」）也算。"""
+        """标签和选项被 OCR 读成一整块（框名本身带「划船比赛」）也算。
+
+        用其它流派验：训练流按缺口走，标签不参与。
+        """
         texts = self._park("20/130")
         texts = [t for t in texts if t.name.strip() != "划船"]
         texts.append(box(790, 400, "划船比赛！ 划船", 220, 60))
         task = FakeTask(texts)
-        task._style = "训练流"
+        task._style = "扭蛋流"
         task.weekend_state()
-        self.assertEqual(task.park_order(texts, "训练流", day="日")[0], "划船")
+        self.assertEqual(task.park_order(texts, "扭蛋流", day="日")[0], "划船")
 
     def test_final_week_park_prefers_boat(self):
         """第7周周六：没有训练日了，精力不再兑现 → 划船（属性+），不按缺口野餐。"""
@@ -3811,12 +3817,16 @@ class WeekendMapRules(unittest.TestCase):
         task = self.styled("训练流", texts)
         self.assertEqual(task.today_places(day="六", texts=texts), ["餐厅"])
 
-    def test_final_week_saturday_goes_park_with_boat_race(self):
-        """第7周周六有「划船比赛！」→ 去公园比（钱和属性都拿）。"""
+    def test_final_week_saturday_works_even_with_boat_race(self):
+        """第7周周六有「划船比赛！」也照样打工（2026-11-15 实跑：比赛不给钱）。
+
+        比赛只比普通划船多 +10 属性；第7周精力不兑现，235 零用钱 →
+        周日商店 +80~90 属性，明显更值。
+        """
         texts = self._weekend_map("星期六", week=7) + [
             box(1250, 540, "划船比赛！", 260, 80)]
         task = self.styled("训练流", texts)
-        self.assertEqual(task.today_places(day="六", texts=texts), ["公园"])
+        self.assertEqual(task.today_places(day="六", texts=texts), ["餐厅"])
 
     def test_week6_saturday_still_parks_by_gap(self):
         """第6周有比赛标签也走普通缺口规则（最后一周规则不提前）。"""
