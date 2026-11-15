@@ -2943,6 +2943,32 @@ class DayCycleRules(unittest.TestCase):
         self.assertEqual(action, "推进对话")
         self.assertIn("对话", reason)
 
+    def test_saturday_extra_training_blocks_outing(self):
+        """百目鬼剑天赋「周六加训！」：周六先训练，不点「出行」。
+
+        11-13 实拍（`1113-124637_handle_go_out.json`）：「周六加训！」「训练」
+        「出行」三样都在屏上，程序点了出行，周六整天被餐厅打工吃掉。
+        """
+        texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期六", 130, 40),
+                 box(380, 16, "86/130", 210, 53),
+                 box(980, 300, "周六加训！", 200, 44),
+                 box(1300, 660, "训练", 120, 50),
+                 box(1377, 748, "出行", 120, 50)]
+        task = FakeTask(texts)
+        action, reason = task.outing_offer(texts)
+        self.assertIsNone(action)
+        self.assertIn("周六加训", reason)
+
+    def test_saturday_without_the_label_still_goes_out(self):
+        """没有「周六加训！」（普通队长）：周六照旧出行。"""
+        texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期六", 130, 40),
+                 box(380, 16, "86/130", 210, 53),
+                 box(1300, 660, "训练", 120, 50),
+                 box(1377, 748, "出行", 120, 50)]
+        task = FakeTask(texts)
+        action, _reason = task.outing_offer(texts)
+        self.assertEqual(action, "点按钮")
+
     def test_outing_offer_blocked_after_used(self):
         """今天的额外出行用过了 → 不再点（block_if_used=True）。"""
         texts = [box(30, 20, "第1周", 120, 40), box(200, 20, "星期五", 130, 40),
