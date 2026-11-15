@@ -86,7 +86,7 @@ def main():
                   os.path.join(ROOT, "logs", "ok-script.log")]
     existing = [p for p in candidates if os.path.exists(p)]
     log_path = args.log or (max(existing, key=os.path.getmtime) if existing else candidates[1])
-    click_path = os.path.join(ROOT, "logs", "clicks.jsonl")
+    click_path = args.clicks or os.path.join(ROOT, "logs", "clicks.jsonl")
     timeline_path = os.path.join(args.out, "timeline.log")
     summary_path = os.path.join(args.out, "summary.json")
 
@@ -147,6 +147,10 @@ def main():
                 # 任务自己判定危险并停下（如「队长池里没有 X」）：GUI 不会自动重启，
                 # 必须立刻让外部知道，不能等到 --timeout 才发现（2026-11-13 实跑）。
                 reason = "task self-stopped"
+                finished = True
+            elif "ok:quit app" in raw:
+                # App 被关掉：日志不会再长，继续等只会误报 hard stall（2026-11-15 实跑）。
+                reason = "app quit"
                 finished = True
 
         idle = now - last_progress
