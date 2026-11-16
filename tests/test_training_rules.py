@@ -5301,6 +5301,69 @@ class StylePlanRules(unittest.TestCase):
         after = {"投射": 10, "防守": 20}
         self.assertIsNone(FakeTask([]).pick_by_stamina(ranked, after, 50))
 
+    # ---------- 失败率：每个科目各一个数（2026-11-16） ----------
+
+    def test_subjects_within_fail_keeps_low_rate_subject(self):
+        """首帧投射 96% 不能代表全部：弹跳/意识在限内就还留在候选池。"""
+        task = FakeTask([])
+        fails = {"投射": 96, "弹跳": 15, "意识": 0}
+        self.assertEqual(task.subjects_within_fail(fails, 50), ["弹跳", "意识"])
+
+    def test_subjects_within_fail_all_over_returns_empty(self):
+        """所有科目都超限 → 空列表（调用方按配置休息）。"""
+        task = FakeTask([])
+        self.assertEqual(task.subjects_within_fail({"投射": 96, "防守": 54}, 50), [])
+
+    def test_subjects_within_fail_unreadable_does_not_block(self):
+        """漏读的科目不拦（沿用「读不到就不拦」的惯例）。"""
+        task = FakeTask([])
+        fails = {"投射": None, "意识": 96}
+        self.assertEqual(task.subjects_within_fail(fails, 50), ["投射"])
+
+    def _subject_page_task(self, fails):
+        """科目页夹具：投射=当前已选、意识=有队友；失败率按科目给。"""
+        texts = [box(1150, 150, "失败率%d%%" % fails["投射"], 220, 40),
+                 box(1700, 300, "决定", 120, 50),
+                 box(1700, 300, "投射", 120, 40),
+                 box(1700, 420, "意识", 120, 40)]
+        task = FakeTask(texts)
+        boxes = task.subjects_from_texts(texts)
+        base = {"names": [], "mates": 0, "manager": 0, "equip": 0, "full": 0,
+                "gold": 0, "crit": False, "color": 0, "manager_crit": 0}
+        task.find_teammate_icons = lambda *a, **k: [(1820, 420)]
+        task.has_gold_border = lambda *a, **k: False
+        task.has_crit_border = lambda *a, **k: False
+        task.find_subject_box = lambda name: boxes.get(name)
+        task.analyze_preview = lambda t, subject=None: dict(base)
+        task.preview_stamina = lambda t: 50
+        task.read_attribute_values = lambda t: {}
+        task.stamina_gate_day = lambda t: False
+        task.probe_subject = lambda b: dict(
+            base, mates=1, after=50, fail=fails[b.name.strip()])
+        task.click_button = lambda name, **kw: task.actions.append(
+            ("button", name)) or True
+        return task
+
+    def test_high_first_frame_fail_still_probes_and_trains_other_subject(self):
+        """首帧投射 96% 也要先探完候选：意识 0% 就练意识（2026-11-16 实跑）。"""
+        task = self._subject_page_task({"投射": 96, "意识": 0})
+        self.assertTrue(task.handle_subject_select(task._texts))
+        self.assertFalse(task._force_rest)
+        self.assertTrue(any("失败率超过上限 50% 的科目先排除：投射 96%" in m
+                            for m in task.logs), task.logs)
+        self.assertTrue(any("训练「意识」（失败率 0%）" in m for m in task.logs),
+                        task.logs)
+        self.assertEqual(task.actions[-1], ("button", "decide"))
+
+    def test_all_subjects_over_fail_limit_forces_rest(self):
+        """所有探测过的科目都超限 → 才退出科目页强制休息。"""
+        task = self._subject_page_task({"投射": 96, "意识": 60})
+        self.assertTrue(task.handle_subject_select(task._texts))
+        self.assertTrue(task._force_rest)
+        self.assertIn("所有科目失败率都超过上限", task._force_reason)
+        self.assertTrue(any("失败率全部超过上限 50%" in m for m in task.logs),
+                        task.logs)
+
     def test_thursday_low_stamina_rests(self):
         """周四 50 精力：扭蛋流直接休息（门槛 60）。
 
