@@ -5214,11 +5214,12 @@ class StylePlanRules(unittest.TestCase):
     # ---------- 周四休息阈值 ----------
 
     def test_thursday_rest_threshold_by_style(self):
-        """周四硬阈值只对**扭蛋流 / 小游戏流**生效（60）；其它流派周四没有特殊限制。
+        """周四硬阈值只对**扭蛋流 / 小游戏流**生效（50）；其它流派周四没有特殊限制。
 
         用户 2026-11-04 口径（`params: rest.thursday_threshold_by_style`）：
         「周二的 65 改成周四精力低于 60 就休息」，流派白名单不变
         （扭蛋流 / 小游戏流）。**周二现在没有任何特殊阈值。**
+        2026-11-17 用户口径：周四硬阈值 60 → 50。
         """
         def limit(style, day):
             task = FakeTask([])          # 阈值来自 params.json（rest.stamina_threshold = 50）
@@ -5226,7 +5227,7 @@ class StylePlanRules(unittest.TestCase):
             return task.rest_threshold(day)
 
         for style in ("扭蛋流", "小游戏流"):
-            self.assertEqual(limit(style, "四"), 60, style)
+            self.assertEqual(limit(style, "四"), 50, style)
         for style in ("训练流", "商店流"):
             self.assertEqual(limit(style, "四"), 50, style)
         for style in ("训练流", "商店流", "扭蛋流", "小游戏流"):
@@ -5365,14 +5366,14 @@ class StylePlanRules(unittest.TestCase):
                         task.logs)
 
     def test_thursday_low_stamina_rests(self):
-        """周四 50 精力：扭蛋流直接休息（门槛 60）。
+        """周四 49 精力：扭蛋流直接休息（门槛 50）。
 
         2026-11-15 用户口径：这条**不是**「精力低于阈值就休息」的旧设计，
         而是扭蛋流保证**周五能进出行地图**的专用规则，别跟其它日子的
-        「有就进」一起删掉。
+        「有就进」一起删掉。2026-11-17 门槛 60 → 50。
         """
         texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期四", 130, 40),
-                 box(380, 16, "50/130", 210, 53),
+                 box(380, 16, "49/130", 210, 53),
                  box(1450, 900, "训练", 120, 60), box(1600, 900, "休息", 120, 60)]
         task = FakeTask(texts)
         task._style = "扭蛋流"
@@ -5381,10 +5382,10 @@ class StylePlanRules(unittest.TestCase):
         self.assertTrue(task.handle_training_day(texts))
         self.assertEqual(task.actions[-1][1], "休息")
 
-    def test_thursday_gacha_rests_10_points_earlier(self):
-        """2026-11-04 用户口径：扭蛋流 / 小游戏流周四门槛 60，其它流派周四没有特殊限制。
+    def test_thursday_gacha_rests_at_base_threshold(self):
+        """2026-11-17 用户口径：扭蛋流 / 小游戏流周四门槛 50，其它流派周四没有特殊限制。
 
-        精力 59：扭蛋流、小游戏流（< 60）→ 休息；训练流/商店流 → 训练。
+        精力 49：扭蛋流、小游戏流（< 50）→ 休息；训练流/商店流 → 训练。
         """
         def run(style, stamina, day="星期四"):
             texts = [box(30, 20, "第3周", 120, 40), box(200, 20, day, 130, 40),
@@ -5397,18 +5398,18 @@ class StylePlanRules(unittest.TestCase):
             self.assertTrue(task.handle_training_day(texts))
             return task.actions[-1][1]
 
-        self.assertEqual(run("扭蛋流", 59), "休息")
-        self.assertEqual(run("小游戏流", 59), "休息")
-        self.assertEqual(run("训练流", 59), "训练")
-        self.assertEqual(run("商店流", 59), "训练")
-        # 60 是下限（不含）：精力 60 仍照常训练
-        self.assertEqual(run("扭蛋流", 60), "训练")
-        self.assertEqual(run("小游戏流", 60), "训练")
-        # 周二不再有任何硬阈值：精力 59（< 旧的 65）也照常训练
-        self.assertEqual(run("扭蛋流", 59, day="星期二"), "训练")
-        self.assertEqual(run("小游戏流", 59, day="星期二"), "训练")
+        self.assertEqual(run("扭蛋流", 49), "休息")
+        self.assertEqual(run("小游戏流", 49), "休息")
+        self.assertEqual(run("训练流", 49), "训练")
+        self.assertEqual(run("商店流", 49), "训练")
+        # 50 是下限（不含）：精力 50 仍照常训练
+        self.assertEqual(run("扭蛋流", 50), "训练")
+        self.assertEqual(run("小游戏流", 50), "训练")
+        # 周二不再有任何硬阈值：精力 49（< 旧的 65）也照常训练
+        self.assertEqual(run("扭蛋流", 49, day="星期二"), "训练")
+        self.assertEqual(run("小游戏流", 49, day="星期二"), "训练")
 
-    def test_training_and_shop_styles_thursday_below_60_train(self):
+    def test_training_and_shop_styles_thursday_train(self):
         """周四 50 精力：训练流 / 商店流没有特殊限制 → 照常进科目页。"""
         texts = [box(30, 20, "第3周", 120, 40), box(200, 20, "星期四", 130, 40),
                  box(380, 16, "50/130", 210, 53),

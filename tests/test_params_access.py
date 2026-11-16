@@ -25,7 +25,7 @@ class ParamsAttributeAccess(unittest.TestCase):
 
     def test_nested_dict_supports_get(self):
         self.assertEqual(
-            params.rest.thursday_threshold_by_style.get("扭蛋流"), 60)
+            params.rest.thursday_threshold_by_style.get("扭蛋流"), 50)
         self.assertIsNone(
             params.rest.thursday_threshold_by_style.get("不存在的流派"))
 
