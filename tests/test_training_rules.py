@@ -65,6 +65,16 @@ def tick_boost(task, texts, ticks=2):
     return task.handle_boost_training(texts)
 
 
+def tick_stock(task, texts):
+    """炒股页头一拍只观察（躲滑入动画），第二拍才真正选卡。
+
+    2026-11-16 用户反馈「第一拍点击没生效，然后点确定也不生效」。
+    """
+    task.handle_stock_pick(texts)
+    task.actions.clear()
+    return task.handle_stock_pick(texts)
+
+
 class FakeTask(DryRunTask):
     """可注入品质/队友的 DryRunTask（取色逻辑被替换）。"""
 
@@ -1315,6 +1325,53 @@ class EventRules(unittest.TestCase):
         ]
         task = FakeTask(texts)
         self.assertFalse(task.handle_dialog_continue(texts))
+
+
+class PanelGainParsing(unittest.TestCase):
+    """科目页面板「主+副」读数（2026-11-16 新排序的输入）。
+
+    误抓一次就会让排序选错科目，所以把已知的三种 OCR 写法都钉住。
+    """
+
+    @staticmethod
+    def _task(texts):
+        return FakeTask(texts)
+
+    def _panel(self, rows):
+        """按真实版式摆六维面板：左列 投射/弹跳/运控，右列 体能/防守/意识。"""
+        texts = []
+        left = [("投射", 210, 831), ("弹跳", 210, 905), ("运控", 210, 979)]
+        right = [("体能", 787, 831), ("防守", 787, 905), ("意识", 787, 979)]
+        for name, x, y in left + right:
+            texts.append(box(x, y, name, 90, 50))
+            value = rows.get(name)
+            if value:
+                texts.append(box(x + 100, y, value, 200, 50))
+        return texts
+
+    def test_slash_gain_is_read(self):
+        """`551/+88` 读成 88；`C+354/±90` 里的评级和区间都不能抓。"""
+        texts = self._panel({"投射": "551/+88", "防守": "C+354/±90"})
+        task = self._task(texts)
+        self.assertEqual(task.read_panel_gains(texts, "投射"), (88, 0))
+
+    def test_grade_letter_gain_not_matched(self):
+        """`C +354`（OCR 把字母和加号拆开）不能当成 +354 的增量。"""
+        texts = self._panel({"投射": "C +354/1755"})
+        task = self._task(texts)
+        self.assertIsNone(task.read_panel_gains(texts, "投射"))
+
+    def test_sub_bigger_than_main_is_kept(self):
+        """副比主大是**正常**的（同日实测：弹跳 9 / 意识 80），不能当旧帧丢掉。"""
+        texts = self._panel({"投射": "+9", "防守": "+28"})
+        task = self._task(texts)
+        self.assertEqual(task.read_panel_gains(texts, "投射"), (9, 28))
+
+    def test_glued_value_over_max_is_dropped(self):
+        """`S+30` 被读成 303 这类黏连值要丢掉，不能当成 303 分。"""
+        texts = self._panel({"投射": "303"})
+        task = self._task(texts)
+        self.assertIsNone(task.read_panel_gains(texts, "投射"))
 
 
 class SubjectScoreWeights(unittest.TestCase):
@@ -3944,13 +4001,47 @@ class WeekendMapRules(unittest.TestCase):
         task = self.styled("训练流", texts)
         self.assertEqual(task.today_places(day="六", texts=texts), ["餐厅"])
 
-    def test_week6_saturday_still_parks_by_gap(self):
-        """第6周有比赛标签也走普通缺口规则（最后一周规则不提前）。"""
+    def test_week6_saturday_checks_restaurant_before_park(self):
+        """第6周周六、缺口大：先去餐厅看一眼（训练流新规则）。
+
+        2026-11-16 用户口径：周六精力花光周日还能补，所以先进餐厅看
+        「单卡 ≥3 人」的高收益工；不划算再回公园（`restaurant_order` 里判断）。
+        """
         texts = self._weekend_map("星期六", week=6) + [
             box(380, 16, "72/130", 210, 53),
             box(1250, 540, "划船比赛！", 260, 80)]
         task = self.styled("训练流", texts)
-        self.assertEqual(task.today_places(day="六", texts=texts), ["公园"])
+        self.assertEqual(task.today_places(day="六", texts=texts), ["餐厅", "公园"])
+
+    def test_sunday_big_gap_goes_straight_to_park(self):
+        """周日缺口大：直接公园，不看餐厅（花光精力下周就少一天训练）。"""
+        texts = self._weekend_map("星期日", week=6) + [
+            box(380, 16, "72/130", 210, 53)]
+        task = self.styled("训练流", texts)
+        self.assertEqual(task.today_places(day="日", texts=texts), ["公园"])
+
+    def test_restaurant_split_cards_go_back_to_park(self):
+        """训练流·周六·缺口大：两张卡 2/2 分散 → 返回空（退出餐厅回公园）。"""
+        texts = [box(600, 120, "在餐厅干点什么好呢?", 420, 60),
+                 box(400, 700, "桌游GM", 200, 60),
+                 box(900, 700, "当服务员", 220, 60)]
+        task = self.styled("训练流", texts)
+        task.current_day = lambda texts=None: (3, "六")
+        task.weekend_gap = lambda texts=None: 99
+        task.card_mate_counts = lambda found: ([2, 2], "数脸")
+        self.assertEqual(task.restaurant_order(texts, allow_fallback=True), ())
+
+    def test_restaurant_single_card_three_mates_works(self):
+        """同样条件下单卡 3 人 → 正常打工（不退出）。"""
+        texts = [box(600, 120, "在餐厅干点什么好呢?", 420, 60),
+                 box(400, 700, "桌游GM", 200, 60),
+                 box(900, 700, "当服务员", 220, 60)]
+        task = self.styled("训练流", texts)
+        task.current_day = lambda texts=None: (3, "六")
+        task.weekend_gap = lambda texts=None: 99
+        task.card_mate_counts = lambda found: ([1, 3], "数脸")
+        order = task.restaurant_order(texts, allow_fallback=True)
+        self.assertIn("当服务员", order)
 
     def test_map_with_gacha_hint_is_not_gacha_page(self):
         """2026-10-31 实跑（野上泷额外周末 · 第3周星期五）：
@@ -4367,10 +4458,15 @@ class WeekendMapRules(unittest.TestCase):
         return task
 
     def test_both_venue_switches_off_uses_stamina_gap(self):
-        """训练流缺口规则：缺口 ≥30 公园（≥70 野餐，否则划船）；<30 餐厅打工。"""
+        """训练流缺口规则：缺口 ≥30 周六先去餐厅看一眼（单卡 ≥3 才打工），再回公园；
+        周日直接公园。缺口 <30 餐厅打工、公园兜底。
+
+        2026-11-16 用户口径：周六精力花光周日还能补，所以先看餐厅；
+        周日花光下周就少一天训练，直接公园。
+        """
         cases = (
-            ("100/130", ["公园"]),           # 缺口 30 → 公园划船
-            ("60/130", ["公园"]),            # 缺口 70 → 公园野餐
+            ("100/130", ["餐厅", "公园"]),   # 缺口 30 → 周六先看餐厅
+            ("60/130", ["餐厅", "公园"]),    # 缺口 70 → 同上（公园内再分野餐）
             ("110/130", ["餐厅", "公园"]),   # 缺口 20 → 打工，公园兜底
         )
         for stamina, want in cases:
@@ -4379,6 +4475,14 @@ class WeekendMapRules(unittest.TestCase):
             st = task.weekend_state()
             self._both_venue_switches_off(task)
             self.assertEqual(task.today_places("六", st, task._texts), want, stamina)
+
+    def test_sunday_big_gap_skips_restaurant(self):
+        """周日缺口 ≥30 → 直接公园（不看餐厅）。"""
+        task = self.styled("训练流",
+                           self._map("星期日") + [box(380, 16, "100/130", 210, 53)])
+        st = task.weekend_state()
+        self._both_venue_switches_off(task)
+        self.assertEqual(task.today_places("日", st, task._texts), ["公园"])
 
     def test_both_venue_switches_off_without_stamina_goes_park(self):
         """读不到体力（精力/上限）→ 不赌消费，回退「餐厅 → 公园」。"""
@@ -4447,11 +4551,18 @@ class WeekendMapRules(unittest.TestCase):
         self.assertEqual(params.get("vacation.stamina_target"), 100)
 
     def test_vacation_saturday_low_stamina_goes_park(self):
-        """周六 <30：周日一次野餐也补不回 → 所有流派今天都先去公园。"""
-        for style in ("训练流", "商店流", "扭蛋流", "小游戏流"):
+        """周六 <30：周日一次野餐也补不回 → 先去公园补体力。
+
+        扭蛋流原计划本来就要去步行街（钱读不到也按主地点走），保留步行街，
+        公园补体力（2026-11-17 用户口径）。
+        """
+        for style in ("训练流", "商店流", "小游戏流"):
             self.assertEqual(
                 self._vacation_plan(style, "星期六", 20),
                 [WeekendStep("公园", False)], style)
+        self.assertEqual(
+            self._vacation_plan("扭蛋流", "星期六", 20),
+            [WeekendStep("步行街", False), WeekendStep("公园", False)])
 
     def test_vacation_saturday_no_work_below_floor(self):
         """周六 30~54：打工后周日一次野餐也回不到 100 → 删掉餐厅。"""
@@ -4488,11 +4599,11 @@ class WeekendMapRules(unittest.TestCase):
         self.assertEqual(plan[0], WeekendStep("餐厅", False))
 
     def test_vacation_sunday_park_when_below_target(self):
-        """周日 <100：体力优先，扭蛋流钱够也不去买卡。"""
+        """周日 <100：原计划有步行街则保留（正常买卡），公园补体力（2026-11-17）。"""
         self.assertEqual(
             self._vacation_plan("扭蛋流", "星期日", 90,
                                 WEEKEND_WORK_MONEY_GATE),
-            [WeekendStep("公园", False)])
+            [WeekendStep("步行街", False), WeekendStep("公园", False)])
 
     def test_vacation_other_week_keeps_old_rule(self):
         """第1周周日体力 110：照旧打工，不启用海边守卫。"""
@@ -4711,13 +4822,18 @@ class WeekendMapRules(unittest.TestCase):
         self.assertEqual(task.today_places("六", st, texts), ["餐厅", "公园"])
 
     def test_training_gap_drives_weekend_action(self):
-        """2026-11-11：训练流按缺口选动作，不看星期、也不看零用钱。"""
+        """2026-11-11：训练流按缺口选动作；2026-11-16 起周六先看餐厅。
+
+        周六缺口大 → 先进餐厅（即使最后回公园，第一步也是餐厅）；
+        周日缺口大 → 直接公园；缺口小 → 餐厅打工（公园兜底）。
+        """
         cases = (
-            ("星期六", "70/130", None, "公园"),      # 缺口 60 → 公园
-            ("星期六", "90/130", None, "公园"),      # 缺口 40 → 公园（划船）
+            ("星期六", "70/130", None, "餐厅"),      # 缺口 60 → 周六先看餐厅
+            ("星期六", "90/130", None, "餐厅"),      # 缺口 40 → 同上
             ("星期六", "110/130", "200", "餐厅"),    # 缺口 20：有钱也只打工
             ("星期六", "110/130", "80", "餐厅"),     # 缺口 20 → 打工
-            ("星期日", "110/130", "200", "餐厅"),    # 同一条规则，不分星期
+            ("星期日", "110/130", "200", "餐厅"),    # 缺口小，不分星期
+            ("星期日", "70/130", None, "公园"),      # 周日缺口大 → 直接公园
         )
         for day, stamina, money, want in cases:
             texts = self._map(day) + [box(380, 16, stamina, 210, 53)]
@@ -4914,6 +5030,24 @@ class GachaProbeRules(unittest.TestCase):
         plan = task.weekend_plan("星期日", task.weekend_state(), texts)
         self.assertEqual(plan[0], WeekendStep("步行街", False, True))
         self.assertIn(WeekendStep("公园", False), plan)
+
+    def test_vacation_eve_low_stamina_keeps_planned_street(self):
+        """第3周海边前周末：原计划本来去步行街 → 保留，正常模式买卡（2026-11-17）。"""
+        texts = self._map("星期日", week=3, money=755, stamina=57)
+        task = self._task("扭蛋流", texts)
+        plan = task.weekend_plan("星期日", task.weekend_state(), texts)
+        self.assertEqual(plan[0], WeekendStep("步行街", False))
+        self.assertFalse(plan[0].probe)
+        self.assertIn(WeekendStep("公园", False), plan)
+        self.assertNotIn("餐厅", [s.place for s in plan])
+
+    def test_probe_stops_when_both_top_cards_got(self):
+        """两张目标卡都到手后不再探卡池（2026-11-17）。"""
+        texts = self._map("星期六", stamina=110)
+        task = self._task("训练流", texts)
+        task.top_gacha_got().update(("笔记继承", "球员位置"))
+        plan = task.weekend_plan("星期六", task.weekend_state(), texts)
+        self.assertNotIn("步行街", [s.place for s in plan])
 
     def test_handle_weekend_clicks_street_with_probe_step(self):
         texts = self._map("星期六", stamina=110)
@@ -5315,11 +5449,34 @@ class StylePlanRules(unittest.TestCase):
         task = FakeTask([])
         self.assertEqual(task.subjects_within_fail({"投射": 96, "防守": 54}, 50), [])
 
-    def test_subjects_within_fail_unreadable_does_not_block(self):
-        """漏读的科目不拦（沿用「读不到就不拦」的惯例）。"""
+    def test_subjects_within_fail_unreadable_is_excluded(self):
+        """读不到失败率的科目**不再**默认放行（2026-11-16 收紧）。
+
+        实测 13 次训练失败全部发生在失败率读成 `?` 的那次训练上；
+        只要有别的科目读到了数字，读不到的就不算「安全」。
+        """
         task = FakeTask([])
-        fails = {"投射": None, "意识": 96}
-        self.assertEqual(task.subjects_within_fail(fails, 50), ["投射"])
+        fails = {"投射": None, "意识": 40}
+        self.assertEqual(task.subjects_within_fail(fails, 50), ["意识"])
+
+    def test_subjects_within_fail_all_unreadable_still_passes(self):
+        """全都没读到 → 恢复「不拦」，否则整页读不出时会白白休息一天。"""
+        task = FakeTask([])
+        fails = {"投射": None, "意识": None}
+        self.assertEqual(task.subjects_within_fail(fails, 50), ["投射", "意识"])
+
+    def test_read_fail_rate_recovers_digit_hidden_by_label(self):
+        """2026-11-17 实拍：`失败率 71%` 的首位贴着标签，整屏 OCR 只给 `1%`。
+
+        旧逻辑直接采用标签右边那个框 → 71 读成 1，门槛等于没生效，
+        带着 71% 的失败率练了一场。放大重读标签右侧必须拿到 71。
+        """
+        texts = [box(947, 552, "失败率", 119, 28), box(1053, 551, "1%", 43, 30)]
+        task = FakeTask(texts)
+        # FakeTask 的帧是全黑（`frame.any()` 为假会跳过放大重读），这里给张非空帧
+        task._executor.frame = np.ones((1080, 1920, 3), dtype=np.uint8)
+        task.ocr = lambda **kw: [box(0, 0, "71", 40, 40), box(50, 0, "%", 20, 20)]
+        self.assertEqual(task.read_fail_rate(texts), 71)
 
     def _subject_page_task(self, fails):
         """科目页夹具：投射=当前已选、意识=有队友；失败率按科目给。"""
@@ -5328,6 +5485,9 @@ class StylePlanRules(unittest.TestCase):
                  box(1700, 300, "投射", 120, 40),
                  box(1700, 420, "意识", 120, 40)]
         task = FakeTask(texts)
+        # 这两个用例测的是「先探完候选再判」，和默认门槛无关：显式钉 50，
+        # 不然默认值一改（2026-11-16 50 → 1）用例就跟着变红。
+        task.config["失败率上限(%)"] = 50
         boxes = task.subjects_from_texts(texts)
         base = {"names": [], "mates": 0, "manager": 0, "equip": 0, "full": 0,
                 "gold": 0, "crit": False, "color": 0, "manager_crit": 0}
@@ -7308,7 +7468,7 @@ class TalentStockEvent(unittest.TestCase):
                  box(1030, 960, "确定", 280, 60)]
         task = FakeTask(texts)
         task.read_money = lambda texts=None: 104
-        self.assertTrue(task.handle_stock_pick(texts))
+        self.assertTrue(tick_stock(task, texts))
         first = task.actions[0]
         self.assertEqual(first[0], "click")
         self.assertLess(first[1], int(task.width * 0.33))      # 最左那张
@@ -7325,7 +7485,7 @@ class TalentStockEvent(unittest.TestCase):
                  box(1030, 960, "确定", 280, 60)]
         task = FakeTask(texts)
         task.read_money = lambda texts=None: 10
-        self.assertTrue(task.handle_stock_pick(texts))
+        self.assertTrue(tick_stock(task, texts))
         self.assertIn("选「平衡型」", "".join(task.logs))
 
     def test_stock_page_prefers_teammate_bubble_then_price(self):
@@ -7343,7 +7503,7 @@ class TalentStockEvent(unittest.TestCase):
                  box(1030, 960, "确定", 280, 60)]
         task = FakeTask(texts)
         task.read_money = lambda texts=None: 151
-        self.assertTrue(task.handle_stock_pick(texts))
+        self.assertTrue(tick_stock(task, texts))
         self.assertIn("选「平衡型」(120)", "".join(task.logs))
         self.assertIn("队友1", "".join(task.logs))
 
@@ -7398,7 +7558,7 @@ class TalentStockEvent(unittest.TestCase):
         task.read_money = lambda texts=None: 90
         task.dump_stock_frame = lambda texts: None       # 测试不许往 logs/debug 写图
         task._executor.frame = self._stock_frame([1, 0, 2])
-        self.assertTrue(task.handle_stock_pick(texts))
+        self.assertTrue(tick_stock(task, texts))
         self.assertEqual(task.actions[0][0], "click")
         self.assertGreater(task.actions[0][1], int(task.width * 0.6))   # 最右那张
         self.assertIn("队友2", "".join(task.logs))

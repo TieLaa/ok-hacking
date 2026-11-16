@@ -64,6 +64,10 @@ class _FakeExecutor:
         self.frame = frame
         self.method = _FakeMethod(frame.shape[1], frame.shape[0])
 
+    def next_frame(self, time_out=0):
+        """生产里是「重新截一帧」；回归没有新画面，原样返回同一帧即可。"""
+        return self.frame
+
 
 class _NullEvidence:
     """回归跑**不落盘**：存证调用全部是空操作（2026-11-10 落盘归口后统一在这里挡）。
