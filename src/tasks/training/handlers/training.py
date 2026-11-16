@@ -224,6 +224,13 @@ class TrainingHandlers:
         """
         if self.match_text(texts, "星期") is None:
             return False
+        # 2026-11-16 实跑（`logs/1116-120249_真崎辉世/debug/1116-122126_noresp3s`）：
+        # 商店右栏的效果文案落进 `extra_train` 区域（「器材暴击训练收益+40%」），
+        # 「休息」也会出现在详情里 → 这一页被当训练日，每拍点的是详情文字，
+        # 点不动 → 3 次接管后停任务。商店一律让给 `handle_shop`
+        # （和 `handle_subject_select` 让商店同一个判据）。
+        if page_signatures.page_has(self, texts, "shop"):
+            return False
         # 2026-11-15 用户口径（百目鬼的「周六加训」）：那一页**没有「休息」**，
         # 上一格是带彩框的「训练」，下一格被「出行」占掉。所以判这一页 =
         # 有「休息」**或**按钮区里有「训练」。
