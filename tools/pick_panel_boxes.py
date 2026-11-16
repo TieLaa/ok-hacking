@@ -23,7 +23,7 @@ from PIL import Image
 from PySide6 import QtCore, QtGui, QtWidgets
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, "configs", "panel_boxes.json")
+OUT = os.path.join(ROOT, "src", "tasks", "training", "strategy", "panel_boxes.json")
 LABELS = {"1": "name", "2": "grade", "3": "value", "4": "gain", "5": "icon"}
 
 

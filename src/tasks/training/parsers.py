@@ -2030,14 +2030,16 @@ class TrainingParsersMixin:
                 out[attr] = max(out.get(attr, 0), v)
         return out
 
-    # 人工标注的框（`tools/pick_panel_boxes.py` 生成 `configs/panel_boxes.json`）
+    # 人工标注的框（`tools/pick_panel_boxes.py` 生成 `strategy/panel_boxes.json`）
     # 坐标是相对**面板裁图**的；裁图横向固定 (0.03~0.80)，纵向到屏幕底。
     # 纵向起点由标注图的原始高度推回来（存图改动过裁切高度，见 JSON 的 src_h）。
+    # 放在 `src/` 下而不是 `configs/`：`configs/` 被 .gitignore 排除，装出来的
+    # exe 里不会有这个文件，读数会静默退回旧的文本 OCR（2026-11-17 发现）。
     PANEL_TEMPLATE_X = (0.03, 0.80)
 
     @staticmethod
     def panel_template():
-        """读 `configs/panel_boxes.json` → `{属性: 该行的框列表}`（整屏相对坐标）。
+        """读 `strategy/panel_boxes.json` → `{属性: 该行的框列表}`（整屏相对坐标）。
 
         标注按行给出：每行从左到右是 图标 / 名字 / 评级 / 数值 / 红字。
         行列靠位置定：第 0 行左=投射 右=体能，第 1 行左=弹跳 右=防守，
@@ -2051,7 +2053,8 @@ class TrainingParsersMixin:
             import json
             import os
             from src.tasks.training.constants import PROJECT_ROOT
-            path = os.path.join(PROJECT_ROOT, "configs", "panel_boxes.json")
+            path = os.path.join(PROJECT_ROOT, "src", "tasks", "training",
+                                "strategy", "panel_boxes.json")
             with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
         except Exception:
