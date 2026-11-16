@@ -658,6 +658,12 @@ def _is_event_choice(task, texts):
     # 形态和竖排事件选项一样 —— 用**页面标题**区分（2026-11-14 实测）。
     if _is_park(task, texts) or _is_restaurant(task, texts):
         return False
+    # 商店内页（2026-11-16 回归图 `shop-detail-train-effect.png`）：
+    # 货架是三列卡片、每张卡下面有价格，`options_not_paragraph` 会当成
+    # 两个以上选项 → 被认成事件页。用**商店独有的「上新时间」**排除
+    # （扭蛋/游戏厅卡面也有「能力详情」，但都没有这一行）。
+    if task.match_text(texts, "上新时间") is not None:
+        return False
     return True
 
 
