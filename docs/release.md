@@ -153,9 +153,21 @@ cnb 仓库里的 `.cnb.yml` 已清空（2026-11-10）：早先那版是 cnb 定�
 ### 安装包镜像（`TieLaa/ok-hacking-dist`，2026-11-10 建）
 
 安装包不放更新仓库，单独放 cnb 仓库 `https://cnb.cool/TieLaa/ok-hacking-dist` 的
-`dist` 分支，由 `export-to-cnb.yml` 推送。
+**Release 附件**，由 `export-to-cnb.yml` 上传。
 
-为什么必须分开（v0.1.10 事故）：pyappify 打包时会**整仓克隆更新仓库**，dist 分支里的
+为什么是 Release 不是分支（v0.2.4 实测）：cnb 的 `/-/git/raw/...` 下载接口对单文件限制
+**100 MiB**，211 MB 的安装包会返回 413「raw 文件大小 201 MiB 超过限制 100 MiB，请通过
+git 客户端拉取」；网页上的「点击下载」也走这个接口。Release 附件（`cnbcool/attachments`
+插件，上限 64 GiB）才能给出浏览器直链：
+
+```
+https://cnb.cool/TieLaa/ok-hacking-dist/-/releases/download/<tag>/ok-hacking-win32-China-setup.exe
+```
+
+公开仓库的附件匿名可下载，链接可以直接贴给用户。`dist` 分支保留为历史快照，不再更新；
+以后要 clone 整包仍然可以，但普通用户应走 Release 附件。
+
+为什么必须和更新仓库分开（v0.1.10 事故）：pyappify 打包时会**整仓克隆更新仓库**，
 安装包会被一起塞进下一版安装器 —— v0.1.9 的 211 MB 让 v0.1.10 的 setup.exe 涨到 425 MB，
 超过 cnb 单文件 256 MiB 的 blob 上限，`export-to-cnb.yml` 直接被 pre-receive hook 拒掉。
 搬走后安装包回到 ~211 MB。更新仓库里遗留的 dist 分支用 `Cleanup cnb update-repo dist`
@@ -185,9 +197,9 @@ git push origin v0.1.11     # 触发 Build
 如果 Build 已经失败（日志里是 `Tag 'vX.Y.Z' not found locally after fetch`），
 **不用重新打 tag**：`gh run rerun <run-id> --failed` 重跑失败的 job 就行。
 
-出包成功后，再跑 `Export release to cnb`（填同一个 tag），把 China 包装到
-cnb 的 dist 仓库；`Sync from source` 同一次 Run 里已经把 main + tags 推给 cnb 镜像，
-国内更新源不会停在旧版本。
+出包成功后，再跑 `Export release to cnb`（填同一个 tag）：它把 China 安装包上传成
+cnb Release 附件（`TieLaa/ok-hacking-dist`），国内用户用上面的 Release 直链下载；
+`Sync from source` 同一次 Run 里已经把 main + tags 推给 cnb 镜像，国内更新源不会停在旧版本。
 
 `v0.1.0` / `v0.1.1` 是发布链路修好之前的旧 tag，**不要推它们** —— 那时的 `build.yml` 还指向模板作者的仓库。
 

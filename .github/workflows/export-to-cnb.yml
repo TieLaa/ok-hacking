@@ -1,18 +1,24 @@
 name: Export release to cnb
 
-# 用途：把 GitHub Release 里的安装包搬到 cnb 的 dist 分支，供国内快速下载。
-# 背景：国内直连 GitHub 附件常被限到几十 KB/s，211 MB 要两小时；cnb 在国内，速度快。
+# 用途：把 GitHub Release 里的 China 安装包上传成 cnb Release 附件，
+# 给国内用户一个浏览器能直接下载的直链。
+# 为什么不用 git 分支：cnb 的 raw 下载接口限制单文件 100 MiB，安装包约 202 MiB，
+# 网页「点击下载」会返回 413；Release 附件上限 64 GiB，且公开仓库匿名可下载。
 # 用法：Actions → Export release to cnb → Run workflow，填 tag。
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "要导出的 tag（如 v0.1.9）"
+        description: "要导出的 tag（如 v0.2.4）"
         required: true
 
 permissions:
   contents: read
+
+env:
+  CNB_API: https://api.cnb.cool
+  CNB_REPO: TieLaa/ok-hacking-dist
 
 jobs:
   export:
@@ -26,31 +32,90 @@ jobs:
           set -euo pipefail
           mkdir -p out
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-            -p "*-China-setup.exe" -p "win32_sha256.txt" -D out
+            -p "*-China-setup.exe" -D out
           ls -l out
 
-      # 安装包必须放在独立仓库：更新仓库（ok-hacking-update）会被 pyappify 在打包时
-      # 整仓克隆，dist 分支里的大文件会被一起打进下一版安装包（v0.1.9 的 211MB
-      # 让 v0.1.10 涨到 425MB，超过 cnb 单文件 256MiB 直接推不上去）。
-      - name: Push to cnb dist branch
+      - name: Upload as cnb release attachment
         env:
           CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           if [ -z "${CNB_TOKEN:-}" ]; then
-            echo "::error::CNB_TOKEN 未配置，无法导出到 cnb"
+            echo "::error::CNB_TOKEN 未配置，无法上传到 cnb"
             exit 1
           fi
-          # 新建的空仓库也能用：git init + 首个 dist 提交，不依赖已有历史
-          git init tmp
-          cd tmp
-          git remote add origin "https://cnb:${CNB_TOKEN}@cnb.cool/TieLaa/ok-hacking-dist.git"
-          git checkout -b dist
-          cp -v ../out/* .
-          git config user.name "cnb-export"
-          git config user.email "cnb-export@local"
-          git add -A
-          git commit -m "dist ${TAG}"
-          # 安装包只保留当前版本，强推避免仓库无限增长
-          git push -f origin dist
+
+          FILE=$(ls out/*-China-setup.exe | head -1)
+          ASSET=$(basename "$FILE")
+          SIZE=$(stat -c%s "$FILE")
+          SHA=$(sha256sum "$FILE" | cut -d' ' -f1)
+          echo "asset=$ASSET size=$SIZE sha256=$SHA"
+
+          BODY=$(cat <<EOF
+          ### $TAG
+
+          - 文件：\`$ASSET\`
+          - 大小：$SIZE 字节
+          - SHA256：\`$SHA\`
+          - 更新说明：https://github.com/TieLaa/ok-hacking/releases/tag/$TAG
+
+          安装前请确认：以管理员身份安装并运行、安装路径纯英文、游戏窗口保持可见。
+          EOF
+          )
+
+          AUTH=(-H "Authorization: Bearer $CNB_TOKEN" -H "Accept: application/vnd.cnb.api+json")
+
+          # 已有同名 Release 就复用，否则创建（tag 不存在时由 cnb 按 target_commitish 自动创建）
+          code=$(curl -sS -o /tmp/release.json -w '%{http_code}' \
+            "${AUTH[@]}" "$CNB_API/$CNB_REPO/-/releases/tags/$TAG")
+          if [ "$code" = "200" ]; then
+            RELEASE_ID=$(jq -r .id /tmp/release.json)
+            echo "reusing release $RELEASE_ID"
+          else
+            payload=$(jq -n --arg tag "$TAG" --arg name "$TAG" --arg body "$BODY" \
+              '{tag_name:$tag,name:$name,body:$body,target_commitish:"dist"}')
+            code=$(curl -sS -o /tmp/release.json -w '%{http_code}' -X POST \
+              "${AUTH[@]}" -H 'Content-Type: application/json' -d "$payload" \
+              "$CNB_API/$CNB_REPO/-/releases")
+            if [ "$code" != "201" ]; then
+              echo "::error::创建 Release 失败 ($code)"
+              cat /tmp/release.json
+              exit 1
+            fi
+            RELEASE_ID=$(jq -r .id /tmp/release.json)
+            echo "created release $RELEASE_ID"
+          fi
+
+          # 三步上传：取预签名 URL → PUT 文件 → 调用确认接口
+          upload_payload=$(jq -n --arg name "$ASSET" --argjson size "$SIZE" \
+            '{asset_name:$name,size:$size,overwrite:true,ttl:0}')
+          code=$(curl -sS -o /tmp/upload.json -w '%{http_code}' -X POST \
+            "${AUTH[@]}" -H 'Content-Type: application/json' -d "$upload_payload" \
+            "$CNB_API/$CNB_REPO/-/releases/$RELEASE_ID/asset-upload-url")
+          if [ "$code" != "201" ]; then
+            echo "::error::获取上传地址失败 ($code)"
+            cat /tmp/upload.json
+            exit 1
+          fi
+
+          UPLOAD_URL=$(jq -r .upload_url /tmp/upload.json)
+          VERIFY_URL=$(jq -r .verify_url /tmp/upload.json)
+          case "$VERIFY_URL" in
+            http*) ;;
+            *) VERIFY_URL="$CNB_API$VERIFY_URL" ;;
+          esac
+
+          curl -sS -f -X PUT --upload-file "$FILE" "$UPLOAD_URL"
+          curl -sS -f -X POST "${AUTH[@]}" "$VERIFY_URL"
+
+          # 回读 Release，确认附件已登记且大小一致
+          curl -sS "${AUTH[@]}" "$CNB_API/$CNB_REPO/-/releases/tags/$TAG" > /tmp/after.json
+          got=$(jq -r --arg n "$ASSET" '.assets[] | select(.name==$n) | "\(.name) \(.size) \(.browser_download_url)"' /tmp/after.json)
+          if [ -z "$got" ]; then
+            echo "::error::附件未出现在 Release 里"
+            cat /tmp/after.json
+            exit 1
+          fi
+          echo "$got"
+          echo "::notice::国内直链已就绪：$(echo "$got" | cut -d' ' -f3-)"
