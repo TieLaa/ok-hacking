@@ -1416,12 +1416,15 @@ class SubjectScoreWeights(unittest.TestCase):
 
     def test_weights(self):
         r = {"mates": 2, "equip": 1, "manager": 1, "gold": 1, "color": 1}
-        self.assertAlmostEqual(FakeTask.subject_score(r), 2 + 1 + 2.1 + 1.2 + 2.3, places=4)
+        self.assertAlmostEqual(FakeTask.subject_score(r), 2 + 1 + 2.2 + 1.1 + 1.3, places=4)
 
-    def test_crit_outranks_manager(self):
-        """2026-10-29 用户口径：彩框 2.3 要压过经理 2.1（有彩框就该练）。"""
-        crit = {"mates": 1, "equip": 1, "manager": 0, "gold": 0, "color": 1}
-        mgr = {"mates": 1, "equip": 1, "manager": 1, "gold": 0, "color": 0}
+    def test_crit_plus_equip_outranks_manager(self):
+        """2026-11-17 口径：彩框 1.3 + 器材 1.0 = 2.3，压过经理 2.2。
+
+        框是器材/经理经验满了才点亮的，所以比较的是「框 + 器材」的总档位。
+        """
+        crit = {"mates": 0, "equip": 1, "manager": 0, "gold": 0, "color": 1}
+        mgr = {"mates": 0, "equip": 0, "manager": 1, "gold": 0, "color": 0}
         self.assertGreater(FakeTask.subject_score(crit), FakeTask.subject_score(mgr))
 
     def test_weights_live_in_params(self):
@@ -1430,9 +1433,9 @@ class SubjectScoreWeights(unittest.TestCase):
         w = params.get("scoring")
         for key in ("mate", "equip", "manager", "gold_ring", "color_ring"):
             self.assertIn(key, w)
-        # 排序口径不变：彩框 > 经理 > 金框
-        self.assertGreater(w["color_ring"], w["manager"])
-        self.assertGreater(w["manager"], w["gold_ring"])
+        # 2026-11-17 排序口径：彩框+器材(2.3) > 经理(2.2) > 金框+器材(2.1)
+        self.assertGreater(w["color_ring"] + w["equip"], w["manager"])
+        self.assertGreater(w["manager"], w["gold_ring"] + w["equip"])
 
     def test_crit_border_excludes_gold_border(self):
         """彩框和金框互斥：彩虹边框里有一段橙黄，不能不互斥地双重计分。
@@ -1449,7 +1452,7 @@ class SubjectScoreWeights(unittest.TestCase):
         self.assertTrue(r["crit"])
         self.assertEqual(r["color"], 1)
         self.assertEqual(r["gold"], 0)                     # 彩框优先，金框不计
-        self.assertAlmostEqual(task.subject_score(r), 1 + 2.3, places=4)
+        self.assertAlmostEqual(task.subject_score(r), 1 + 1.3, places=4)
 
     def test_borders_come_from_button_not_from_cards(self):
         """金框/彩框只看科目按钮外圈；器材卡再多也不额外加分（避免重复计分）。"""
@@ -1463,7 +1466,7 @@ class SubjectScoreWeights(unittest.TestCase):
         self.assertEqual(r["color"], 0)
         self.assertEqual(r["equip"], 3)
         # 装备只按张数算一次，不会因为「卡是金框」翻倍
-        self.assertAlmostEqual(task.subject_score(r), 3 + 1.2, places=4)
+        self.assertAlmostEqual(task.subject_score(r), 3 + 1.1, places=4)
         # 旧实现「数器材卡上的金框」已经删掉，防止有人再把它加回来重复计分
         self.assertFalse(hasattr(task, "count_gold_cards"))
 
