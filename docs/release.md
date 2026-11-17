@@ -167,6 +167,10 @@ https://cnb.cool/TieLaa/ok-hacking-dist/-/releases/download/<tag>/ok-hacking-win
 公开仓库的附件匿名可下载，链接可以直接贴给用户。`dist` 分支保留为历史快照，不再更新；
 以后要 clone 整包仍然可以，但普通用户应走 Release 附件。
 
+导出工作流用源仓库 secret `CNB_RELEASE_TOKEN`（CNB 访问令牌，授权范围勾
+`repo-release:rw`）。它和同步更新仓库用的 `CNB_TOKEN`（`repo-contents:rw`）分开，
+避免为了传附件去扩大 git 令牌的权限。
+
 为什么必须和更新仓库分开（v0.1.10 事故）：pyappify 打包时会**整仓克隆更新仓库**，
 安装包会被一起塞进下一版安装器 —— v0.1.9 的 211 MB 让 v0.1.10 的 setup.exe 涨到 425 MB，
 超过 cnb 单文件 256 MiB 的 blob 上限，`export-to-cnb.yml` 直接被 pre-receive hook 拒掉。
