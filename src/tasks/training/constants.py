@@ -53,7 +53,7 @@ STYLE_ALIASES = {
 # 历史：300（11-03）→ 270（11-07）→ 360（11-10）→ 试 200（11-13）→ 回滚 360。
 
 # 2026-11-11：训练流周末已改成「按缺口选动作」（<30 餐厅打工、≥30 公园、
-# ≥70 野餐；见 `places/map.py: training_weekend_places`）。
+# ≥70 野餐；见 `strategy/styles.py: TrainingStyle.weekend_places`）。
 # 下面的 WEEKEND_PARK_GAP 只保留给其它流的旧双关分支（训练流不再走这里）。
 #
 # 周末「两个地点开关都关掉」时，按**体力缺口**决定公园还是餐厅（用户 2026-11-10 口径）：

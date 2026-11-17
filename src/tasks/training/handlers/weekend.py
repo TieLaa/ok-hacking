@@ -778,8 +778,7 @@ class WeekendHandlers:
         """出行地图（周末 + 训练日的额外出行）：去今天该去的地点。
 
         用户 2026-10-29 / 2026-11-10 / 2026-11-11 / 2026-11-17 口径
-        （见 `strategy/styles.py` 的值表和
-        `places/map.py: training_weekend_places`）：
+        （见 `strategy/styles.py` 的 `weekend_places`）：
         - **训练流**：按精力缺口选动作（缺口 = 上限−当前）——
           缺口 < 30 → 餐厅 → 公园；缺口 ≥ 30 的周六 → 餐厅 → 公园
           （单卡队友 <3 人就退出餐厅回公园）；缺口 ≥ 30 的周日 → 公园；

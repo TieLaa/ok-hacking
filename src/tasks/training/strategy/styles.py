@@ -11,9 +11,9 @@
 
     - `Style` 的一个子类 = 一个流派。类属性就是答案（值），方法就是判断。
     - 值：现在就能查，`style_spec("扭蛋流").weekend_main` → "步行街"。
-    - 方法：**公园已接**（`places/park.py` 调 `pick_park`），其余 8 个还是
-      签名、调用即报错。「接入」= 把调用点从「自己写 if 流派 == ...」改成
-      「问这个类」。
+    - 方法：**公园 / 地图（去哪、先去哪个）/ 餐厅守卫已接**；
+      其余 5 个（进店、买什么、挑卡、练或休、改道）还是签名、调用即报错。
+      「接入」= 把调用点从「自己写 if 流派 == ...」改成「问这个类」。
     - 「待迁 / 不改 / 待定」见业务地图里的标记说明。
 
 三部分：按天业务地图（注释）→ 值（类属性，可用）→ 判断（方法，未接）。
@@ -90,9 +90,9 @@
 #   已迁  今天去哪 / 行程 / 收工  → places/map.py: today_places（读值表）
 #   已迁  公园队友优先            → places/park.py: park_default_pick（读 teammate_first）
 #   已迁  步行街先看钱            → places/street.py（读 cash_first）
-#   不改  训练流按缺口补训        → places/map.py: training_weekend_places（训练流独占）
+#   已迁  训练流按缺口补训        → styles.py: TrainingStyle.weekend_places
 #   已迁  训练流公园按缺口        → styles.py: TrainingStyle.pick_park_normal
-#   不改  训练流周六餐厅「看一眼」 → places/restaurant.py: restaurant_preference 前的守卫
+#   不改  训练流周六餐厅「看一眼」 → styles.py: TrainingStyle.accept_work_card
 #                                 （单卡 <3 人 → 退出餐厅，交回地图）
 #   不改  钱不够只去餐厅          → places/map.py: prefer_venue
 #
@@ -120,6 +120,7 @@
 #   专属卡归属    见词表        训练流/小游戏流/扭蛋流各自吃哪些卡              attributes.card_style_target
 #
 
+from src.tasks.training import params
 from src.tasks.training.constants import PARK_BOAT_STAMINA, SHOP_SEASON_WEEKS
 
 
@@ -138,6 +139,7 @@ class Style:
     saves_money = False           # 前 6 周商店要不要少买、把钱留给周末？
     cash_first = False            # 步行街：先看钱够不够，还是先看卡好不好？
     teammate_first = False        # 公园：队友多 2 个就改划船吗？
+    discount_bonus = False        # 主地点贴「打折！」且钱差一点时，先绕过去？
     thursday_rest = False         # 周四精力低要不要直接休息？（阈值在 params）
 
     # 划船队友比野餐多几个才改判（与 `RestaurantPlace.MATE_MARGIN` 同一口径，
@@ -150,18 +152,47 @@ class Style:
     #   docstring 末尾写上现有位置，方便照着改。
 
     def weekend_places(self, ctx):
-        """今天去哪（有序）。基类默认 = 值表；训练流按精力缺口 + 星期覆盖。
+        """今天去哪（有序）。返回 (地点列表 | None, 理由, 是否最终)。
 
-        现有实现：places/map.py: today_places / training_weekend_places
+        `None` = 读不到关键数据，调用方走旧回退。
+        `最终` = True 时不经过后面的场所开关 / 兜底（训练流原来就是直接返回）。
+
+        基类 = 值表：主地点 + 餐厅；买到/玩完当天就收工。
+        训练流覆盖成「按精力缺口」（见 `TrainingStyle.weekend_places`）。
         """
-        raise NotImplementedError("weekend_places 尚未接入；见 places/map.py")
+        if self.weekend_main is not None:
+            places = [self.weekend_main, "餐厅"]
+            if self.ends_day_after_venue and ctx.gacha_spent:
+                places = [self.weekend_main]
+            return places, "", False
+        return list(self.weekend_plan), "", False
 
     def prefer_venue(self, ctx):
-        """今天先去哪个。主地点流看零用钱门槛，训练流不走这条。
+        """今天先去哪个（有序）。返回 (地点列表, 理由)。
 
-        现有实现：places/map.py: prefer_venue
+        有主地点的流派看零用钱门槛：
+          读不到钱 → 主地点；钱 < 周末打工门槛 → 只去餐厅；否则去主地点。
+        第 7 周周六是最后一次出行，不看钱直接去主地点。
+        没有主地点的流派（训练流 / 商店流）原样返回候选。
         """
-        raise NotImplementedError("prefer_venue 尚未接入；见 places/map.py")
+        main = self.weekend_main
+        if main is None:
+            return list(ctx.places), ""
+        pair = [p for p in ctx.places if p in (main, "餐厅")]
+        if len(pair) < 2:
+            return list(ctx.places), ""
+        rest = [main] + [p for p in ctx.places if p != main]
+        if ctx.day == "六" and ctx.week == SHOP_SEASON_WEEKS:
+            return rest, (
+                f"周末地点（第7周）：最后一次出行 → 直接去「{main}」"
+                "（没消费再退出回餐厅打工）")
+        if ctx.money is None:
+            return rest, f"周末地点：零用钱读不到 → 去「{main}」"
+        gate = int(params.weekend.work_money_gate)
+        if ctx.money < gate:
+            return ["餐厅"], (
+                f"周末地点：零用钱 {ctx.money} < {gate} → 只去「餐厅」打工")
+        return rest, f"周末地点：零用钱 {ctx.money} ≥ {gate} → 去「{main}」"
 
     def pick_park(self, ctx):
         """公园选散步 / 划船 / 野餐。返回 (选项, 理由)；`None` = 交给旧回退。
@@ -210,13 +241,13 @@ class Style:
             f"公园：默认野餐 → 划船（队友比野餐多 {diff} 人，"
             f"按{ctx.mate_how}：划船 {ctx.mate_boats} / 野餐 {ctx.mate_picnic}）")
 
-    def pick_work_card(self, ctx):
-        """餐厅选哪张卡打工。基类 = 按工资 / 队友排序；训练流周六「看一眼」趟
-        要求单卡队友 ≥3 人，两张卡分散（2+2）就退出餐厅交回地图。
+    def accept_work_card(self, ctx):
+        """这张工接不接？返回 (接不接, 理由)。默认 = 都接（按原排序挑）。
 
-        现有实现：places/restaurant.py: restaurant_preference 前的守卫
+        训练流·周六「看一眼」趟要求单卡队友 ≥3 人，两张卡分散就退出餐厅
+        （覆盖见 `TrainingStyle.accept_work_card`）。
         """
-        raise NotImplementedError("pick_work_card 尚未接入；见 places/restaurant.py")
+        return True, ""
 
     def wants_shop(self, ctx):
         """今天要不要进店。基类 = 有「新品上市」就进（所有流派相同）。
@@ -275,6 +306,43 @@ class TrainingStyle(Style):
 
     name = "训练流"
 
+    def weekend_places(self, ctx):
+        """训练流周末：按精力缺口选今天做什么。
+
+        缺口 = 上限 − 当前：
+          < 周末划船缺口           → 餐厅 → 公园（打不了工还有公园兜底）
+          ≥ 缺口 · 周六            → 餐厅 → 公园（单卡队友 ≥3 人才真打工，分散回公园）
+          ≥ 缺口 · 周日            → 公园（精力花光，下周训练日会少一天）
+          第 7 周周六 · 钱 > 保留线 → 步行街 → 餐厅（刷最后一次彩卡）
+          第 7 周周六 · 钱 ≤ 保留线 → 餐厅
+          缺口读不到                → None（调用方回退「餐厅 → 公园」）
+        """
+        if ctx.week == SHOP_SEASON_WEEKS and (ctx.day or "六") == "六":
+            keep = int(params.shop.keep_money_before_last_day)
+            if "步行街" in ctx.visited:
+                if ctx.gacha_spent:
+                    return [], "周末（第7周周六）：步行街买到卡了 → 今天不再打工", True
+                return ["餐厅"], "周末（第7周周六）：步行街没买成 → 去餐厅打工", True
+            if ctx.money is not None and ctx.money > keep:
+                return ["步行街", "餐厅"], (
+                    f"周末（第7周周六）：零用钱 {ctx.money} > {keep}"
+                    " → 先去步行街刷彩卡（没买成再打工）"), True
+            return ["餐厅"], (
+                f"周末（第7周周六）：零用钱不够（{ctx.money}）→ 去餐厅打工，"
+                "钱留给周日商店"), True
+        if ctx.stamina is None or ctx.stamina_max is None:
+            return None, "周末：训练流读不到精力缺口 → 回退「餐厅 → 公园」", True
+        gap = ctx.stamina_max - ctx.stamina
+        if gap >= ctx.row_gap:
+            if (ctx.day or "六") == "六":
+                return ["餐厅", "公园"], (
+                    f"周末（周六）缺口 {gap} ≥ {ctx.row_gap} → 先餐厅看一眼"
+                    "（单卡 ≥3 才打工，分散回公园；周日还能补精力）"), True
+            return ["公园"], "", True
+        return ["餐厅", "公园"], (
+            f"周末缺口 {gap} < {ctx.row_gap} → 餐厅打工"
+            "（零用钱留给商店的牛奶/秘籍，周末不去步行街/游戏厅）"), True
+
     def pick_park_normal(self, ctx):
         """训练流按精力缺口选：≥ 周末野餐缺口 → 野餐，否则划船。
 
@@ -286,6 +354,27 @@ class TrainingStyle(Style):
         if gap >= ctx.eat_threshold:
             return "野餐", f"公园：缺口 {gap} ≥ {ctx.eat_threshold} → 野餐补精力"
         return "划船", f"公园：缺口 {gap} < {ctx.eat_threshold} → 划船（属性+）"
+
+    def accept_work_card(self, ctx):
+        """训练流·周六「看一眼」趟：只打单卡队友 ≥3 人的高收益工。
+
+        条件（全部成立才退出餐厅）：
+          - 主计划趟（急招插队趟不看，双倍工资本身就不亏）；
+          - 第 7 周之前（最后一周没有下一次出行，打了也白打）；
+          - 缺口 ≥ 周末划船缺口（缺口小根本不会走「先看餐厅」这条路）；
+          - 两张卡的队友都 <3 人（分散 2+2 = 普通工资）。
+        """
+        if not ctx.allow_fallback:
+            return True, ""
+        if ctx.week is None or ctx.week >= SHOP_SEASON_WEEKS:
+            return True, ""
+        if ctx.gap < ctx.row_gap:
+            return True, ""
+        if ctx.mate_counts and max(ctx.mate_counts) < 3:
+            return False, (
+                f"餐厅：两张卡分散（{list(ctx.mate_counts)}），最高 <3 人 → "
+                "普通工资不划算，退出餐厅")
+        return True, ""
 
 
 class ShopStyle(Style):
@@ -320,6 +409,7 @@ class GachaStyle(Style):
     saves_money = True
     cash_first = True
     teammate_first = True
+    discount_bonus = True
 
 
 class MiniGameStyle(Style):
