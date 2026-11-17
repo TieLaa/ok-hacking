@@ -29,7 +29,8 @@ from src.tasks.training.places import street
 from src.tasks.ui import labels
 
 # 周末计划的一步：place=地点名，urgent=True=急招临时插队（不是今天的主计划），
-# probe=True=探卡池（所有流派出行日的第一步：只去步行街找笔记继承/球员位置）。
+# probe=True=探卡池（所有流派出行日的第一步：只去步行街找笔记继承/球员位置，
+# 买到一张后当天转正常购买逻辑，见 `handle_street`）。
 WeekendStep = namedtuple(
     "WeekendStep", "place urgent probe", defaults=(False,))
 
@@ -362,7 +363,8 @@ class MapPlace:
         - 不管什么流派、什么零用钱，只要是出行日就先看一眼；
         - 没有这两张就退出，回地图走原计划（`handle_street` 进门即
           `mark_tried`，今天只探一次）；
-        - 这趟只买这两张的**彩色**版本（`street.gacha_candidates(allow_others=False)`）。
+        - 这趟只买这两张的**彩色**版本（`street.gacha_candidates(allow_others=False)`）；
+          买到一张后当天转正常购买逻辑（`handle_street`，2026-11-17）。
 
         例外只有三种（都是游戏/开关的硬限制）：
         - **第7周周日不能出行**：`today_places` 已返回空计划，这里不插；

@@ -626,7 +626,7 @@ class GachaRules(unittest.TestCase):
 
     # ---------- 2026-11-01 15:09 事故：卡面出来了、价格还没出来 ----------
 
-    def _no_price_page(self):
+    def _no_price_page(self, money="169"):
         """卡面已经画出来、但价格数字还没渲染的那一拍。
 
         实拍 OCR（15:09:19,564）：`请选择1个扭蛋i / 训练增强 / 运控增加+++ /
@@ -634,10 +634,11 @@ class GachaRules(unittest.TestCase):
         —— **没有任何价格数字**。对比 10:22 成功那帧有 `80`/`00`/`70`/`100`。
 
         版式跟 `gacha_texts` 一致（同样 1920x1080、同样三列），只是少了价格药丸。
+        `money` 可覆盖：留 120 给目标卡之后，169 买 80 的卡会被留钱规则拒掉。
         """
         texts = [box(760, 80, "请选择1个扭蛋i", 400, 70),
                  box(380, 16, "130/130", 210, 53),
-                 box(1050, 20, "169", 80, 40)]
+                 box(1050, 20, money, 80, 40)]
         xs = [480, 960, 1440]
         names = ["训练增强", "运控增加+++", "防守增加+"]
         effects = ["训练可以额外获得1点主属性", "主力运控+100，队友属性巨幅提升",
@@ -667,12 +668,12 @@ class GachaRules(unittest.TestCase):
         2026-11-01 15:09 实跑：19.5s 那拍卡面已出、价格未出，旧判据
         「连续两拍读不到卡就退出」正好卡在这个中间态 → 退出 → 白丢一次扭蛋。
         """
-        page = self._no_price_page()
+        page = self._no_price_page("200")
         priced = gacha_texts([
             ("训练增强", "训练可以额外获得1点主属性"),
             ("运控增加+++", "主力运控+100，队友属性巨幅提升"),
             ("防守增加+", "主力防守+48，队友属性大幅提升"),
-        ], stamina="130/130", money="169", price="80")
+        ], stamina="130/130", money="200", price="80")
         task = FakeTask(page, qualities=["紫", "金", "紫"], mates=[False, True, False])
         task.ocr_queue = [priced, priced, priced, priced]
         self.assertTrue(task.handle_street(page))
@@ -735,7 +736,7 @@ class GachaRules(unittest.TestCase):
             ("训练增强", "训练可以额外获得1点主属性"),
             ("运控增加+++", "主力运控+100，队友属性巨幅提升"),
             ("防守增加+", "主力防守+48，队友属性大幅提升"),
-        ], stamina="130/130", money="169", price="80")
+        ], stamina="130/130", money="200", price="80")
         task = FakeTask(priced, qualities=["紫", "金", "紫"], mates=[False, True, False])
         task.ocr_queue = [priced, priced, priced, priced]
         self.assertTrue(task.handle_street(priced))
@@ -989,12 +990,12 @@ class GachaRules(unittest.TestCase):
         self.assertEqual(task.actions, [("click", 1837, 50)])
 
     def test_affordable_pick_next(self):
-        """前两张买不起时，选买得起的第三张（不是直接退出）。"""
+        """前两张买不起（或买完留不住 120）时，选买得起的第三张（不是直接退出）。"""
         task = FakeTask(gacha_texts([
             ("训练增强", "训练可以额外获得1点主属性"),
             ("器材暴击+", "器材的暴击加成提高10%"),
             ("投射增加", "主力投射+30"),
-        ], stamina="72/121", money="60", price=["80", "80", "60"]),
+        ], stamina="72/121", money="180", price=["80", "80", "60"]),
             qualities=["紫", "紫", "紫"])
         self.assertTrue(task.handle_street(task._texts))
         self.assertEqual(task.actions[0][0], "click")
