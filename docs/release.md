@@ -201,8 +201,9 @@ git push origin v0.1.11     # 触发 Build
 如果 Build 已经失败（日志里是 `Tag 'vX.Y.Z' not found locally after fetch`），
 **不用重新打 tag**：`gh run rerun <run-id> --failed` 重跑失败的 job 就行。
 
-出包成功后，再跑 `Export release to cnb`（填同一个 tag）：它把 China 安装包上传成
-cnb Release 附件（`TieLaa/ok-hacking-dist`），国内用户用上面的 Release 直链下载；
+出包成功后不用手动跑 `Export release to cnb`：Build 成功出 tag 后它会自动触发
+（`workflow_run`），把 China 安装包上传成 cnb Release 附件（`TieLaa/ok-hacking-dist`），
+国内用户用上面的 Release 直链下载。失败或补历史版本时，才去 Actions 页面手动填 tag 补跑。
 `Sync from source` 同一次 Run 里已经把 main + tags 推给 cnb 镜像，国内更新源不会停在旧版本。
 
 `v0.1.0` / `v0.1.1` 是发布链路修好之前的旧 tag，**不要推它们** —— 那时的 `build.yml` 还指向模板作者的仓库。

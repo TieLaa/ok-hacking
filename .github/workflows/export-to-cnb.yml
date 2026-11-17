@@ -4,9 +4,12 @@ name: Export release to cnb
 # 给国内用户一个浏览器能直接下载的直链。
 # 为什么不用 git 分支：cnb 的 raw 下载接口限制单文件 100 MiB，安装包约 202 MiB，
 # 网页「点击下载」会返回 413；Release 附件上限 64 GiB，且公开仓库匿名可下载。
-# 用法：Actions → Export release to cnb → Run workflow，填 tag。
+# 触发：Build 成功出 tag 后自动运行；也可以在 Actions 页面手动填 tag 补跑。
 
 on:
+  workflow_run:
+    workflows: ["Build"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
@@ -22,12 +25,19 @@ env:
 
 jobs:
   export:
+    # 手动触发直接跑；自动触发只接「本仓库推 v* tag 且 Build 成功」的那一次
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
     steps:
       - name: Download release asset
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
           mkdir -p out
@@ -38,7 +48,7 @@ jobs:
       - name: Upload as cnb release attachment
         env:
           CNB_TOKEN: ${{ secrets.CNB_RELEASE_TOKEN }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
           if [ -z "${CNB_TOKEN:-}" ]; then
