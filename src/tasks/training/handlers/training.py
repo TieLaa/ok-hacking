@@ -1010,6 +1010,9 @@ class TrainingHandlers:
                 # 所以**只认真的发出去的点击**：`_last_click_at` 只在点击完成时更新。
                 before = getattr(self, "_last_click_at", 0.0)
                 self.log_info(f"憋气难度页：选 {minutes} 分钟那档（时长最长）@({x},{y})")
+                # 卡片淡入：这一拍 OCR 已经读到卡，但按钮还在滑入，点早了会点空
+                # （2026-11-17 实跑：进来第一拍没点中左边金卡，之后一直空点确定）。
+                self.sleep(0.05)
                 self.click(x, y, after_sleep=0.5)
                 picked = getattr(self, "_last_click_at", 0.0) != before
                 if not picked:
@@ -1018,6 +1021,15 @@ class TrainingHandlers:
                 return True
             self.log_warning(f"憋气难度页：认不出「N分钟」卡片 → 直接点确定"
                              f"（读到 {[t.name.strip() for t in texts][:6]}…）")
+        # 连点两次「确定」还在这页：说明卡片其实没选中（第一拍点空），
+        # 重置 `_breath_picked` 重新选一次，别一直空点。
+        confirms = getattr(self, "_breath_confirms", 0)
+        if confirms >= 2 and getattr(self, "_breath_picked", False):
+            self._breath_picked = False
+            self._breath_confirms = 0
+            self.log_warning("憋气难度页：确定点了两次没反应 → 重新选卡")
+            return True
+        self._breath_confirms = confirms + 1
         if self.click_button("confirm", texts=texts, after_sleep=0.9, must=False):
             self.log_info("憋气难度页：确定")
             return True

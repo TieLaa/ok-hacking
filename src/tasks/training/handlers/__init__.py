@@ -208,7 +208,7 @@ LEAVE_RESETS = {
     # `_stamina_ticks` 是「这页连续占了多少拍」的兜底计数（见 STAMINA_PAGE_MAX_TICKS）
     "handle_stamina_recover": {"_stamina_use_at": 0.0, "_stamina_ticks": 0},
     # 憋气难度页的「卡片选过没」：离开这页就清，下次重新选
-    "handle_breath_difficulty": {"_breath_picked": False},
+    "handle_breath_difficulty": {"_breath_picked": False, "_breath_confirms": 0},
 }
 
 
