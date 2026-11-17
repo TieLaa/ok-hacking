@@ -35,9 +35,6 @@ class Pick(QtWidgets.QWidget):
         self.cur = None
         self.resize(self.img.width(), self.img.height())
 
-    def _assigned(self):
-        return {b[4] for b in self.boxes}
-
     def _next_subject(self):
         return SUBJECT
 
