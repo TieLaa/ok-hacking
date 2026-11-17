@@ -11,9 +11,10 @@
 
     - `Style` 的一个子类 = 一个流派。类属性就是答案（值），方法就是判断。
     - 值：现在就能查，`style_spec("扭蛋流").weekend_main` → "步行街"。
-    - 方法：公园 / 地图（去哪、先去哪个）/ 餐厅守卫 / 练或休已接；
-      只剩 `pick_street_card`（步行街挑卡）还是签名、调用即报错。
-      「接入」= 把调用点从「自己写 if 流派 == ...」改成「问这个类」。
+    - 方法：5 个事件判断已接（周末去哪、先去哪个、公园、餐厅、练或休）。
+      步行街挑卡**不是流派差异**：它是同一套排序，只是拿当前流派名比
+      「专属卡是不是本流派的」（`places/street.py`）；唯一的流派值是
+      `cash_first`，已经读表。所以没有 `pick_street_card` 方法。
     - 「待迁 / 不改 / 待定」见业务地图里的标记说明。
 
 三部分：按天业务地图（注释）→ 值（类属性，可用）→ 判断（方法，未接）。
@@ -249,13 +250,6 @@ class Style:
         """
         return True, ""
 
-    def pick_street_card(self, ctx):
-        """步行街挑哪张卡。基类 = 专属卡按流派过滤 + 本流派卡优先 + 探卡池模式。
-
-        现有实现：places/street.py: gacha_candidates / handle_street
-        """
-        raise NotImplementedError("pick_street_card 尚未接入；见 places/street.py")
-
     def should_rest(self, ctx):
         """周四低精力要不要直接休息。返回 (休不休息, 理由)。
 
@@ -463,4 +457,5 @@ def style_spec(name):
 #     · 方法：weekend_places / prefer_venue / pick_park / accept_work_card /
 #       should_rest 已接。
 #
-#   剩下：pick_street_card（步行街挑卡，`places/street.py: gacha_candidates`）。
+#   剩下：无。步行街挑卡是同一套排序（用当前流派名比专属卡），
+#   不是变体；唯一的流派值 cash_first 已经读表（`places/street.py`）。
