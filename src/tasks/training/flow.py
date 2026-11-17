@@ -9,6 +9,7 @@ import time
 from src.tasks.training import params
 from src.tasks.training.handlers.match import new_match_flags
 from src.tasks.training.queue import CaptainQueue
+from src.tasks.training.strategy import styles
 from src.tasks.ui import labels
 from src.util.emergency_stop import STOP
 from src.util.log_fallback import ensure_run_log
@@ -1293,17 +1294,15 @@ class TrainingFlowMixin:
         2026-11-17 用户口径：周四硬阈值 60 → 50（与基础阈值相同，等于周四
         不再比平时早休息 10 点）。
         用户 2026-11-04：**扭蛋流 / 小游戏流**在周四有硬阈值 **50**
-        （`rest.thursday_threshold_by_style`，取代旧的「周二 65」）；**其它流派
+        （`rest.thursday_threshold` + `Style.thursday_rest`，取代旧的「周二 65」）；**其它流派
         （训练流 / 商店流）周四没有特殊限制**，只遵守策略参数
         `rest.stamina_threshold`（`strategy/params.json`）。
         周二现在没有任何特殊阈值（旧的周二 65 / 周二 60 已删除）。
         有硬阈值时取 max(策略参数, 硬阈值)，参数调高时以参数为准。
         """
         base = int(params.rest.stamina_threshold)
-        if day == "四":
-            hard = params.rest.thursday_threshold_by_style.get(self.style)
-            if hard is not None:
-                return max(base, hard)
+        if day == "四" and styles.style_spec(self.style).thursday_rest:
+            return max(base, int(params.rest.thursday_threshold))
         return base
 
     def stamina_gate_day(self, texts=None):

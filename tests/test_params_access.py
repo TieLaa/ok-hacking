@@ -23,11 +23,9 @@ class ParamsAttributeAccess(unittest.TestCase):
         self.assertEqual(params.weekend.work_money_gate,
                          params.get("weekend.work_money_gate"))
 
-    def test_nested_dict_supports_get(self):
-        self.assertEqual(
-            params.rest.thursday_threshold_by_style.get("扭蛋流"), 50)
-        self.assertIsNone(
-            params.rest.thursday_threshold_by_style.get("不存在的流派"))
+    def test_nested_node_supports_get(self):
+        self.assertEqual(params.rest.get("thursday_threshold"), 50)
+        self.assertIsNone(params.rest.get("不存在的键"))
 
     def test_missing_key_raises(self):
         with self.assertRaises(AttributeError):

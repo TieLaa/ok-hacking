@@ -45,6 +45,15 @@ class WorkContext(NamedTuple):
     mate_counts: tuple[int, ...] # 两张卡的队友数
 
 
+class RestContext(NamedTuple):
+    """练还是休（`Style.should_rest`）的输入。"""
+
+    style: str
+    day: str | None
+    stamina: int | None
+    threshold: int               # 这一天的精力阈值（`flow.rest_threshold`）
+
+
 class WeekendContext(NamedTuple):
     """今天去哪（`Style.weekend_places`）的输入。"""
 

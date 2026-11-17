@@ -41,7 +41,8 @@ STYLE_ALIASES = {
 }
 
 # 周四的休息硬阈值已进策略参数表（`strategy/params.json` 的
-# `rest.thursday_threshold_by_style`）：只对表里写了的流派生效。
+# `rest.thursday_threshold`）+ 流派表（`strategy/styles.py` 的 `thursday_rest`）：
+# 只对 `thursday_rest` 为真的流派生效。
 # 2026-11-15：训练日默认不再按精力阈值预判休息（一律先进科目页），
 # 但**周四这份阈值保留** —— 扭蛋流 / 小游戏流低精力休息是为了保证周五能进出行地图。
 # 历史：周二 65（2026-11-03）→ 周四 60（2026-11-04）→ 周四 50（2026-11-17，用户口径）；周二阈值已删除。

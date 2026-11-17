@@ -11,8 +11,8 @@
 
     - `Style` 的一个子类 = 一个流派。类属性就是答案（值），方法就是判断。
     - 值：现在就能查，`style_spec("扭蛋流").weekend_main` → "步行街"。
-    - 方法：**公园 / 地图（去哪、先去哪个）/ 餐厅守卫已接**；
-      其余 5 个（进店、买什么、挑卡、练或休、改道）还是签名、调用即报错。
+    - 方法：公园 / 地图（去哪、先去哪个）/ 餐厅守卫 / 练或休已接；
+      只剩 `pick_street_card`（步行街挑卡）还是签名、调用即报错。
       「接入」= 把调用点从「自己写 if 流派 == ...」改成「问这个类」。
     - 「待迁 / 不改 / 待定」见业务地图里的标记说明。
 
@@ -62,7 +62,7 @@
 #   有出行按钮     见第四节       见第四节       见第四节           见第四节
 #
 #   已迁  前 6 周只拿必拿   → places/shop.py: save_money_for_weekend（读 saves_money）
-#   待定  周四低精力阈值   → 现读 params.rest.thursday_threshold_by_style
+#   已迁  周四低精力阈值   → styles.py: Style.should_rest（thursday_rest + 参数）
 #
 # ============================================================================
 # 四、周末（周六、周日）
@@ -249,20 +249,6 @@ class Style:
         """
         return True, ""
 
-    def wants_shop(self, ctx):
-        """今天要不要进店。基类 = 有「新品上市」就进（所有流派相同）。
-
-        现有实现：daycycle.py: late_shop_step
-        """
-        raise NotImplementedError("wants_shop 尚未接入；见 daycycle.py")
-
-    def pick_shop_item(self, ctx):
-        """店里买哪件。基类 = 全局同一条顺序，流派只影响「留多少钱」。
-
-        现有实现：places/shop.py: pick_shop_item
-        """
-        raise NotImplementedError("pick_shop_item 尚未接入；见 places/shop.py")
-
     def pick_street_card(self, ctx):
         """步行街挑哪张卡。基类 = 专属卡按流派过滤 + 本流派卡优先 + 探卡池模式。
 
@@ -271,18 +257,17 @@ class Style:
         raise NotImplementedError("pick_street_card 尚未接入；见 places/street.py")
 
     def should_rest(self, ctx):
-        """练还是休。默认先进科目页；扭蛋流 / 小游戏流周四有 60 门槛。
+        """周四低精力要不要直接休息。返回 (休不休息, 理由)。
 
-        现有实现：daycycle.py: training_day_action
+        基类 = 不休息：训练日一律先进科目页，失败率在科目页判。
+        扭蛋流 / 小游戏流周四有硬阈值：低于它直接休息，保证周五能进出行地图。
         """
-        raise NotImplementedError("should_rest 尚未接入；见 daycycle.py")
-
-    def event_detour(self, ctx):
-        """急招 / 打折要不要改道。基类 = 只看急招；扭蛋流额外看步行街打折。
-
-        现有实现：places/map.py: event_detour / map_context
-        """
-        raise NotImplementedError("event_detour 尚未接入；见 places/map.py")
+        if not self.thursday_rest or ctx.day != "四" or ctx.stamina is None:
+            return False, ""
+        if ctx.stamina < ctx.threshold:
+            return True, (f"周四 {ctx.style} 精力 {ctx.stamina} < {ctx.threshold}"
+                          "（低精力休息，保周五出行地图）")
+        return False, ""
 
 
 class TrainingStyle(Style):
@@ -410,6 +395,7 @@ class GachaStyle(Style):
     cash_first = True
     teammate_first = True
     discount_bonus = True
+    thursday_rest = True
 
 
 class MiniGameStyle(Style):
@@ -426,6 +412,7 @@ class MiniGameStyle(Style):
     saves_money = True
     cash_first = True
     teammate_first = True
+    thursday_rest = True
 
 
 STYLES = {s.name: s() for s in
@@ -452,32 +439,28 @@ def style_spec(name):
 
 
 # ============================================================================
-# 六、接入方法时需要什么（ctx）
+# 六、ctx（每个事件的只读输入）
 # ============================================================================
 #
-# 上面 9 个方法现在只能拿到 `ctx`，不能拿整个任务对象 —— 否则等于把 if 搬进类里。
-# ctx 是**每拍重新读一遍**的当场数据，不跨天保存：
+# 方法只能拿到 `ctx`，不能拿整个任务对象 —— 否则等于把 if 搬进类里。
+# ctx 定义在 `strategy/context.py`，每个事件一个，只装当场数据：
 #
-#   week / day     第几周、星期几
-#   money          零用钱
-#   stamina        当前精力；stamina_max 精力上限
-#   config         用户配置（公园选项、允许进步行街/游戏厅、周末划船缺口）
-#   fresh_badge    商店上方有没有「新品上市」
-#   urgent         餐厅有没有「急招！」
-#   discount       步行街有没有「打折！」
-#   visited        今天去过哪些地点
-#   gacha_spent    今天在步行街买到卡了没有
-#   mate_counts    餐厅 / 公园各选项的队友数
+#   ParkContext     公园：精力、周数、队友数、配置
+#   WorkContext     餐厅：第几周、缺口、两张卡的队友数
+#   WeekendContext  今天去哪：钱、精力、去过哪、买到没
+#   VenueContext    先去哪个：钱、候选地点
+#   RestContext     练或休：星期、精力、阈值
 #
-# 这些数据现在散在任务对象和各模块里，打包成 ctx 是一次独立改动，
-# 没做之前，9 个方法只保留签名，不实现。
+# 新增一个事件时，先加它自己的 ctx，不要把所有字段塞进一个大的。
 #
 # ============================================================================
-# 七、迁移顺序（一次只走一条，改完把业务地图里的「待迁」划掉）
+# 七、迁移进度
 # ============================================================================
 #
-#   1~5 已完成（2026-11-17）：商店留钱、周末行程、公园队友、步行街钱优先
-#   四处调用点已改成读值表；constants.py 的 WEEKEND_MAIN_PLACE / WEEKEND_PLAN
-#   已删除。
+#   已完成（2026-11-17）：
+#     · 值：商店留钱、周末行程、公园队友、步行街钱优先、周四休息、
+#       步行街打折 —— places/* 与 daycycle 里不再有 style == 的业务分支。
+#     · 方法：weekend_places / prefer_venue / pick_park / accept_work_card /
+#       should_rest 已接。
 #
-#   剩下的是 ctx + 9 个方法；它们不动，程序行为就一个字都没变。
+#   剩下：pick_street_card（步行街挑卡，`places/street.py: gacha_candidates`）。

@@ -5469,7 +5469,8 @@ class StylePlanRules(unittest.TestCase):
     def test_thursday_rest_threshold_by_style(self):
         """周四硬阈值只对**扭蛋流 / 小游戏流**生效（50）；其它流派周四没有特殊限制。
 
-        用户 2026-11-04 口径（`params: rest.thursday_threshold_by_style`）：
+        用户 2026-11-04 口径（`params: rest.thursday_threshold` +
+        `Style.thursday_rest`）：
         「周二的 65 改成周四精力低于 60 就休息」，流派白名单不变
         （扭蛋流 / 小游戏流）。**周二现在没有任何特殊阈值。**
         2026-11-17 用户口径：周四硬阈值 60 → 50。
@@ -5496,7 +5497,7 @@ class StylePlanRules(unittest.TestCase):
         real_rest = _params.rest
         fake_rest = SimpleNamespace(
             stamina_threshold=80,
-            thursday_threshold_by_style=real_rest.thursday_threshold_by_style)
+            thursday_threshold=real_rest.thursday_threshold)
 
         for style in ("扭蛋流", "小游戏流", "训练流"):
             with mock.patch.object(_params, "rest", fake_rest):
