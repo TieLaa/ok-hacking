@@ -521,13 +521,24 @@ class TrainingHandlers:
             results[current] = self.analyze_preview(texts, subject=current)
             results[current]["after"] = self.preview_stamina(texts)
             results[current]["fail"] = fail
+            # 当前科目不用点，面板本来就显示着它的增量 —— 也读出来参与排名。
+            # 不读的话它永远没有基数，预览再好也进不了 with_base（2026-11-17 实跑：
+            # 投射 3 队友 + 2 器材 = 5.0，却被排除，最后选了一个 3.0 的科目）。
+            base = self.read_panel_gains(texts, current)
+            if base is not None and (base[0] + base[1]) > 0:
+                results[current]["base_main"], results[current]["base_sub"] = base
+                self.dump_panel_crop(current)
             r = results[current]
+            base_info = ""
+            if r.get("base_main") is not None:
+                base_info = f"｜主{r['base_main']}+副{r['base_sub']}={r['base_main']+r['base_sub']}"
             self.log_info(
                 f"当前已选「{current}」：队友 {r['mates']}｜经理 {r['manager']}"
                 f"｜装备 {r['equip']}｜满经验 {r['full']}｜金框 {r['gold']}"
                 f"｜彩虹 {int(r['crit'])}｜得分 {self.subject_score(r):.2f}"
                 f"｜训练后精力 {r['after'] if r['after'] is not None else '?'}"
-                f"｜失败率 {r['fail'] if r['fail'] is not None else '?'}%")
+                f"｜失败率 {r['fail'] if r['fail'] is not None else '?'}%"
+                f"{base_info}")
 
         last_probed = None
         for name in candidates:
