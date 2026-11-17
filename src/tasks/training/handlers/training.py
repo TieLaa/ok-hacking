@@ -474,7 +474,7 @@ class TrainingHandlers:
             if self.click_button("decide", after_sleep=0.6, must=False):
                 return True
 
-        fail = self.read_fail_rate(texts)
+        fail = self.read_fail_rate(texts, subject=self.current_subject(texts))
         if fail is None:
             # 科目页必有「失败率」（上面的前置判据就是它），读不到通常是页面淡入。
             # 这里只用来确认页面已经稳定；真正的「练还是休息」等所有科目探完再判。
@@ -510,9 +510,6 @@ class TrainingHandlers:
         current = self.current_subject(texts)
         candidates = [n for n in boxes
                       if n in with_team or n in ring_hit or n == current]
-        if self.stamina_gate_day(texts):
-            # 要「换下一个」就得先知道每个科目的训练后精力 → 这一天六项全测
-            candidates = list(boxes)
         self.log_info("候选科目（小人 " + ("、".join(with_team) if with_team else "无")
                       + "｜圈亮 " + ("、".join(ring_hit) if ring_hit else "无")
                       + "｜当前 " + (current or "无") + "）：" + "、".join(candidates))
@@ -533,9 +530,6 @@ class TrainingHandlers:
                 f"｜失败率 {r['fail'] if r['fail'] is not None else '?'}%")
 
         last_probed = None
-        # 每轮探测开始时清掉「上一个科目的面板读数」：跨天/跨轮时上一轮的最后一个
-        # 科目和这一轮第一个科目很可能数值相同，会被误判成「没刷新」而多等。
-        self._panel_gains_prev = None
         for name in candidates:
             if name == current:
                 continue
@@ -572,7 +566,9 @@ class TrainingHandlers:
         if probed and not allowed:
             rates = "、".join(f"{n} {v if v is not None else '?'}%"
                               for n, v in fails.items())
-            if self.config.get("失败率超限改休息"):
+            # 第4周周三例外：那天要求「先过失败率门槛，再看训练后精力」，
+            # 全部超限就是没有合格科目 → 休息，不适用「硬练」配置。
+            if self.config.get("失败率超限改休息") or self.stamina_gate_day(texts):
                 self._force_rest = True
                 self._force_reason = f"所有科目失败率都超过上限 {fail_limit}%"
                 self.log_warning(f"失败率全部超过上限 {fail_limit}%（{rates}）"
@@ -617,6 +613,14 @@ class TrainingHandlers:
         if allowed:
             pool = [n for n in pool if n in allowed]
         if not pool:
+            if self.stamina_gate_day(texts):
+                # 那天要求「先过失败率门槛再挑」：没有合格候选就休息，
+                # 不退回当前/全部（否则会练一个没过门槛的科目）。
+                self._force_rest = True
+                self._force_reason = "第4周周三：没有通过失败率门槛的候选"
+                self.log_warning("第4周周三：没有通过失败率门槛的候选 → 当天休息")
+                self.exit_page(after_sleep=0.8)
+                return True
             pool = [current] if current in boxes else list(boxes)
         # 两维归一化（用户 2026-11-16 设计）：
         #   A. 基数维：`主+副`，按候选集 min-max 归一化（最差的 = 0，直接出局）；
@@ -638,21 +642,15 @@ class TrainingHandlers:
             for n in with_base:
                 r = results.get(n) or {}
                 gains[n] = (r.get("base_main") or 0) + (r.get("base_sub") or 0)
-            bonus_order = sorted(
-                with_base,
-                key=lambda n: (
-                    bool((results.get(n) or {}).get("crit")),
-                    bool((results.get(n) or {}).get("gold")),
-                    bool((results.get(n) or {}).get("manager")),
-                    (results.get(n) or {}).get("mates") or 0,
-                ))
             base_n = _ratio(gains)
-            # 加成维区间 1~2（用户 2026-11-16 口径）：最弱 1.0、最强 2.0，
-            # 含义是「加成最多把一个科目顶到两倍」。不用 0 起步，
-            # 否则候选里最弱的那项会被清成 0，60 分无加成会输给 20 分一队友。
-            n = len(bonus_order)
-            bonus_n = {name: (1.0 if n <= 1 else 1.0 + i / (n - 1))
-                       for i, name in enumerate(bonus_order)}
+            # 加成维（2026-11-17 用户口径）：**不排名**，按旧权重的多维累加
+            # （队友/器材/经理/金框/彩框），再除以本次最大值折到 1~2。
+            # 真正全空（没队友没经理没器材没框）才是 0 → ×1.0；
+            # 最强的一档 → ×2.0，中间按绝对分线性分摊，不随候选集“被抬分”。
+            raw_bonus = {n: self.subject_score(results.get(n) or {}) for n in with_base}
+            hi_bonus = max(raw_bonus.values()) if raw_bonus else 0.0
+            bonus_n = {n: (1.0 + raw_bonus[n] / hi_bonus if hi_bonus > 0 else 1.0)
+                       for n in with_base}
             ranked = {}
             for n in with_base:
                 value = base_n[n] * bonus_n[n]

@@ -1251,18 +1251,26 @@ class TrainingParsersMixin:
         """
         return self.day_state()
 
-    def read_fail_rate(self, texts):
+    def read_fail_rate(self, texts, subject=None):
         """当前选中科目的失败率（0~100），读不到返回 None。
 
-        2026-11-16：失败率不在固定横幅上——它跟着**选中那一行科目**走
-        （实测 y 从 0.22 到 0.65 都有），旧实现只查 `fail_rate` 区域
-        (0.52~0.82, 0.12~0.26)，结果每个科目都读成 `失败率 ?`，
-        失败率门槛（失败率上限(%)）等于没生效。改成整页找「失败率」这个词。
+        2026-11-17 用户口径：失败率标签跟着**选中那一行**走，位置固定、
+        只是随行移动。六个位置已人工框好（`strategy/fail_boxes.json`），
+        有 `subject` 就直接裁那个框读 —— 比整页找标签稳，也不会读到别的行。
 
-        2026-11-16 二次修正：全屏 OCR 经常**只读到标签、丢数字**
-        （实拍：`失败率` / `败率` / `夫败率0` + 单独的 `%`）。所以标签里没有
-        数字时，裁标签右边一小条放大重读 —— 和精力药丸同一个套路。
+        兜底仍保留整页找「失败率」那套（标注框读不到、或没传 subject 时）。
         """
+        if subject:
+            box = self.fail_boxes().get(subject)
+            frame = self.frame
+            if box and frame is not None and getattr(frame, "any", lambda: True)():
+                again = zoom_reread.reread_region(
+                    frame, self, (box["x"], box["y"],
+                                  box["x"] + box["w"], box["y"] + box["h"]))
+                joined = "".join(a[0] for a in again).replace(" ", "")
+                m = re.search(r"(\d{1,3})", joined)
+                if m:
+                    return int(m.group(1))
         label = None
         for t in texts or []:
             name = t.name.replace(" ", "")
@@ -1749,61 +1757,19 @@ class TrainingParsersMixin:
         if fresh is not None:
             box = fresh
         self.click_box(box, after_sleep=0.1)
-        # 点完再取一帧：`executor.frame` 是**每拍缓存**的，不主动刷新的话
-        # 后面所有 OCR 读的都是点击之前那一帧（重试多少次都一样）。
+        # 点完立刻取一帧（F2，t≈0.1）：**面板增量、失败率都读这一帧**。
+        # 2026-11-17 用户口径：面板是瞬间切换的，之前读到「副=0」是没点中，
+        # 不是画得慢；所以不再等 0.4 秒、也不再连读两拍确认（F3 取消）。
         self.next_frame()
+        gains = self.read_panel_gains(self._ocr_region("attr_gains"), name)
         texts = self._ocr_region()
         self.log_debug(f"场上角色名：{self.scene_names(texts)}")
         self.dump_subject_frame(name, texts)
         preview = self.analyze_preview(texts, subject=name)
         preview["after"] = self.preview_stamina(texts)
-        preview["fail"] = self.read_fail_rate(texts)
-        # 面板主+副：0.25 秒后开始读，**连续两拍一致才认**。
-        # 只读一次会踩两种「还没画完」的帧（2026-11-16 19:34 实拍）：
-        #   `弹跳 +23 / 意识 +90`（旧面板还没换，主<副，被下面的守卫挡掉）；
-        #   `体能 +18 / 0`（副属性那行还没画出来，被当成「副=0」提前接受）。
-        # 所以要求两次读数完全相同；最多 4 拍（失败时少烧 2 次全屏 OCR，
-        # 实测每次 OCR 约 0.3 秒，6 拍要 3 秒），拿不到就当没读到。
-        gains = None
-        prev = getattr(self, "_panel_gains_prev", None)     # (subject, (main, sub))
-
-        def read_once():
-            """读一次面板（最多 5 拍，连续一致才认）；读不到返回 None。"""
-            seq = []
-            for attempt in range(5):
-                self.sleep(0.1)
-                self.next_frame()      # 每拍都要新帧：`executor.frame` 是缓存的
-                # **只 OCR 增量那一块**（0.03~0.80 × 0.72~1.00）：第一行增量在
-                # y≈0.766，用 `attr_panel`（0.78 起）会把整行裁掉。
-                cur = self.read_panel_gains(self._ocr_region("attr_gains"), name)
-                if cur is not None and prev and cur == prev[1] and prev[0] != name:
-                    self.log_debug(
-                        f"面板读数与上一个科目「{prev[0]}」相同 {cur} → 再等")
-                    seq = []
-                    continue
-                seq.append(cur)
-                if cur is None:
-                    continue
-                # 副属性那几行是逐行淡入的：副=0 时要连读三次，非 0 两次即可
-                need = 3 if cur[1] == 0 else 2
-                if len(seq) >= need and all(x == cur for x in seq[-need:]):
-                    return cur
-            return None
-
-        gains = read_once()
-        if gains is None or (prev and gains == prev[1] and prev[0] != name):
-            # 这一下多半没点中（面板还是上一个科目的数）：**重点一次再来**
-            self.log_debug(f"「{name}」面板没变化 → 重新点一次")
-            self.next_frame()
-            again = self.subjects_from_texts(self._ocr_region()).get(name) or box
-            self.click_box(again, after_sleep=0.3)
-            self.next_frame()
-            retry = read_once()
-            if retry is not None and not (prev and retry == prev[1] and prev[0] != name):
-                gains = retry
+        preview["fail"] = self.read_fail_rate(texts, subject=name)
         if gains is not None:
             preview["base_main"], preview["base_sub"] = gains
-            self._panel_gains_prev = (name, gains)
         self.dump_panel_crop(name)
         return preview
 
@@ -2091,6 +2057,31 @@ class TrainingParsersMixin:
         TrainingParsersMixin._panel_tpl = out
         return out
 
+    @staticmethod
+    def fail_boxes():
+        """读 `strategy/fail_boxes.json` → `{科目: {x,y,w,h}}`（整屏相对坐标）。
+
+        失败率横幅跟着选中的科目行走；六个位置由 `tools/pick_fail_boxes.py`
+        人工框定（等距 106px 推出来的）。文件不存在返回空 dict，调用方退回
+        整页找「失败率」的逻辑。
+        """
+        cached = getattr(TrainingParsersMixin, "_fail_boxes_cache", None)
+        if cached is not None:
+            return cached
+        try:
+            import json
+            import os
+            from src.tasks.training.constants import PROJECT_ROOT
+            path = os.path.join(PROJECT_ROOT, "src", "tasks", "training",
+                                "strategy", "fail_boxes.json")
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            out = {b["subject"]: b for b in data.get("boxes", [])}
+        except Exception:
+            out = {}
+        TrainingParsersMixin._fail_boxes_cache = out
+        return out
+
     def panel_gains_by_boxes(self, subject, texts=None):
         """用人工标注的框读增量：每行只把「数值+红字」那段裁出来，按颜色 OCR。
 
@@ -2141,8 +2132,10 @@ class TrainingParsersMixin:
                 yc = min(name_y[name], key=lambda v: abs(v - yc))
             half = 0.035
             y1, y2 = yc - half, yc + half
-            # 右边界放到本列尽头：红字后面没有别的内容，`+34` 才不会被截成 `+3`。
-            x2 = 0.35 if x1 < 0.35 else 0.80
+            # 右边界 = 数值框右缘 + 一点余量：`+34` 这种两位数要包住，但不能
+            # 一直放到 0.80 —— 右侧紧挨着科目列表，金色边框会被当成增量
+            # （实拍 005357_投射：防守行读出一个不存在的 `+7`）。
+            x2 = min(0.80, value_box["x"] + value_box["w"] + 0.06)
             crop = frame[int(y1 * h):int(y2 * h), int(x1 * w):int(x2 * w)]
             if crop.size == 0:
                 continue
@@ -2198,9 +2191,13 @@ class TrainingParsersMixin:
             best = 0
             for group in reversed(groups):
                 text = "".join(b.name for b in group)
-                # 优先取 `+` 后面的数字：金色 ⇈ 常被 OCR 读成 `2`/`3`，
-                # 整条读成 `2+8` 时按第一个数字取会得到 2（实测 235848_体能）。
-                m = re.search(r"\+\s*(\d{1,3})", text) or re.search(r"(\d{1,3})", text)
+                m = re.search(r"\+\s*(\d{1,3})", text)
+                if not m:
+                    # 增量一定带 `+`（普通 `+N`，金色 `⇈+N`），但 `+` 偶尔会被
+                    # 抠丢（实拍 005659_体能 的 `+18` 只读出 `18`）。所以两位数
+                    # 以上仍认；**单个数字又不带 `+`** 的是面板红色装饰
+                    # （实拍 005357_投射：防守行的 `V` 读成 `7`，凭空多一项）。
+                    m = re.search(r"(\d{2,3})", text)
                 if m and int(m.group(1)) <= PANEL_GAIN_MAX:
                     best = int(m.group(1))
                     break

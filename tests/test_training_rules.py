@@ -5424,11 +5424,14 @@ class StylePlanRules(unittest.TestCase):
         after = {"投射": 50, "防守": 90}
         self.assertEqual(FakeTask([]).pick_by_stamina(ranked, after, 50), "投射")
 
-    def test_pick_by_stamina_unreadable_does_not_block(self):
-        """读不到训练后精力 → 不拦（沿用「读不到就不拦」的惯例）。"""
+    def test_pick_by_stamina_unreadable_is_not_enough(self):
+        """读不到训练后精力 → 当天算不合格（2026-11-17 用户口径）。
+
+        那天是第4周周三，目的是保住周四那一练；`?` 不能当合格用。
+        """
         ranked = {"投射": (3.0, 0, 0), "防守": (2.0, 0, 0)}
         after = {"投射": None, "防守": 20}
-        self.assertEqual(FakeTask([]).pick_by_stamina(ranked, after, 50), "投射")
+        self.assertIsNone(FakeTask([]).pick_by_stamina(ranked, after, 50))
 
     def test_pick_by_stamina_all_below_returns_none(self):
         """全都低于阈值 → None（调用方改休息）。"""
@@ -5524,6 +5527,18 @@ class StylePlanRules(unittest.TestCase):
         self.assertIn("所有科目失败率都超过上限", task._force_reason)
         self.assertTrue(any("失败率全部超过上限 50%" in m for m in task.logs),
                         task.logs)
+
+    def test_stamina_gate_day_rests_even_when_config_says_continue(self):
+        """第4周周三：全部超限时即使配置「失败率超限改休息」关着也休息。
+
+        2026-11-17 用户口径：那天先过失败率门槛，再看训练后精力；
+        没有合格科目就休息，不适用「硬练」。
+        """
+        task = self._subject_page_task({"投射": 96, "意识": 60})
+        task.stamina_gate_day = lambda t: True
+        task.config["失败率超限改休息"] = False
+        self.assertTrue(task.handle_subject_select(task._texts))
+        self.assertTrue(task._force_rest)
 
     def test_thursday_low_stamina_rests(self):
         """周四 49 精力：扭蛋流直接休息（门槛 50）。
