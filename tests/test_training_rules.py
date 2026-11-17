@@ -2011,6 +2011,23 @@ class EventCardChoices(unittest.TestCase):
         self.assertTrue(task.handle_event_choice(texts))
         self.assertEqual(task.actions[-1][1], "把大爷扶起来")
 
+    def test_character_event_colored_line_is_default(self):
+        """角色事件二选一：彩条（带头像）vs 白条 → 默认点彩条（2026-11-17 用户口径）。
+
+        实拍 `1117-104001_nochange3/frame.jpg`：粉条「可以是可以……」+
+        白条「拜托别这么幼稚了好吗？」+ 不响应的「跳过」。
+        """
+        if cv2 is None:
+            self.skipTest("没有 cv2")
+        texts = [box(600, 320, "可以是可以……", 420, 56),
+                 box(537, 439, "拜托别这么幼稚了好吗？", 460, 48)]
+        task = FakeTask(texts)
+        cv2.rectangle(task.frame, (560, 310), (1200, 390), (233, 187, 211), -1)  # BGR 粉
+        cv2.rectangle(task.frame, (490, 430), (1200, 500), (222, 225, 222), -1)  # 白
+        pick = task._colored_dialog_option(texts)
+        self.assertIsNotNone(pick)
+        self.assertEqual(pick.name, "可以是可以……")
+
 
 class PageRegistry(unittest.TestCase):
     """旁路页面分类（2026-11-13 阶段 1）：页面用 UI 锚点认，正文长句不参与。"""
@@ -5190,6 +5207,68 @@ class GachaTopCardRules(unittest.TestCase):
         log = "".join(task.logs)
         self.assertIn("没有笔记继承/球员位置", log)
         self.assertNotIn("选「", log)
+
+    def test_probe_buying_top_card_switches_to_normal(self):
+        """探卡池买到目标卡 → 这一趟转正常逻辑（2026-11-17 用户口径）。"""
+        texts = gacha_texts([
+            ("笔记继承", "立刻触发1次笔记继承"),
+            ("运控增加+", "主力运控+48"),
+            ("运控增加", "主力运控+30"),
+        ], stamina="100/130", money="500", price=["120", "80", "60"])
+        task = FakeTask(texts, qualities=["彩", "紫", "金"])
+        task.day_state().current_step = WeekendStep("步行街", False, True)
+        self.assertTrue(task.handle_street(texts))
+        self.assertIn("选「笔记继承」", "".join(task.logs))
+        self.assertFalse(task.day_state().current_step.probe)
+
+    def test_probe_upgrade_buys_purple_next_page(self):
+        """转正常逻辑后「再买一次」页的紫卡照买（2026-11-17 用户口径）。"""
+        first = gacha_texts([
+            ("笔记继承", "立刻触发1次笔记继承"),
+            ("运控增加+", "主力运控+48"),
+            ("运控增加", "主力运控+30"),
+        ], stamina="100/130", money="500", price=["120", "80", "60"])
+        task = FakeTask(first, qualities=["彩", "紫", "金"])
+        task.day_state().current_step = WeekendStep("步行街", False, True)
+        self.assertTrue(task.handle_street(first))
+        second = gacha_texts([
+            ("防守增加", "主力防守+30"),
+            ("运控增加", "主力运控+30"),
+            ("弹跳增加+", "主力弹跳+48"),
+        ], stamina="100/130", money="380", price=["60", "60", "80"])
+        task._texts = second
+        task._qualities = ["蓝", "蓝", "紫"]
+        task.actions.clear()
+        self.assertTrue(task.handle_street(second))
+        self.assertIn("选「弹跳增加+」", "".join(task.logs))
+
+    def test_normal_mode_keeps_120_for_top_cards(self):
+        """正常模式也留 120：200 买 80 → 剩 120 可以；199 → 不行。"""
+        for money, want in ((200, True), (199, False)):
+            task = FakeTask([])
+            cards = [self._card("运控增加+", quality="紫", price=80)]
+            best, detail, _ = task.gacha_candidates(
+                cards, stamina=100, stamina_max=130, money=money, week=6)
+            self.assertEqual(best is not None, want, money)
+            if not want:
+                self.assertIn("留 120", detail)
+
+    def test_normal_mode_reserve_dropped_after_both_top_got(self):
+        """两张目标卡都到手后正常模式不再留 120。"""
+        task = FakeTask([])
+        task._top_gacha_got = {"笔记继承", "球员位置"}
+        cards = [self._card("运控增加+", quality="紫", price=80)]
+        best, _detail, _ = task.gacha_candidates(
+            cards, stamina=100, stamina_max=130, money=100, week=6)
+        self.assertEqual(best["name"], "运控增加+")
+
+    def test_normal_mode_top_card_ignores_reserve(self):
+        """目标卡自己不受 120 储备限制。"""
+        task = FakeTask([])
+        cards = [self._card("笔记继承", quality="彩", price=120)]
+        best, _detail, _ = task.gacha_candidates(
+            cards, stamina=100, stamina_max=130, money=130, week=6)
+        self.assertEqual(best["name"], "笔记继承")
 
 
 class StylePlanRules(unittest.TestCase):
