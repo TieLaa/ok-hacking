@@ -1760,10 +1760,10 @@ class TrainingParsersMixin:
         fresh = self.subjects_from_texts(self._ocr_region()).get(name)
         if fresh is not None:
             box = fresh
-        self.click_box(box, after_sleep=0.1)
-        # 点完立刻取一帧（F2，t≈0.1）：**面板增量、失败率都读这一帧**。
-        # 2026-11-17 用户口径：面板是瞬间切换的，之前读到「副=0」是没点中，
-        # 不是画得慢；所以不再等 0.4 秒、也不再连读两拍确认（F3 取消）。
+        self.click_box(box, after_sleep=0.15)
+        # 点完取一帧（F2，t≈0.15）：**面板增量、失败率都读这一帧**。
+        # 2026-11-17 用户口径：0.1 秒时横幅偶尔还没画出来（实测差 0.05 秒），
+        # 0.15 刚好；不再等 0.4 秒、也不再连读两拍确认（F3 取消）。
         self.next_frame()
         gains = self.read_panel_gains(self._ocr_region("attr_gains"), name)
         texts = self._ocr_region()
