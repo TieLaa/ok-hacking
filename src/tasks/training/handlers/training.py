@@ -314,7 +314,7 @@ class TrainingHandlers:
         # 只有「今天还没出过行」时才等 —— 已经出过的日子不必为空等。
         if hub_seen < self.HUB_SETTLE_TICKS and not self.outing_used():
             self.log_info(f"训练日：头一拍先不决策（{reason}）→ 等「出行」按钮淡入")
-            self.sleep(0.5)
+            self.sleep(0.15)
             return True
         # 进休息室 = 训练日主界面出现。**只在这一刻**给监控页拍一次快照：
         # 六维 + 精力 + 零用钱（2026-11-03 用户口径）。
@@ -343,9 +343,9 @@ class TrainingHandlers:
                 if target is not None:
                     self.log_info("周六加训：没有「休息」按钮 → 出行")
             if target is not None:
-                self.click_box(target, after_sleep=0.6)
+                self.click_box(target, after_sleep=0.15)
             else:
-                self.flow_click("day_rest", after_sleep=0.6)
+                self.flow_click("day_rest", after_sleep=0.15)
         else:
             # 周六加训：「训练」在上一格（平时「休息」的位置，可能带彩框），
             # 按文字点它自己那个框；`day_train` 固定坐标是**下一格**，那天会点成「出行」。
@@ -585,7 +585,7 @@ class TrainingHandlers:
                 self.log_warning(f"失败率全部超过上限 {fail_limit}%（{rates}）"
                                  " → 退出科目页，回主界面休息")
                 # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
-                self.exit_page(after_sleep=0.8)
+                self.exit_page(after_sleep=0.15)
                 return True
             self.log_warning(f"失败率全部超过上限 {fail_limit}%（{rates}，配置为不休息，继续）")
         elif len(allowed) < len(probed):
@@ -630,7 +630,7 @@ class TrainingHandlers:
                 self._force_rest = True
                 self._force_reason = "第4周周三：没有通过失败率门槛的候选"
                 self.log_warning("第4周周三：没有通过失败率门槛的候选 → 当天休息")
-                self.exit_page(after_sleep=0.8)
+                self.exit_page(after_sleep=0.15)
                 return True
             pool = [current] if current in boxes else list(boxes)
         # 两维归一化（用户 2026-11-16 设计）：
@@ -694,7 +694,7 @@ class TrainingHandlers:
                     f"第4周周三：所有科目训练后精力都 < {limit} → 退出去休息")
                 self._force_rest = True
                 self._force_reason = f"第4周周三：所有科目训练后精力都 < {limit}"
-                self.exit_page(after_sleep=0.8)
+                self.exit_page(after_sleep=0.15)
                 return True
             if picked != name:
                 self.log_info(
