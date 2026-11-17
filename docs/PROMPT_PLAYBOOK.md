@@ -419,7 +419,10 @@ runtime，reload_tasks 只刷新已注册任务模块。
   `TaskCard.stop_clicked()` 的。框架里成立是因为框架的 stop 语义是
   「停掉这张任务卡」；我们第二栏的语义是「暂停自动训练」，
   语义不同，副作用就不同 —— **抄调用序列前先确认语义一样**。
-- 修法：`_stop_auto_training` 只留 `task.disable()`。
+- 修法：`_stop_auto_training` 只留 `task.disable()`，再补一句 `task._paused = False`
+  （清暂停标志，保证下次【开始】不会卡在挂起态；**不用 `unpause()`**，它会 `executor.start()`）。
+  2026-11-17 落地：只按第一栏【启动】、没点第二栏【开始】，鼠标仍被快速比赛拽走并点击
+  （`QuickMatchTask` 的 `_enabled: true` 落盘，执行器一醒它就每秒跑）。
 - 提示词里应该加的那句：**「看到 `xxx.disable(); xxx.unpause()` 这种成对调用，
   先查框架里 `unpause` 的实体：它是不是会动全局状态（这里是 `executor.start()`）？
   如果这个按钮只该管一件事，就别带上那个有全局副作用的一半。」**

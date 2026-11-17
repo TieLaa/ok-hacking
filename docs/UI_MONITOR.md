@@ -77,11 +77,13 @@ else:                    og.app.start_controller.start(task)   # 刷设备/拉�
 
 # 【■】停止（图标按钮，无文字）
 task.disable()
-task.unpause()
+task._paused = False     # 只清暂停标志：不能调 task.unpause()，它会 executor.start()
 ```
 
-与框架 `ok/ui/qt/tasks/TaskCard.py:118`（`start_clicked`）+ `:144`（`pause_clicked`）+
-`:140`（`stop_clicked`）同源。
+与框架 `ok/ui/qt/tasks/TaskCard.py:118`（`start_clicked`）+ `:144`（`pause_clicked`）同源；
+**`stop_clicked`（`:140`）有意不同**：框架是 `disable()` + `unpause()`，我们只 `disable()`。
+因为 `Task.unpause()` 的实体带 `executor.start()`，会把 `_enabled: true` 的
+快速比赛（QuickMatchTask）唤醒、开始抢鼠标（2026-11-17 复现）。
 
 | 项 | 口径 |
 | --- | --- |
@@ -107,7 +109,7 @@ task.unpause()
 | --- | --- | --- |
 | 第一栏【开始/暂停】 | 起始页【开始(F9)】`StartCard.clicked` | 执行器总开关 |
 | 第二栏【开始/继续/暂停】 | 任务卡【开始】`TaskCard.start_clicked` | 这一个任务的开关 |
-| 第二栏【■】 | 任务卡【停止】`TaskCard.stop_clicked` | 停这一个任务（disable + unpause） |
+| 第二栏【■】 | 任务卡【停止】`TaskCard.stop_clicked` | 停这一个任务（只 disable，不唤醒执行器） |
 
 ## 队长选择
 

@@ -8422,8 +8422,12 @@ class MonitorButtonActions(unittest.TestCase):
                 self.config = {"指定队长": ""}
                 self.enabled = False
                 self.running = running
-                self.paused = False        # 框架 task.pause() 的挂起态
+                self._paused = False       # 框架 task.pause() 的挂起态（真实字段是 _paused）
                 self.calls = []
+
+            @property
+            def paused(self):
+                return self._paused
 
             def enable(self):
                 self.calls.append("enable")
@@ -8437,12 +8441,12 @@ class MonitorButtonActions(unittest.TestCase):
             def pause(self):
                 # 框架 TaskCard.pause_clicked：task.pause()（可无损恢复）
                 self.calls.append("pause")
-                self.paused = True
+                self._paused = True
 
             def unpause(self):
-                # 框架 TaskCard.start_clicked 第一分支：恢复挂起的任务
+                # 框架实体：_paused=False + executor.start()（这里只记调用，不唤醒）
                 self.calls.append("unpause")
-                self.paused = False
+                self._paused = False
 
         class _FakeExecutor:
             def __init__(self):
@@ -8511,19 +8515,20 @@ class MonitorButtonActions(unittest.TestCase):
         self.assertFalse(executor.paused)
         self.assertEqual(executor.calls, [])
 
-    def test_stop_disables_task_and_unpauses(self):
-        """第二栏【■】= 框架 `TaskCard.stop_clicked`：`disable()` + `unpause()`。
+    def test_stop_disables_task_without_waking_executor(self):
+        """第二栏【■】只停这一个任务：`disable()` + 清暂停标志，**不调 unpause()**。
 
-        只停这一个任务：执行器不碰（那是第一栏的语义），
-        配置和注入的队列参数也不清（任务卡的 Stop 同样不清）。
+        `task.unpause()` 的实体是 `executor.start()`，会唤醒快速比赛这类
+        `_enabled: true` 的触发任务（2026-11-17 用户复现：只按第一栏【启动】，
+        鼠标被快速比赛拽走）。执行器归第一栏，这里一概不碰。
         """
         tab, task, executor, _ = self._tab()
         task.enabled = True
         task.running = True
-        task.paused = True
+        task._paused = True
         tab.stop_auto_training()
         self.assertIn("disable", task.calls)
-        self.assertIn("unpause", task.calls)
+        self.assertNotIn("unpause", task.calls)
         self.assertFalse(task.enabled)
         self.assertFalse(task.paused)
         self.assertEqual(executor.calls, [])
@@ -9000,8 +9005,8 @@ class MonitorButtons(unittest.TestCase):
     def test_second_bar_stop_follows_task_enabled(self):
         """照框架 `TaskCard.update_buttons`：enabled 才有【■】，disabled 只剩【开始】。
 
-        `enabled+paused`（挂起）也在 —— 框架那颗 Stop 一样在，点了同样是
-        disable + unpause。
+        `enabled+paused`（挂起）也在 —— 框架那颗 Stop 一样在，点了是
+        `disable()`（不调 `unpause()`，它会 `executor.start()`）。
         """
         view, _ = self._view()
         self.assertTrue(view._btn_stop.isHidden())          # 一开始没启用
