@@ -159,7 +159,7 @@ class StreetPlace:
 
     def gacha_candidates(self, cards, stamina, stamina_max, money,
                          required=None, attrs=None, caps=None, gap_limit=100,
-                         week=None, allow_others=True):
+                         week=None, day=None, allow_others=True):
         """三张卡里哪些值得买、买哪张。
 
         返回 (best, detail, all_cards)：
@@ -251,10 +251,14 @@ class StreetPlace:
         ok = []
         # 探卡池要留的零花钱：和商店同一条储备线（`shop.keep_money_before_last_day`），
         # 钱留给「笔记继承 / 球员位置」。
-        probe_reserve = int(params.shop.keep_money_before_last_day)
+        # 2026-11-17 用户口径：第 7 周**周六起**不再留 —— 最后一次出行就在周六，
+        # 再留也买不到下一张，反而挡住当天的金/彩卡。
+        no_reserve = (week == SHOP_SEASON_WEEKS and day in ("六", "日"))
+        probe_reserve = 0 if no_reserve else int(params.shop.keep_money_before_last_day)
         # 两张目标卡**都到手之后**就不用再留了（用户 2026-11-15 口径）。
         got = self.top_gacha_got()
-        need_reserve = any(key not in got for key in TOP_GACHA_NAMES)
+        need_reserve = (not no_reserve) and any(
+            key not in got for key in TOP_GACHA_NAMES)
         for c in cards:
             # 探卡池模式（用户 2026-11-15 口径）：
             #   - 目标卡「笔记继承 / 球员位置」的彩色版：照买；

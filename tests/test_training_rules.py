@@ -1056,6 +1056,23 @@ class GachaSurgeCards(unittest.TestCase):
         self.assertIsNotNone(best)
         self.assertEqual(best["name"], "防守暴涨")
 
+    def test_week7_saturday_drops_reserve(self):
+        """第7周周六起不再留 120（2026-11-17 用户口径）。
+
+        钱只够买一张 130 的金卡时（180-130=50 < 120），周六以前会被预留挡住，
+        周六当天必须放行 —— 最后一次出行，再留也买不到下一张目标卡。
+        """
+        card = {"name": "投射增强++", "quality": "金", "price": 130, "mate": False,
+                "enhanced": True, "clear": False, "effect": "投射+30",
+                "recover": 0, "x": 0, "y": 0}
+        task = FakeTask([])
+        best_sat, _d, _ = task.gacha_candidates(
+            [card], stamina=100, stamina_max=130, money=180, week=7, day="六")
+        self.assertIsNotNone(best_sat)
+        best_week6, _d6, _ = task.gacha_candidates(
+            [card], stamina=100, stamina_max=130, money=180, week=6, day="六")
+        self.assertIsNone(best_week6)
+
     def test_non_attribute_surge_is_normal_card(self):
         """「熟练度暴涨」只是名字里带「暴涨」：第 6 周照常买。"""
         task = FakeTask([])

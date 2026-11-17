@@ -585,6 +585,7 @@ class WeekendHandlers:
             caps=getattr(self, "_attr_caps", None) or {},
             gap_limit=int(self.config.get("缺口排除阈值")),
             week=bar.get("week"),
+            day=bar.get("day"),
             allow_others=not probe)
         if best is None:
             if probe:
