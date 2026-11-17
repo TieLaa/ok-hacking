@@ -223,7 +223,13 @@ class TrainingFlowMixin:
         # GUI/CLI 走这里自己恢复基线（失败只告警，不打断用户手动起的任务）。
         self.begin_attempt()
         if not self.mcp_driven:
-            if not self.recover_to_lobby():
+            # 2026-11-17：当前就在已知流程页（确认编队 / 训练日首页 / 素材页…）时
+            # **不要先回大厅** —— 那些页面没有返回入口，recover_to_lobby 只会连点
+            # 返回箭头 + ESC，把「确认编队」这种只差一步开练的页面搅乱。
+            # 用户实测：勾了「允许开始训练」后点开始，机器人却在确认编队页点返回。
+            if self.is_startable():
+                self.log_info("GUI 运行：当前是已知流程页 → 就地继续（不回大厅）")
+            elif not self.recover_to_lobby():
                 self.log_warning("GUI 运行：自动回大厅失败，按当前界面继续"
                                  "（MCP 运行遇到同样情况会直接判失败）")
             else:
