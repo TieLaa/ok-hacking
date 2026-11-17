@@ -5625,36 +5625,50 @@ class StylePlanRules(unittest.TestCase):
         return task
 
     def test_high_first_frame_fail_still_probes_and_trains_other_subject(self):
-        """首帧投射 96% 也要先探完候选：意识 0% 就练意识（2026-11-16 实跑）。"""
+        """首帧投射 96% 也要先探完候选：分数最高的意识 0% 就练意识。"""
         task = self._subject_page_task({"投射": 96, "意识": 0})
         self.assertTrue(task.handle_subject_select(task._texts))
         self.assertFalse(task._force_rest)
-        self.assertTrue(any("失败率超过上限 50% 的科目先排除：投射 96%" in m
-                            for m in task.logs), task.logs)
+        self.assertTrue(any("失败率：投射 96%、意识 0%" in m for m in task.logs),
+                        task.logs)
         self.assertTrue(any("训练「意识」（失败率 0%）" in m for m in task.logs),
                         task.logs)
         self.assertEqual(task.actions[-1], ("button", "decide"))
 
-    def test_all_subjects_over_fail_limit_forces_rest(self):
-        """所有探测过的科目都超限 → 才退出科目页强制休息。"""
+    def test_best_subject_over_limit_forces_rest(self):
+        """分数最高的科目超限 → 直接休息，不再退而求其次练低分科目。
+
+        2026-11-17 用户口径：权重算法已经能挑出收益最高的一条，没必要为了
+        「不浪费一天」去练一个低分科目。
+        """
         task = self._subject_page_task({"投射": 96, "意识": 60})
         self.assertTrue(task.handle_subject_select(task._texts))
         self.assertTrue(task._force_rest)
-        self.assertIn("所有科目失败率都超过上限", task._force_reason)
-        self.assertTrue(any("失败率全部超过上限 50%" in m for m in task.logs),
-                        task.logs)
+        self.assertIn("最优科目", task._force_reason)
+        self.assertIn("超过上限 50%", task._force_reason)
 
     def test_stamina_gate_day_rests_even_when_config_says_continue(self):
-        """第4周周三：全部超限时即使配置「失败率超限改休息」关着也休息。
+        """第4周周三：最优科目超限时即使配置「失败率超限改休息」关着也休息。
 
         2026-11-17 用户口径：那天先过失败率门槛，再看训练后精力；
-        没有合格科目就休息，不适用「硬练」。
+        不满足就休息，不换第二名。
         """
         task = self._subject_page_task({"投射": 96, "意识": 60})
         task.stamina_gate_day = lambda t: True
         task.config["失败率超限改休息"] = False
         self.assertTrue(task.handle_subject_select(task._texts))
         self.assertTrue(task._force_rest)
+
+    def test_stamina_gate_day_rests_when_best_cannot_keep_stamina(self):
+        """第4周周三：最优科目训练后精力 < 50 → 休息，不换第二名（2026-11-17）。"""
+        task = self._subject_page_task({"投射": 0, "意识": 0})
+        task.stamina_gate_day = lambda t: True
+        base = {"names": [], "mates": 1, "manager": 0, "equip": 0, "full": 0,
+                "gold": 0, "crit": False, "color": 0, "manager_crit": 0}
+        task.probe_subject = lambda b: dict(base, mates=1, after=30, fail=0)
+        self.assertTrue(task.handle_subject_select(task._texts))
+        self.assertTrue(task._force_rest)
+        self.assertIn("训练后精力", task._force_reason)
 
     def test_thursday_low_stamina_rests(self):
         """周四 49 精力：扭蛋流直接休息（门槛 50）。

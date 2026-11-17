@@ -565,32 +565,15 @@ class TrainingHandlers:
                 f"｜失败率 {r.get('fail') if r.get('fail') is not None else '?'}%"
                 f"{base_info}")
 
-        # 失败率是**每个科目各一个数**（2026-11-16 12:43 实跑：投射 8% / 弹跳 15%
-        # / 防守 20% / 运控 5% / 意识 0%）。旧版拿进页第一帧、也就是当前选中科目的
-        # 数字判「练还是休息」——12:47 首帧投射 96% 就直接退出去休息，意识（0%、
-        # 还能回精力）连探测都没探。现在探完所有候选再判：只排除超限的科目，
-        # **全部超限**才按配置强制休息。
+        # 失败率是每个科目各一个数。2026-11-17 起**不再用它筛候选池**：
+        # 分数排第一的科目失败率 > 上限就休息，不再为了「不浪费一天」
+        # 退而求其次去练一个低分科目（用户口径：不凑数）。
         fail_limit = int(self.config.get("失败率上限(%)"))
         probed = [n for n in candidates if n in results]
         fails = {n: results[n].get("fail") for n in probed}
-        allowed = self.subjects_within_fail(fails, fail_limit)
-        if probed and not allowed:
-            rates = "、".join(f"{n} {v if v is not None else '?'}%"
-                              for n, v in fails.items())
-            # 第4周周三例外：那天要求「先过失败率门槛，再看训练后精力」，
-            # 全部超限就是没有合格科目 → 休息，不适用「硬练」配置。
-            if self.config.get("失败率超限改休息") or self.stamina_gate_day(texts):
-                self._force_rest = True
-                self._force_reason = f"所有科目失败率都超过上限 {fail_limit}%"
-                self.log_warning(f"失败率全部超过上限 {fail_limit}%（{rates}）"
-                                 " → 退出科目页，回主界面休息")
-                # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
-                self.exit_page(after_sleep=0.15)
-                return True
-            self.log_warning(f"失败率全部超过上限 {fail_limit}%（{rates}，配置为不休息，继续）")
-        elif len(allowed) < len(probed):
-            skipped = "、".join(f"{n} {fails[n]}%" for n in probed if n not in allowed)
-            self.log_info(f"失败率超过上限 {fail_limit}% 的科目先排除：{skipped}")
+        if fails:
+            self.log_info("失败率：" + "、".join(
+                f"{n} {v if v is not None else '?'}%" for n, v in fails.items()))
 
         # 六维当前值：进休息室时已经拍过快照（`parsers.snapshot_lounge`），
         # 这里**优先用那一份**，只有独立调用（回归 / 不带主循环）时才现场补读一次。
@@ -619,17 +602,12 @@ class TrainingHandlers:
         # 候选池 = 小人 / 金边 / 彩边 / 当前已选（用户 2026-10-27：三种信号都算）
         # 但只保留**真正探测过**的科目：探测失败的名字没有分数，留在池里等于按 0 分
         # 跟别人比，还可能被选去盲点；一个都没探到时退回当前已选，别乱点。
-        # 失败率超限的科目先排除（`allowed` 为空时是「配置为不休息」，退回全部探到的）。
         pool = [n for n in candidates if n in results]
-        if allowed:
-            pool = [n for n in pool if n in allowed]
         if not pool:
             if self.stamina_gate_day(texts):
-                # 那天要求「先过失败率门槛再挑」：没有合格候选就休息，
-                # 不退回当前/全部（否则会练一个没过门槛的科目）。
                 self._force_rest = True
-                self._force_reason = "第4周周三：没有通过失败率门槛的候选"
-                self.log_warning("第4周周三：没有通过失败率门槛的候选 → 当天休息")
+                self._force_reason = "第4周周三：没有探测到任何候选"
+                self.log_warning("第4周周三：没有探测到任何候选 → 当天休息")
                 self.exit_page(after_sleep=0.15)
                 return True
             pool = [current] if current in boxes else list(boxes)
@@ -683,24 +661,37 @@ class TrainingHandlers:
             ranked = {n: (self.subject_score(results.get(n)), 0, 0)
                       for n in pool}
         name = max(ranked, key=ranked.get)
-        # 第4周周三（精力阈值保周四那一练，和其它日子不同）：
-        # 按排序挑第一个「训练后精力 ≥ 休息阈值」的科目；全都低于 → 退出去休息。
-        if self.stamina_gate_day(texts):
-            limit = self.rest_threshold("三")
-            after = {n: (results.get(n) or {}).get("after") for n in ranked}
-            picked = self.pick_by_stamina(ranked, after, limit)
-            if picked is None:
-                self.log_warning(
-                    f"第4周周三：所有科目训练后精力都 < {limit} → 退出去休息")
+        # 失败率只卡**第一名**（2026-11-17 用户口径）：分数最高的科目超限就休息，
+        # 不再为了「不浪费一天」退而求其次去练低分科目。
+        top_fail = (results.get(name) or {}).get("fail")
+        if top_fail is None or top_fail > fail_limit:
+            rates = "、".join(f"{n} {v if v is not None else '?'}%"
+                              for n, v in fails.items())
+            shown = top_fail if top_fail is not None else "?"
+            if self.config.get("失败率超限改休息") or self.stamina_gate_day(texts):
                 self._force_rest = True
-                self._force_reason = f"第4周周三：所有科目训练后精力都 < {limit}"
+                self._force_reason = (f"最优科目「{name}」失败率 {shown}%"
+                                      f" 超过上限 {fail_limit}%")
+                self.log_warning(f"{self._force_reason}（{rates}）"
+                                 " → 退出科目页，回主界面休息")
+                # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
                 self.exit_page(after_sleep=0.15)
                 return True
-            if picked != name:
-                self.log_info(
-                    f"第4周周三：「{name}」训练后 {after.get(name)} < {limit}"
-                    f" → 改选「{picked}」（{after.get(picked)}）")
-                name = picked
+            self.log_warning(f"最优科目「{name}」失败率 {shown}%"
+                             f" 超过上限 {fail_limit}%（配置为不休息，继续）")
+        # 第4周周三（精力阈值保周四那一练）：第一名还要满足「训练后精力 ≥ 阈值」，
+        # 不满足就休息，**不换第二名**（换人就是凑数）。
+        if self.stamina_gate_day(texts):
+            limit = self.rest_threshold("三")
+            after = (results.get(name) or {}).get("after")
+            if after is None or after < limit:
+                shown = after if after is not None else "?"
+                self._force_rest = True
+                self._force_reason = (f"第4周周三：「{name}」训练后精力 {shown}"
+                                      f" < {limit}")
+                self.log_warning(f"{self._force_reason} → 退出去休息")
+                self.exit_page(after_sleep=0.15)
+                return True
         r = results.get(name) or self.empty_preview()
         # 2026-10-27：这一行必须同时打「金框」和「彩虹」。
         # 代码里彩框会让金框恒为 0（互斥），只打金框时彩框会被统计成「无框」，
