@@ -23,8 +23,8 @@ from collections import namedtuple
 from src.tasks.training import params
 from src.tasks.training.constants import (
     PARK_PICNIC_STAMINA, SHOP_SEASON_WEEKS,
-    WEEKEND_MAIN_PLACE, WEEKEND_PARK_GAP, WEEKEND_PLAN,
-    WORK_STAMINA_COST)
+    WEEKEND_PARK_GAP, WORK_STAMINA_COST)
+from src.tasks.training.strategy import styles
 from src.tasks.training.places import street
 from src.tasks.ui import labels
 
@@ -156,7 +156,7 @@ class MapPlace:
     def today_places(self, day=None, st=None, texts=None):
         """今天该去的地点（有序，前一个走完才轮到下一个）。
 
-        判据来自 `constants.WEEKEND_PLAN`（星期 + 流派 → 地点列表），
+        判据来自 `strategy/styles.py` 的值表，
         **训练流 / 扭蛋流 / 小游戏流除外**：
         - 训练流：按精力缺口选动作（见 `training_weekend_places`）；
           读不到缺口时回退「餐厅 → 公园」，**不再回退步行街/游戏厅**；
@@ -169,7 +169,7 @@ class MapPlace:
             st = self.day_state()
         if day is None:
             day = (st.date or (None, None))[1]
-        # 读不到星期时按周六那一行兜底（商店流还按表走）。
+        # 读不到星期时按周六兜底（训练流的「周六先看餐厅」和 prefer_venue 的分档要用）。
         day = day or "六"
         # 2026-11-14 用户口径（游戏设置，唯一策略）：第 7 周周日不能再出行，
         # 只能进商店清空零花钱。所有流派都不规划地点。
@@ -185,16 +185,14 @@ class MapPlace:
             # 餐厅打不了工还有公园兜底。
             self.log_info("周末：训练流读不到精力缺口 → 回退「餐厅 → 公园」")
             return ["餐厅", "公园"]
-        main = WEEKEND_MAIN_PLACE.get(self.style)
-        if main is not None:
-            # 买成扭蛋当天就结束，不用再去餐厅（小游戏流由 visited 过滤）。
-            places = [main, "餐厅"]
-            if self.style == "扭蛋流" and st.gacha_spent:
-                places = [main]
+        spec = styles.style_spec(self.style)
+        if spec.weekend_main is not None:
+            # 买到/玩完当天就收工，不用再去餐厅（小游戏流由 visited 过滤）。
+            places = [spec.weekend_main, "餐厅"]
+            if spec.ends_day_after_venue and st.gacha_spent:
+                places = [spec.weekend_main]
         else:
-            places = list(WEEKEND_PLAN.get((day, self.style))
-                          or WEEKEND_PLAN.get(("六", self.style))
-                          or ["餐厅"])
+            places = list(spec.weekend_plan)
         places = [p for p in places if p != "商店"]
         # 今天本来有没有「开关控制的地点」（步行街 / 游戏厅）。
         # 只有这种日子才可能被两个开关删空 —— 周日训练流只有公园，不算，
@@ -274,7 +272,7 @@ class MapPlace:
         """
         # 读不到星期时按周六那一行兜底（`today_places` 也是这么兜的）。
         day = day or "六"
-        main = WEEKEND_MAIN_PLACE.get(self.style)
+        main = styles.style_spec(self.style).weekend_main
         if main is not None:
             pair = [p for p in places if p in (main, "餐厅")]
             if len(pair) < 2:
@@ -440,7 +438,8 @@ class MapPlace:
         if not rule.urgent and rule.place not in ctx.places:
             return False
         # 扭蛋流今天已经买到扭蛋 → 不再去餐厅打工
-        if rule.place == "餐厅" and ctx.style == "扭蛋流" and ctx.gacha_spent:
+        if (rule.place == "餐厅" and ctx.gacha_spent
+                and styles.style_spec(ctx.style).ends_day_after_venue):
             return False
         return bool(rule.when(ctx))
 

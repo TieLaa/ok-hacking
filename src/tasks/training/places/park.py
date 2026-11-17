@@ -50,6 +50,7 @@
 
 from src.tasks.training.constants import (PARK_BOAT_STAMINA, SHOP_SEASON_WEEKS,
                                           WEEKEND_PICNIC_FALLBACK)
+from src.tasks.training.strategy import styles
 from src.tasks.ui import labels
 
 # 地点名（地图上的按钮文字 / 状态里的键）
@@ -195,7 +196,7 @@ class ParkPlace:
 
     def park_default_pick(self, texts, style, day=None):
         """缺口读不到时的旧回退：训练流「周六划船 / 周日看精力」，其它流派用配置项。"""
-        if style != "训练流":
+        if styles.style_spec(style).teammate_first:
             return self.config.get("公园选项")
 
         st = self.day_state()

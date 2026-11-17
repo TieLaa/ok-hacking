@@ -32,7 +32,7 @@ from tools.check_handlers import DryRunTask  # noqa: E402
 from src.tasks.training.parsers import (  # noqa: E402
     CRIT_RING_FACTOR, CRIT_RING_MIN, ring_is_border)
 from src.tasks.training import params  # noqa: E402
-from src.tasks.training.constants import WEEKEND_PLAN  # noqa: E402
+from src.tasks.training.strategy.styles import style_spec  # noqa: E402
 
 # 门槛已进策略参数表：测试按当前值取边界，不写死 360/180。
 WEEKEND_WORK_MONEY_GATE = int(params.get("weekend.work_money_gate"))
@@ -4493,21 +4493,21 @@ class WeekendMapRules(unittest.TestCase):
         self.assertEqual(task.today_places("六", st), ["步行街"])
 
     def test_friday_row_is_explicit_for_shop_style(self):
-        """周五（野上泷「额外周末」）在 WEEKEND_PLAN 里**显式**有行。
+        """周五（野上泷「额外周末」）与周六行程一致，四条流派都要守住。
 
         2026-11-03：以前表里只有 ("五","扭蛋流")，其它流派靠 `today_places`
         的「读不到星期 → 按周六兜底」隐式拿到周六那行 —— 改周六会顺手改掉周五，
         从表里也看不出周五到底去哪。现在周五各行与周六一致（行为不变）。
         2026-11-10：扭蛋流 / 小游戏流已不看表（固定主地点 + 餐厅）。
-        2026-11-11：训练流也退出这张表（按缺口决策），表里只剩商店流按星期走；
-        但四条流派「周五 = 周六」仍要守住。
+        2026-11-11：训练流也退出这张表（按缺口决策），表里只剩商店流按星期走。
+        2026-11-17：行程已进 `strategy/styles.py`，与星期无关（额外出行日同一条）。
         """
-        self.assertIn(("五", "商店流"), WEEKEND_PLAN)
         for style in ("训练流", "商店流", "扭蛋流", "小游戏流"):
             task = self.styled(style, self._map("星期五"))
             st = task.weekend_state()
             self.assertEqual(task.today_places("五", st),
                              task.today_places("六", st), style)
+        self.assertEqual(list(style_spec("商店流").weekend_plan), ["餐厅"])
 
     def _both_venue_switches_off(self, task):
         task.config["允许进步行街"] = False
