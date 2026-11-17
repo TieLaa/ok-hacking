@@ -1026,7 +1026,12 @@ class MatchHandlers:
                       and all(self._has_white_band(t) for t in group))
         if group and len(group) >= 2 and (has_skip or len(group) >= 3
                                           or short_pair or plate_pair):
-            pick = min(group, key=lambda t: t.y)
+            # 2026-11-17 用户口径：纯回精力的选项先排掉（实拍器材事件
+            # 「精力恢复 / 属性上限 / 资金援助」，满精力还选了恢复），
+            # 剩下的仍按原来的「选第一个」。
+            non_stamina = [t for t in group
+                           if "精力恢复" not in t.name and "回复精力" not in t.name]
+            pick = min(non_stamina or group, key=lambda t: t.y)
             if os.environ.get("OK_DUMP_CHOICES"):
                 self.dump_unknown(texts, "choice_vertical")
             self.log_info("事件选项（竖向）：" + "、".join(t.name.strip() for t in group)

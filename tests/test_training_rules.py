@@ -7873,10 +7873,12 @@ class TalentStockEvent(unittest.TestCase):
         self.assertEqual(pick["name"], "睡觉")
 
     def test_short_pair_without_skip_is_a_choice(self):
-        """器材事件：两行短选项、没有「跳过」也要认，选上面那个。
+        """器材事件：两行短选项、没有「跳过」也要认；纯回精力的排掉，选剩下的第一个。
 
         2026-10-29 实机：`精力恢复 / 资金援助` 被放弃 → 兜底点中央正好压中
         下面那个（用户看到「选了下面那个」）。
+        2026-11-17：满精力还选「精力恢复」是浪费（器材事件三选一实拍），
+        改成先排掉纯回精力项。
         """
         texts = [box(69, 165, "器材事件", 115, 34),
                  box(70, 206, "器材加成-70熟练度", 231, 36),
@@ -7884,7 +7886,7 @@ class TalentStockEvent(unittest.TestCase):
                  box(684, 434, "资金援助", 179, 56)]
         task = FakeTask(texts)
         self.assertTrue(task.handle_event_choice(texts))
-        self.assertEqual(task.actions[-1][1], "精力恢复")
+        self.assertEqual(task.actions[-1][1], "资金援助")
 
     def test_note_select_auto_then_next(self):
         """「选择笔记」：先自动选择，再点下一步（2026-10-30 口径，旧口径是不选直接过）。"""
