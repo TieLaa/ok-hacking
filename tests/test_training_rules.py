@@ -461,6 +461,25 @@ class GachaRules(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["name"], "专属饮料")
 
+    def test_shop_items_sorted_top_to_bottom_left_to_right(self):
+        """点卡顺序按空间排：OCR 检出顺序是乱的时候也要先上后下、先左后右。
+
+        2026-11-17 用户反馈：扫商店时鼠标东一块西一块。
+        """
+        w, h = 1920, 1080
+        # 故意打乱 OCR 顺序：第二行左 → 第一行右 → 第一行左
+        texts = [
+            box(int(w * 0.223) - 60, int(h * 0.543) - 20, "第二行左", 120, 40),
+            box(int(w * 0.223) - 30, int(h * 0.746) - 15, "80", 60, 30),
+            box(int(w * 0.40) - 60, int(h * 0.277) - 20, "第一行右", 120, 40),
+            box(int(w * 0.40) - 30, int(h * 0.479) - 15, "60", 60, 30),
+            box(int(w * 0.223) - 60, int(h * 0.277) - 20, "第一行左", 120, 40),
+            box(int(w * 0.223) - 30, int(h * 0.479) - 15, "50", 60, 30),
+        ]
+        task = FakeTask(texts)
+        names = [i["name"] for i in task.read_shop_items(texts)]
+        self.assertEqual(names, ["第一行左", "第一行右", "第二行左"])
+
     def test_shop_detail_title_tolerates_one_wrong_char(self):
         """详情标题 OCR 差一个字也要认（大乐边 vs 大乐透）。"""
         from src.tasks.ui import labels

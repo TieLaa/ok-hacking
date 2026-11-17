@@ -682,6 +682,10 @@ class TrainingParsersMixin:
             self.log_warning(
                 f"商店解析出 {len(items)} 件商品，超过 {self.SHOP_COLS}x{self.SHOP_ROWS} "
                 f"网格容量 {self.SHOP_MAX_ITEMS} 件，请补一张商店截图核区域")
+        # 点卡读详情的顺序：**从上到下、从左到右**。原来直接按 OCR 检出顺序，
+        # 鼠标东一下西一下（用户 2026-11-17 反馈）；OCR 顺序不保证空间顺序。
+        # 行距约 0.27 屏高，按 0.15 分桶不会把两行混在一起。
+        items.sort(key=lambda i: (round(i["y"] / self.height / 0.15), i["x"]))
         return items
 
     def card_quality(self, name_box, price_box):
