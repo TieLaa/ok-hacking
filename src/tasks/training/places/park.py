@@ -23,7 +23,7 @@
   收益高于划船那点属性，所以缺口大时野餐优先，不被「划船队友多 2」改走。
   缺口读不到时才回退旧行为（周六划船 / 周日看精力）。
 - **其它流派：队友优先**（2026-11-08 用户口径，和餐厅「桌游GM 多两个就选左边」同一口径）：
-  **划船的队友比野餐多 `MATE_MARGIN`（2）个及以上 → 优先划船**，不看精力。
+  **划船的队友比野餐多 `Style.MATE_MARGIN`（2）个及以上 → 优先划船**，不看精力。
   多 1 个不算，仍然是默认规则说了算。只在**默认选到野餐**时才由队友改判 ——
   配置里明确要「散步」的照旧散步。
 - **其它流派**：用配置项 `公园选项` 指定的优先项（默认野餐）。
@@ -48,9 +48,9 @@
     所以：标题只当**判据**，实际点击永远走选项文字框。
 """
 
-from src.tasks.training.constants import (PARK_BOAT_STAMINA, SHOP_SEASON_WEEKS,
-                                          WEEKEND_PICNIC_FALLBACK)
+from src.tasks.training.constants import WEEKEND_PICNIC_FALLBACK
 from src.tasks.training.strategy import styles
+from src.tasks.training.strategy.context import ParkContext
 from src.tasks.ui import labels
 
 # 地点名（地图上的按钮文字 / 状态里的键）
@@ -63,9 +63,8 @@ EXIT_COORDS = (0.945, 0.040)
 class ParkPlace:
     """公园的判断与状态。**不点击**，只给判断。"""
 
-    # 划船的队友比野餐多几个人才改选（用户 2026-11-08 口径：多两个；
-    # 与 `RestaurantPlace.MATE_MARGIN` 同一口径，「差 1 个不算」）。
-    MATE_MARGIN = 2
+    # 划船的队友比野餐多几个才改选：见 `strategy/styles.py` 的 `Style.MATE_MARGIN`
+    # （2026-11-08 口径「多两个」，与餐厅同一口径，差 1 个不算）。
 
     # ---------- 页面判据 ----------
 
@@ -94,80 +93,46 @@ class ParkPlace:
     def park_pick(self, texts, style, day=None):
         """今天选哪个选项（选项名）。
 
-        2026-11-11 用户口径：**训练流按缺口选**，队友改判不再抢野餐 ——
-        划船比野餐少回的精力拿去训练，收益高于划船那点属性：
+        判断在 `strategy/styles.py` 的 `pick_park`；这里只负责读这一帧：
+        顶栏（精力 / 周数）、配置、选项框和队友数。
 
-            缺口（上限−当前）≥ 周末野餐缺口（默认 70） → 野餐
-            缺口 < 周末野餐缺口                          → 划船
-
-        其它流派保持 2026-11-08 的「划船队友多 2 个 → 划船」。
-
-        第3周周末例外（用户 2026-11-13）：第4周海边合宿的最后一天是
-        全队友训练，前一天体力不够就得休息，所以公园按「离目标还差多少」
-        选 —— 差 > 划船 +30 才野餐，否则划船（队友和配置都不抢）。
-
-        2026-11-15 实跑修正：「划船比赛！」只是**添头** —— 实测它只把
-        「推荐属性+20 / 随机属性+10」换成「推荐属性+40」，精力、零用钱、
-        出行次数都不变，所以**不压训练流缺口**（缺口 ≥70 照样野餐：
-        为 10 点属性丢 40 点精力不划算），只在「划船 vs 野餐」摇摆时偏向划船。
+        读不到关键数据时 `pick_park` 返回 None → 走 `park_default_pick`
+        （它会写 `st.park_choice`，属于当天状态，不放进只读 ctx）。
         """
-        # 第3周周末：海边前要把体力拉回目标，野餐/划船只按缺口选，
-        # 队友和配置都不抢（`vacation_eve_target` 不是这一周时返回 None）。
-        target = self.vacation_eve_target()
-        if target is not None:
-            stamina = self.top_bar(texts).get("stamina")
-            if stamina is not None:
-                gap = target - stamina
-                if gap > PARK_BOAT_STAMINA:
-                    self.log_info(
-                        f"海边前周末：体力 {stamina} 距目标 {target} 差 {gap}"
-                        f"（> 划船 {PARK_BOAT_STAMINA}）→ 野餐")
-                    return "野餐"
-                self.log_info(
-                    f"海边前周末：体力 {stamina} 距目标 {target} 差 {gap} → 划船")
-                return "划船"
-
-        # 2026-11-15 用户口径（收窄）：最后一周没有训练日了，精力不再兑现 → 划船拿属性。
-        week = self.top_bar(texts).get("week")
-        if week is not None and week >= SHOP_SEASON_WEEKS:
-            self.log_info("公园：最后一周没有训练日，精力不再兑现 → 划船（属性+）")
-            return "划船"
-
-        if style == "训练流":
-            gap = self.weekend_gap(texts)
-            if gap is not None:
-                threshold = int(self.config.get("周末野餐缺口"))
-                if gap >= threshold:
-                    self.log_info(f"公园：缺口 {gap} ≥ {threshold} → 野餐补精力")
-                    return "野餐"
-                self.log_info(f"公园：缺口 {gap} < {threshold} → 划船（属性+）")
-                return "划船"
-            # 缺口读不到：回退旧行为（周六划船 / 周日看精力）
+        bar = self.top_bar(texts)
+        week, day_key = self.current_day()
+        spec = styles.style_spec(style)
+        default_pick = self.config.get("公园选项")
+        mate_boats = mate_picnic = None
+        mate_how = ""
+        boat_race = False
+        # 队友数和「划船比赛」只有非训练流会用到；训练流以前就不数，别多读。
+        if spec.teammate_first and default_pick == "野餐":
+            boat, picnic = self.park_option_boxes(texts)
+            if boat is not None and picnic is not None:
+                counts, mate_how = self.option_mate_counts([boat, picnic])
+                mate_boats, mate_picnic = counts[0], counts[1]
+            boat_race = self.boat_race_badge(texts)
+        ctx = ParkContext(
+            style=style,
+            week=week,
+            day=day_key,
+            top_week=bar.get("week"),
+            stamina=bar.get("stamina"),
+            stamina_max=bar.get("stamina_max"),
+            vacation_target=self.vacation_eve_target(),
+            mate_boats=mate_boats,
+            mate_picnic=mate_picnic,
+            mate_how=mate_how,
+            boat_race=boat_race,
+            default_pick=default_pick,
+            eat_threshold=int(self.config.get("周末野餐缺口")),
+        )
+        pick, why = spec.pick_park(ctx)
+        if pick is None:
             return self.park_default_pick(texts, style, day)
-
-        pick = self.park_default_pick(texts, style, day)
-        if pick != "野餐":
-            return pick
-        # 2026-11-15 实跑修正：「划船比赛！」是**添头**，不是改道信号。
-        # 实测（第1周周六 vs 周日两帧）：比赛只把「推荐属性+20/+10」换成「推荐属性+40」，
-        # 精力 +30、零用钱、出行次数与普通划船完全相同 —— 多赚 10 点属性，
-        # 换不回野餐那 40 点精力（缺口 ≥70 时仍按缺口野餐，见上面训练流分支）。
-        # 所以标签只放在「本来就在划船/野餐之间摇摆」的这一层。
-        if self.boat_race_badge(texts):
-            self.log_info("公园：「划船比赛！」添头 → 划船（比普通划船多 +10 属性）")
-            return "划船"
-        boat, picnic = self.park_option_boxes(texts)
-        if boat is None or picnic is None:
-            return pick
-        counts, how = self.option_mate_counts([boat, picnic])
-        diff = counts[0] - counts[1]
-        if diff < self.MATE_MARGIN:
-            self.log_info(f"公园：野餐（队友按{how}：划船 {counts[0]} / 野餐 {counts[1]}，"
-                          f"只多 {diff} 人，不够 {self.MATE_MARGIN} 人）")
-            return pick
-        self.log_info(f"公园：默认野餐 → 划船（队友比野餐多 {diff} 人，按{how}："
-                      f"划船 {counts[0]} / 野餐 {counts[1]}）")
-        return "划船"
+        self.log_info(why)
+        return pick
 
     def boat_race_badge(self, texts):
         """「划船比赛！」是不是贴在**划船选项正上方**？

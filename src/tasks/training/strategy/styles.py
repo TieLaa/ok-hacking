@@ -11,9 +11,9 @@
 
     - `Style` 的一个子类 = 一个流派。类属性就是答案（值），方法就是判断。
     - 值：现在就能查，`style_spec("扭蛋流").weekend_main` → "步行街"。
-    - 方法：**还没接**。现在调用会报错，因为实现还在 places/*.py 里。
-      「接入」= 把调用点从「自己写 if 流派 == ...」改成「问这个类」。
-      一条都没接之前，程序跑起来完全不会用这里的方法。
+    - 方法：**公园已接**（`places/park.py` 调 `pick_park`），其余 8 个还是
+      签名、调用即报错。「接入」= 把调用点从「自己写 if 流派 == ...」改成
+      「问这个类」。
     - 「待迁 / 不改 / 待定」见业务地图里的标记说明。
 
 三部分：按天业务地图（注释）→ 值（类属性，可用）→ 判断（方法，未接）。
@@ -91,7 +91,7 @@
 #   已迁  公园队友优先            → places/park.py: park_default_pick（读 teammate_first）
 #   已迁  步行街先看钱            → places/street.py（读 cash_first）
 #   不改  训练流按缺口补训        → places/map.py: training_weekend_places（训练流独占）
-#   不改  训练流公园按缺口        → places/park.py: park_pick（训练流独占）
+#   已迁  训练流公园按缺口        → styles.py: TrainingStyle.pick_park_normal
 #   不改  训练流周六餐厅「看一眼」 → places/restaurant.py: restaurant_preference 前的守卫
 #                                 （单卡 <3 人 → 退出餐厅，交回地图）
 #   不改  钱不够只去餐厅          → places/map.py: prefer_venue
@@ -120,6 +120,9 @@
 #   专属卡归属    见词表        训练流/小游戏流/扭蛋流各自吃哪些卡              attributes.card_style_target
 #
 
+from src.tasks.training.constants import PARK_BOAT_STAMINA, SHOP_SEASON_WEEKS
+
+
 class Style:
     """一个流派：默认值 + 默认行为，子类只写差异。
 
@@ -136,6 +139,10 @@ class Style:
     cash_first = False            # 步行街：先看钱够不够，还是先看卡好不好？
     teammate_first = False        # 公园：队友多 2 个就改划船吗？
     thursday_rest = False         # 周四精力低要不要直接休息？（阈值在 params）
+
+    # 划船队友比野餐多几个才改判（与 `RestaurantPlace.MATE_MARGIN` 同一口径，
+    # 「差 1 个不算」）。
+    MATE_MARGIN = 2
 
     # ---------------- 判断（尚未接入，调用即报错） ----------------
     #
@@ -157,11 +164,51 @@ class Style:
         raise NotImplementedError("prefer_venue 尚未接入；见 places/map.py")
 
     def pick_park(self, ctx):
-        """公园选散步 / 划船 / 野餐。训练流按缺口，其它流派队友优先。
+        """公园选散步 / 划船 / 野餐。返回 (选项, 理由)；`None` = 交给旧回退。
 
-        现有实现：places/park.py: park_pick
+        三层，顺序不能换：
+          ① 第 3 周周末（海边前）：距目标 > 划船 +30 才野餐，否则划船。
+             日期用 `ctx.week/day`（`current_day()`，读不到任一就是 None）。
+          ② 最后一周：没有训练日，精力不再兑现 → 划船。
+             周数用 `ctx.top_week`（`top_bar()`，只读到周也算）。
+          ③ 平时：各流派自己的规则（训练流按缺口，其它流派队友优先）。
+
+        训练流读不到缺口时返回 `(None, 理由)`，调用方 `park.py` 走原来的
+        `park_default_pick`（它会写 `st.park_choice`，是状态，不进只读 ctx）。
         """
-        raise NotImplementedError("pick_park 尚未接入；见 places/park.py")
+        if ctx.vacation_target is not None and ctx.stamina is not None:
+            gap = ctx.vacation_target - ctx.stamina
+            if gap > PARK_BOAT_STAMINA:
+                return "野餐", (
+                    f"海边前周末：体力 {ctx.stamina} 距目标 {ctx.vacation_target}"
+                    f" 差 {gap}（> 划船 {PARK_BOAT_STAMINA}）→ 野餐")
+            return "划船", (
+                f"海边前周末：体力 {ctx.stamina} 距目标 {ctx.vacation_target}"
+                f" 差 {gap} → 划船")
+
+        if ctx.top_week is not None and ctx.top_week >= SHOP_SEASON_WEEKS:
+            return "划船", "公园：最后一周没有训练日，精力不再兑现 → 划船（属性+）"
+
+        return self.pick_park_normal(ctx)
+
+    def pick_park_normal(self, ctx):
+        """③ 平时怎么选。基类 = 配置默认 + 队友 / 划船比赛改判。"""
+        pick = ctx.default_pick
+        if pick != "野餐":
+            return pick, f"公园：配置默认「{pick}」"
+        if ctx.boat_race:
+            return "划船", "公园：「划船比赛！」添头 → 划船（比普通划船多 +10 属性）"
+        if ctx.mate_boats is None or ctx.mate_picnic is None:
+            return pick, "公园：没数到队友 → 按配置默认"
+        diff = ctx.mate_boats - ctx.mate_picnic
+        if diff < self.MATE_MARGIN:
+            return pick, (
+                f"公园：野餐（队友按{ctx.mate_how}：划船 {ctx.mate_boats} / "
+                f"野餐 {ctx.mate_picnic}，只多 {diff} 人，"
+                f"不够 {self.MATE_MARGIN} 人）")
+        return "划船", (
+            f"公园：默认野餐 → 划船（队友比野餐多 {diff} 人，"
+            f"按{ctx.mate_how}：划船 {ctx.mate_boats} / 野餐 {ctx.mate_picnic}）")
 
     def pick_work_card(self, ctx):
         """餐厅选哪张卡打工。基类 = 按工资 / 队友排序；训练流周六「看一眼」趟
@@ -227,6 +274,18 @@ class TrainingStyle(Style):
     """
 
     name = "训练流"
+
+    def pick_park_normal(self, ctx):
+        """训练流按精力缺口选：≥ 周末野餐缺口 → 野餐，否则划船。
+
+        缺口读不到时返回 `(None, 理由)`，调用方走旧回退（周六划船 / 周日看精力）。
+        """
+        if ctx.stamina is None or ctx.stamina_max is None:
+            return None, "公园：缺口读不到 → 走旧回退"
+        gap = ctx.stamina_max - ctx.stamina
+        if gap >= ctx.eat_threshold:
+            return "野餐", f"公园：缺口 {gap} ≥ {ctx.eat_threshold} → 野餐补精力"
+        return "划船", f"公园：缺口 {gap} < {ctx.eat_threshold} → 划船（属性+）"
 
 
 class ShopStyle(Style):
