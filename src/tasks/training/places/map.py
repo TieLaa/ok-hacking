@@ -129,7 +129,7 @@ class MapPlace:
             stamina_max=bar.get("stamina_max"),
             visited=frozenset(st.visited),
             gacha_spent=st.gacha_spent,
-            row_gap=int(self.config.get("周末划船缺口")),
+            row_gap=int(self.config.get("训练流-周末划船缺口")),
         )
         places, why, final = styles.style_spec(self.style).weekend_places(ctx)
         if places is None:
@@ -144,7 +144,7 @@ class MapPlace:
         # 只有这种日子才可能被两个开关删空 —— 周日训练流只有公园，不算，
         # 那两个开关跟它没关系。
         had_venues = any(p in ("步行街", "游戏厅") for p in places)
-        if not self.config.get("允许进游戏厅"):
+        if not self.config.get("小游戏流-允许进游戏厅"):
             places = [p for p in places if p != "游戏厅"]
         if not self.config.get("允许进步行街"):
             places = [p for p in places if p != "步行街"]

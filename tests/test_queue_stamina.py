@@ -279,9 +279,9 @@ class StaminaRecoverDetail(unittest.TestCase):
     def test_fake_cap_is_ignored(self):
         """`15/15` 不能当专注上限：上限 15 → 差 0 → 该喝的时候不喝（事故根因②）。"""
         page = self.detail_page()
-        task = task_with(page, {"恢复专注下限": 45})
-        # 顶栏 15/150 才是真值 → 差 45-15 = 30
-        self.assertEqual(task.stamina_deficit(page), 30)
+        task = task_with(page)
+        # 顶栏 15/150 才是真值；开一局要 30 → 还差 15
+        self.assertEqual(task.stamina_deficit(page), 15)
 
     def test_close_point_comes_from_ocr_x(self):
         """关页要认 OCR 的 X（1448,105），不是固定坐标（1459,136，偏 31px 点空）。"""
@@ -305,7 +305,8 @@ class StaminaRecoverHandler(unittest.TestCase):
 
     def test_uses_small_bottle_and_never_diamond(self):
         page = recover_page()
-        task = task_with(page, {"恢复专注下限": 130})     # 107 → 差 23
+        task = task_with(page)                       # 107/150，还差 23
+        task._stamina_need = 23
         self.assertTrue(task.handle_stamina_recover(page))
         clicks = [a for a in task.actions if a[0] == "click_box"]
         self.assertEqual(len(clicks), 1)
@@ -316,7 +317,7 @@ class StaminaRecoverHandler(unittest.TestCase):
 
     def test_need_from_popup_overrides_floor(self):
         page = recover_page()
-        task = task_with(page, {"恢复专注下限": 10})
+        task = task_with(page)
         task._stamina_need = 40                      # 「还差40」弹窗进来的 → +30 不够
         self.assertTrue(task.handle_stamina_recover(page))
         clicks = [a for a in task.actions if a[0] == "click_box"]
@@ -326,7 +327,7 @@ class StaminaRecoverHandler(unittest.TestCase):
 
     def test_closes_page_when_nothing_to_drink(self):
         page = recover_page(owned_small=0, owned_big=0)
-        task = task_with(page, {"恢复专注下限": 130})
+        task = task_with(page)
         self.assertTrue(task.handle_stamina_recover(page))
         self.assertTrue(any(a[0] == "click" for a in task.actions))
         self.assertFalse(any(a[0] == "click_box" for a in task.actions))
@@ -361,7 +362,7 @@ class StaminaRecoverHandler(unittest.TestCase):
     def test_medicine_forbidden_recover_page_closes_without_drinking(self):
         """「允许吃专注药」= 关：恢复页（哪怕进了）也不喝，直接关页。"""
         page = recover_page()
-        task = task_with(page, {"自动恢复专注": False, "恢复专注下限": 130})
+        task = task_with(page, {"自动恢复专注": False})
         self.assertTrue(task.handle_stamina_recover(page))
         self.assertFalse(any(a[0] == "click_box" for a in task.actions))  # 没点「使用」
         self.assertTrue(any(a[0] == "click" for a in task.actions))       # 点了 X 关页

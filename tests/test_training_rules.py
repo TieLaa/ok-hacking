@@ -87,7 +87,7 @@ class FakeTask(DryRunTask):
         # 2026-11-01 之前这里是 `{"无队长不接开局": False, **config}` ——
         # 只留一个键，靠「每个调用处都写 config.get(key, 默认值)」兜底。
         # 去掉调用处的死默认值之后（默认值只留在 config_spec 一处），
-        # 缺键会拿到 **None**（falsy）→ 「允许进步行街」被当成 False，
+        # 缺键会拿到 **None**（falsy）→ 布尔开关被当成 False，
         # 一批测试挂掉。**夹具必须和生产一样**，否则测的就不是真实行为。
         #
         # 无队长闸门关掉：测试测的是各 handler 的判据/顺序，
@@ -740,7 +740,6 @@ class GachaRules(unittest.TestCase):
             box(258, 748, "餐厅", 104, 60), box(1075, 20, "169", 80, 40),
         ]
         task._texts = map_texts
-        task.config["允许进步行街"] = True
         task._style = "扭蛋流"
         task.day_state().date = (1, "五")
         task.handle_weekend(map_texts)
@@ -2554,7 +2553,7 @@ class ArcadeRules(unittest.TestCase):
     """游戏厅：「自动」= 打过的小游戏，只能买带它那几张（用户 2026-10-27）。"""
 
     def _task(self, texts, money=300, pay=True, quality="金"):
-        task = FakeTask(texts, config={"游戏厅付费": pay})
+        task = FakeTask(texts, config={"小游戏流-游戏厅付费（预留开关）": pay})
         task.read_money = lambda texts=None: money
         # 品质靠帧取色，测试里直接给结论（金/紫才买）
         task.card_quality_at = lambda cx, y1, y2: (quality, 30 if quality == "金" else 100, 150)
@@ -3134,7 +3133,7 @@ class ConfigSpecRules(unittest.TestCase):
         """training/ 里读的每个 config 键都在 spec 里声明了。
 
         缺键时 `config.get(key)` 返回 **None**（falsy）→
-        「允许进步行街」被当成 False —— 2026-11-01 去掉调用处默认值后，
+        布尔开关被当成 False —— 2026-11-01 去掉调用处默认值后，
         25 条测试就是这么挂的（FakeTask 的 config 只有 1 个键）。
         """
         import ast
@@ -3259,12 +3258,37 @@ class ConfigSpecRules(unittest.TestCase):
         """
         from src.tasks.training import config_spec
         task = FakeTask([])
-        self.assertEqual(task.config["允许进步行街"], True)
+        self.assertEqual(task.config["允许进步行街"], True)   # 内部键：GUI 隐藏，代码照读
         self.assertNotIn("休息精力阈值", task.config)   # 已升为策略参数（params.json）
         self.assertEqual(task.config["扭蛋清空精力阈值"], 30)
         self.assertEqual(task.config["训练流-周末野餐缺口"], 70)
         self.assertEqual(task.config["训练流-周末划船缺口"], 30)
+        self.assertEqual(task.config["最大局数"], 5)
         self.assertEqual(len(task.config), len(config_spec.ALL))
+
+    def test_hidden_spec_is_default_but_not_rendered(self):
+        """隐藏项只从 GUI 隐藏：默认值仍在、代码能读、config_type 标 hidden。"""
+        from src.tasks.training import config_spec
+        spec = {s.key: s for s in config_spec.ALL}
+        self.assertTrue(spec["允许进步行街"].hidden)
+        self.assertTrue(spec["比赛日处理"].hidden)
+        self.assertTrue(spec["技能标签优先"].hidden)
+        self.assertTrue(spec["点击无响应判定(秒)"].hidden)
+        self.assertTrue(spec["操作间隔(秒)"].hidden)
+        self.assertTrue(spec["单局最大操作数"].hidden)
+        self.assertTrue(spec["多角色队列"].hidden)
+        self.assertTrue(spec["队长队列"].hidden)
+        self.assertTrue(spec["队长下拉选择"].hidden)
+        for key in ("技能-彩色", "技能-金色", "技能-白色"):
+            self.assertTrue(spec[key].hidden)
+        self.assertEqual(config_spec.build_default_config()["允许进步行街"], True)
+        self.assertEqual(config_spec.build_config_type()["允许进步行街"],
+                         {"hidden": True})
+        self.assertTrue(config_spec.build_config_type()["比赛日处理"]["hidden"])
+        self.assertEqual(config_spec.build_config_type()["技能标签优先"],
+                         {"hidden": True})
+        for key in ("技能-彩色", "技能-金色", "技能-白色"):
+            self.assertEqual(config_spec.build_config_type()[key], {"hidden": True})
 
     def test_json_and_spec_agree(self):
         """configs/TrainingTask.json 的键集合与 spec 一致。
@@ -3303,9 +3327,9 @@ class ConfigSpecRules(unittest.TestCase):
         keys = {s.key for s in config_spec.ALL}
         self.assertEqual([k for k in keys if "体力" in k], [],
                          "配置键里不许再出现「体力」")
-        # 专注是独立资源，这两个键按资源命名（不是打错的「精力」）
+        # 专注是独立资源，这个键按资源命名（不是打错的「精力」）
         self.assertIn("自动恢复专注", keys)
-        self.assertIn("恢复专注下限", keys)
+        self.assertNotIn("恢复专注下限", keys)   # 2026-11-18 已删除，固定按开一局所需 30
         self.assertNotIn("自动恢复精力", keys)
 
         # 2026-11-14：「休息精力阈值」升为策略参数（params.json），不再是配置项，
@@ -3315,7 +3339,7 @@ class ConfigSpecRules(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "TrainingTask.json")
             with open(path, "w", encoding="utf-8") as f:
-                json.dump({"扭蛋清空体力阈值": 12, "允许进步行街": False,
+                json.dump({"扭蛋清空体力阈值": 12, "小游戏流-允许进游戏厅": False,
                            "自动恢复精力": False, "恢复精力下限": 45},
                           f, ensure_ascii=False)
             self.assertTrue(config_spec.migrate_saved_config("TrainingTask", folder))
@@ -3326,10 +3350,11 @@ class ConfigSpecRules(unittest.TestCase):
 
         self.assertEqual(saved["扭蛋清空精力阈值"], 12)
         self.assertNotIn("扭蛋清空体力阈值", saved)
-        self.assertEqual(saved["允许进步行街"], False)
-        # 2026-11-15：专注相关的两个键改名，值必须搬过去
+        self.assertEqual(saved["小游戏流-允许进游戏厅"], False)
+        # 2026-11-15：专注相关键改名，值必须搬过去
         self.assertEqual(saved["自动恢复专注"], False)
-        self.assertEqual(saved["恢复专注下限"], 45)
+        # 2026-11-18：恢复专注下限已删除，旧键和旧值一起丢掉
+        self.assertNotIn("恢复专注下限", saved)
         self.assertNotIn("自动恢复精力", saved)
         self.assertNotIn("恢复精力下限", saved)
 
@@ -3353,6 +3378,28 @@ class ConfigSpecRules(unittest.TestCase):
         self.assertEqual(saved["商店购买策略"], "红包→彩→金→紫")
         self.assertNotIn("购买策略", saved)
 
+    def test_legacy_match_mode_skip_is_mapped_to_auto(self):
+        """「总是跳过」没有实现，旧存档值搬到「自动」，下拉也不再显示它。"""
+        import json
+        import os
+        import tempfile
+        from src.tasks.training import config_spec
+        from src.tasks.ui import labels
+
+        self.assertNotIn("总是跳过", labels.MATCH_DAY_OPTIONS)
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "TrainingTask.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"比赛日处理": "总是跳过"}, f, ensure_ascii=False)
+            self.assertTrue(config_spec.migrate_saved_config("TrainingTask", folder))
+            with open(path, encoding="utf-8") as f:
+                saved = json.load(f)
+            # 再跑一次不该有任何改动（幂等）
+            self.assertFalse(config_spec.migrate_saved_config("TrainingTask", folder))
+
+        self.assertEqual(saved["比赛日处理"],
+                         "自动（先跳过，跳不了就进比赛加速）")
+
     def test_legacy_picnic_threshold_is_dropped(self):
         """2026-11-11 起「野餐阈值」是缺口（旧口径是绝对精力），旧值没有对应值，只删旧键。"""
         import json
@@ -3363,7 +3410,7 @@ class ConfigSpecRules(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "TrainingTask.json")
             with open(path, "w", encoding="utf-8") as f:
-                json.dump({"周末野餐阈值": 60, "允许进步行街": False}, f, ensure_ascii=False)
+                json.dump({"周末野餐阈值": 60, "小游戏流-允许进游戏厅": False}, f, ensure_ascii=False)
             self.assertTrue(config_spec.migrate_saved_config("TrainingTask", folder))
             with open(path, encoding="utf-8") as f:
                 saved = json.load(f)
@@ -3373,7 +3420,30 @@ class ConfigSpecRules(unittest.TestCase):
         self.assertNotIn("周末野餐阈值", saved)
         # 不搬值：新键由 verify_config 填默认 70（60 是绝对精力，不是缺口）
         self.assertNotIn("训练流-周末野餐缺口", saved)
-        self.assertEqual(saved["允许进步行街"], False)
+        self.assertEqual(saved["小游戏流-允许进游戏厅"], False)
+
+    def test_legacy_arcade_switch_is_renamed(self):
+        """2026-11-18：游戏厅两个开关加「小游戏流-」前缀，老存档的 false 不能丢。"""
+        import json
+        import os
+        import tempfile
+        from src.tasks.training import config_spec
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "TrainingTask.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"允许进游戏厅": False, "游戏厅付费": False},
+                          f, ensure_ascii=False)
+            self.assertTrue(config_spec.migrate_saved_config("TrainingTask", folder))
+            with open(path, encoding="utf-8") as f:
+                saved = json.load(f)
+            # 再跑一次不该有任何改动（幂等）
+            self.assertFalse(config_spec.migrate_saved_config("TrainingTask", folder))
+
+        self.assertEqual(saved["小游戏流-允许进游戏厅"], False)
+        self.assertEqual(saved["小游戏流-游戏厅付费（预留开关）"], False)
+        self.assertNotIn("允许进游戏厅", saved)
+        self.assertNotIn("游戏厅付费", saved)
 
 
 class PlaceModulesRules(unittest.TestCase):
@@ -4503,12 +4573,11 @@ class WeekendMapRules(unittest.TestCase):
                              task.today_places("六", st), style)
         self.assertEqual(list(style_spec("商店流").weekend_plan), ["餐厅"])
 
-    def _both_venue_switches_off(self, task):
-        task.config["允许进步行街"] = False
-        task.config["允许进游戏厅"] = False
+    def _arcade_switch_off(self, task):
+        task.config["小游戏流-允许进游戏厅"] = False
         return task
 
-    def test_both_venue_switches_off_uses_stamina_gap(self):
+    def test_training_gap_rule(self):
         """训练流缺口规则：缺口 ≥30 周六先去餐厅看一眼（单卡 ≥3 才打工），再回公园；
         周日直接公园。缺口 <30 餐厅打工、公园兜底。
 
@@ -4524,7 +4593,7 @@ class WeekendMapRules(unittest.TestCase):
             task = self.styled("训练流",
                                self._map("星期六") + [box(380, 16, stamina, 210, 53)])
             st = task.weekend_state()
-            self._both_venue_switches_off(task)
+            self._arcade_switch_off(task)
             self.assertEqual(task.today_places("六", st, task._texts), want, stamina)
 
     def test_sunday_big_gap_skips_restaurant(self):
@@ -4532,27 +4601,26 @@ class WeekendMapRules(unittest.TestCase):
         task = self.styled("训练流",
                            self._map("星期日") + [box(380, 16, "100/130", 210, 53)])
         st = task.weekend_state()
-        self._both_venue_switches_off(task)
+        self._arcade_switch_off(task)
         self.assertEqual(task.today_places("日", st, task._texts), ["公园"])
 
-    def test_both_venue_switches_off_without_stamina_goes_park(self):
+    def test_training_gap_unknown_stamina_goes_park(self):
         """读不到体力（精力/上限）→ 不赌消费，回退「餐厅 → 公园」。"""
         task = self.styled("训练流", self._map("星期六"))
         st = task.weekend_state()
-        self._both_venue_switches_off(task)
+        self._arcade_switch_off(task)
         self.assertEqual(task.today_places("六", st), ["餐厅", "公园"])
 
-    def test_training_style_ignores_venue_switches(self):
-        """训练流候选里没有步行街/游戏厅：两个开关关不关，结果一样。"""
-        for switches in (True, False):
+    def test_training_style_ignores_arcade_switch(self):
+        """训练流候选里没有步行街/游戏厅：游戏厅开关关不关，结果一样。"""
+        for switch in (True, False):
             task = self.styled("训练流",
                                self._map("星期六") + [box(380, 16, "110/130", 210, 53)])
             st = task.weekend_state()
-            task.config["允许进步行街"] = switches
-            task.config["允许进游戏厅"] = switches
+            task.config["小游戏流-允许进游戏厅"] = switch
             for day in ("六", "日"):
                 self.assertEqual(task.today_places(day, st, task._texts),
-                                 ["餐厅", "公园"], (switches, day))
+                                 ["餐厅", "公园"], (switch, day))
 
     def test_map_entry_marks_outing_used(self):
         """**进了地图**才记「今天的出行机会用掉了」（记账点在 handle_weekend）。"""
@@ -6357,7 +6425,7 @@ class StuckTakeover(unittest.TestCase):
     """卡住 → **立刻接管**（2026-11-04 用户口径，两条判据都要）。
 
     ① `点击无响应判定(秒)`（默认 3）：界面指纹超过 3 秒没变、而且这段时间里点过；
-    ② `单日最大点击数`（默认 100）：同一天点击超过 100 下、日期还没更新。
+    ② `单日最大点击数`（默认 50）：同一天点击超过 50 下、日期还没更新。
     两条都走 `flow.stuck_takeover`：存证 + 清当天拦路标记 + 点屏幕中央继续，
     同一天接管 3 次才停。**没有 2000 步的整局上限了**（用户明确去掉）。
     """
@@ -6666,7 +6734,7 @@ class PurchaseRules(unittest.TestCase):
             box(355, 484, price, 44, 32),
             box(615, 646, "确定", 71, 39),
         ]
-        task = FakeTask(texts, config={"游戏厅付费": True})
+        task = FakeTask(texts, config={"小游戏流-游戏厅付费（预留开关）": True})
         task.read_money = lambda texts=None: money
         task.card_quality_at = lambda cx, y1, y2: (quality, 30, 150)
         return task, texts

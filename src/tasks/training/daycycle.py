@@ -30,7 +30,6 @@
 import time
 
 from src.tasks.ui import Defs, labels
-from src.tasks.training import params
 from src.tasks.training.constants import (SHOP_ENTRY_TRIES,
                                           SHOP_SEASON_WEEKS)
 from src.tasks.training.strategy import styles

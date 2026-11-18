@@ -291,7 +291,7 @@ class TrainingFlowMixin:
         interval = float(self.config.get("操作间隔(秒)"))
         # 卡住判据（用户 2026-11-04 的**两条**口径，都做成「立刻接管」）：
         #   ① 点击后 `点击无响应判定(秒)`（默认 3 秒）界面没变化；
-        #   ② 同一天点击超过 `单日最大点击数`（默认 100）下。
+        #   ② 同一天点击超过 `单日最大点击数`（默认 50）下。
         # 见 flow.stuck_takeover。
         self.reset_day_home()
         self._sig_changed_at = time.time()
@@ -836,7 +836,7 @@ class TrainingFlowMixin:
     #
     #   判据①「点击无响应判定(秒)」=3：界面指纹超过 3 秒没变、而且这段时间里**点过**
     #        → 点了没反应（不是干等动画）→ 立刻接管；
-    #   判据②「单日最大点击数」=100：同一天累计点击超过 100 下还没换天 → 立刻接管。
+    #   判据②「单日最大点击数」=50：同一天累计点击超过 50 下还没换天 → 立刻接管。
     #        **日期一更新就归零**（`day_counter_step`），正常的一天碰不到。
     #
     # 「接管」= 存证 logs/debug/ + 清掉当天拦路标记 + 点屏幕中央继续推进，**不**停任务；
@@ -912,7 +912,7 @@ class TrainingFlowMixin:
         key = getattr(self, "_day_key", None)
         tag, why = None, ""
         noresp = float(self.config.get("点击无响应判定(秒)") or 3)
-        click_limit = max(1, int(self.config.get("单日最大点击数") or 100))
+        click_limit = max(1, int(self.config.get("单日最大点击数") or 50))
         changed_at = getattr(self, "_sig_changed_at", 0.0)
         clicked_at = getattr(self, "_last_click_at", 0.0)
         idle = time.time() - changed_at

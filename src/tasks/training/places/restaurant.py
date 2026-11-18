@@ -96,7 +96,7 @@ class RestaurantPlace:
             allow_fallback=allow_fallback,
             week=self.current_day()[0],
             gap=self.weekend_gap() or 0,
-            row_gap=int(self.config.get("周末划船缺口")),
+            row_gap=int(self.config.get("训练流-周末划船缺口")),
             mate_counts=tuple(counts),
         )
         ok, why = styles.style_spec(self.style).accept_work_card(ctx)
