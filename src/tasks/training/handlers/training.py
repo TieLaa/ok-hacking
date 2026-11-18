@@ -663,22 +663,20 @@ class TrainingHandlers:
         name = max(ranked, key=ranked.get)
         # 失败率只卡**第一名**（2026-11-17 用户口径）：分数最高的科目超限就休息，
         # 不再为了「不浪费一天」退而求其次去练低分科目。
+        # 2026-11-18：去掉「失败率超限改休息」开关 —— 超限一律休息，不再暴露硬练选项。
         top_fail = (results.get(name) or {}).get("fail")
         if top_fail is None or top_fail > fail_limit:
             rates = "、".join(f"{n} {v if v is not None else '?'}%"
                               for n, v in fails.items())
             shown = top_fail if top_fail is not None else "?"
-            if self.config.get("失败率超限改休息") or self.stamina_gate_day(texts):
-                self._force_rest = True
-                self._force_reason = (f"最优科目「{name}」失败率 {shown}%"
-                                      f" 超过上限 {fail_limit}%")
-                self.log_warning(f"{self._force_reason}（{rates}）"
-                                 " → 退出科目页，回主界面休息")
-                # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
-                self.exit_page(after_sleep=0.15)
-                return True
-            self.log_warning(f"最优科目「{name}」失败率 {shown}%"
-                             f" 超过上限 {fail_limit}%（配置为不休息，继续）")
+            self._force_rest = True
+            self._force_reason = (f"最优科目「{name}」失败率 {shown}%"
+                                  f" 超过上限 {fail_limit}%")
+            self.log_warning(f"{self._force_reason}（{rates}）"
+                             " → 退出科目页，回主界面休息")
+            # 右上角返回箭头回训练日主界面；下一拍 handle_training_day 强制休息
+            self.exit_page(after_sleep=0.15)
+            return True
         # 第4周周三（精力阈值保周四那一练）：第一名还要满足「训练后精力 ≥ 阈值」，
         # 不满足就休息，**不换第二名**（换人就是凑数）。
         if self.stamina_gate_day(texts):

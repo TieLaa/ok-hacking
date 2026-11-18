@@ -5651,18 +5651,6 @@ class StylePlanRules(unittest.TestCase):
         self.assertIn("最优科目", task._force_reason)
         self.assertIn("超过上限 50%", task._force_reason)
 
-    def test_stamina_gate_day_rests_even_when_config_says_continue(self):
-        """第4周周三：最优科目超限时即使配置「失败率超限改休息」关着也休息。
-
-        2026-11-17 用户口径：那天先过失败率门槛，再看训练后精力；
-        不满足就休息，不换第二名。
-        """
-        task = self._subject_page_task({"投射": 96, "意识": 60})
-        task.stamina_gate_day = lambda t: True
-        task.config["失败率超限改休息"] = False
-        self.assertTrue(task.handle_subject_select(task._texts))
-        self.assertTrue(task._force_rest)
-
     def test_stamina_gate_day_rests_when_best_cannot_keep_stamina(self):
         """第4周周三：最优科目训练后精力 < 50 → 休息，不换第二名（2026-11-17）。"""
         task = self._subject_page_task({"投射": 0, "意识": 0})
