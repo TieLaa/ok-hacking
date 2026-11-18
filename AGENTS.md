@@ -53,8 +53,12 @@
 - 所以正确顺序是：**先手动触发更新仓库的 `sync.yml`**（`gh workflow run sync.yml --repo TieLaa/ok-hacking-update -f tag=vX.Y.Z`），
   等它 success（更新仓库有了 tag），**再**去 CI 重跑 Build。
 - 只推源仓库 tag 不动更新仓库 → 已安装的用户更新时会停在旧版本。
-- 细节见 `docs/release.md`「更新仓库」一节。
+- 国内安装包只放 cnb **Release 附件**（`TieLaa/ok-hacking-dist`），不要放 `dist` 分支：
+  cnb raw 接口限制单文件 100 MiB，202 MiB 的包网页下载会 413。`Export release to cnb`
+  在 Build 成功后自动跑；失败再手动填 tag 补跑，跑完确认附件存在。
+- 细节见 `docs/release.md`「更新仓库」「安装包镜像」两节。
 <!-- 变更 2026-11-14 · opencode · 新增「发版」一节 · v0.1.18 的 Build 就是因为更新仓库没有 v0.1.18 tag 而失败；原文只在 docs/release.md 里，会话不主动读 -->
+<!-- 变更 2026-11-18 · opencode · 新增国内安装包发布口径 · v0.2.4 实测 cnb raw 100 MiB 上限，分支里的安装包网页无法下载，改走 Release 附件 -->
 
 ## 开跑指令（用户 2026-11-07 口径）
 <!-- 变更 2026-11-07 · opencode · 新增「开跑指令」一节 · 用户不再口头复述队长/目标分/吃药条件，改由会话读 configs/TrainingTask.json 自取 -->
