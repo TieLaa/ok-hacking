@@ -11,7 +11,7 @@ import re
 import time
 
 from src.tasks.ui import labels
-from src.tasks.training import attributes, roster
+from src.tasks.training import attributes, params, roster
 from src.tasks.training.constants import SHOP_SEASON_WEEKS
 from src.tasks.training.places import activities
 from src.tasks.training.places import street
@@ -259,8 +259,8 @@ class WeekendHandlers:
             required=attributes.required_attrs(info.get("position")),
             attrs=dict(self.info.get("attrs") or {}),
             caps=getattr(self, "_attr_caps", None) or {},
-            soft_cap=int(self.config.get("属性减半门槛")),
-            gap_limit=int(self.config.get("缺口排除阈值")))
+            soft_cap=int(params.attributes.soft_cap),
+            gap_limit=int(params.attributes.gap_limit))
         if pick is None:
             self.log_info(f"商店：{reason}，关店")
             self.finish_shop(texts)
@@ -583,7 +583,7 @@ class WeekendHandlers:
             required=attributes.required_attrs(info.get("position")),
             attrs=dict(self.info.get("attrs") or {}),
             caps=getattr(self, "_attr_caps", None) or {},
-            gap_limit=int(self.config.get("缺口排除阈值")),
+            gap_limit=int(params.attributes.gap_limit),
             week=bar.get("week"),
             day=bar.get("day"),
             allow_others=not probe)
@@ -661,7 +661,7 @@ class WeekendHandlers:
             required=attributes.required_attrs(info.get("position")),
             attrs=dict(self.info.get("attrs") or {}),
             caps=getattr(self, "_attr_caps", None) or {},
-            gap_limit=int(self.config.get("缺口排除阈值")))
+            gap_limit=int(params.attributes.gap_limit))
         if pick is None:
             self.log_warning(f"游戏厅：{reason}，退出")
             self.exit_page()

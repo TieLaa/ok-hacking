@@ -9,7 +9,7 @@ import time
 
 from ok.feature.Box import Box
 
-from src.tasks.training import attributes, page_signatures, roster
+from src.tasks.training import attributes, page_signatures, params, roster
 from src.tasks.ui import labels
 from src.tasks.ui import zoom_reread
 
@@ -584,8 +584,8 @@ class TrainingHandlers:
         # 缺口不足阈值排除，过减半门槛打 0.5 折。阈值从配置读。
         info = roster.lookup(self.configured_captain())
         required = attributes.required_attrs(info.get("position"))
-        soft_cap = int(self.config.get("属性减半门槛"))
-        gap_limit = int(self.config.get("缺口排除阈值"))
+        soft_cap = int(params.attributes.soft_cap)
+        gap_limit = int(params.attributes.gap_limit)
         caps = getattr(self, "_attr_caps", None) or {}
 
         def rank(name):
