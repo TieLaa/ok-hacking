@@ -37,9 +37,9 @@ def park_texts(week=1, day="日", stamina=None, race=False, no_day=False):
 
 class ParkDecisionBaseline(unittest.TestCase):
     def pick(self, style="训练流", week=1, day="日", stamina=None, mates=None,
-             race=False, no_day=False, config=None, chooser=None):
+             race=False, no_day=False, chooser=None):
         texts = park_texts(week, day, stamina, race, no_day)
-        task = FakeTask(texts, config=config)
+        task = FakeTask(texts)
         task._style = style
         st = task.weekend_state()
         counts = dict(mates or {})
@@ -50,7 +50,7 @@ class ParkDecisionBaseline(unittest.TestCase):
 
     # ---------- 训练流：按精力缺口 ----------
     def test_training_gap_thresholds(self):
-        """缺口 ≥ 周末野餐缺口（默认 70）→ 野餐；< 70 → 划船。"""
+        """缺口 ≥ 训练流-周末野餐缺口（默认 70）→ 野餐；< 70 → 划船。"""
         self.assertEqual(self.pick(stamina="130/130"), "划船")   # 缺口 0
         self.assertEqual(self.pick(stamina="100/130"), "划船")   # 缺口 30
         self.assertEqual(self.pick(stamina="61/130"), "划船")    # 缺口 69
@@ -80,8 +80,6 @@ class ParkDecisionBaseline(unittest.TestCase):
     # ---------- 其它流派：配置默认 + 队友 / 划船比赛 ----------
     def test_other_style_default(self):
         self.assertEqual(self.pick(style="扭蛋流", mates={}), "野餐")
-        self.assertEqual(self.pick(style="扭蛋流", mates={},
-                                   config={"公园选项": "划船"}), "划船")
         self.assertEqual(self.pick(style="商店流", mates={}), "野餐")
 
     def test_other_style_teammates(self):
@@ -92,12 +90,8 @@ class ParkDecisionBaseline(unittest.TestCase):
         self.assertEqual(self.pick(style="扭蛋流", mates={"划船": 0, "野餐": 2}), "野餐")
 
     def test_other_style_boat_race_badge(self):
-        """「划船比赛！」只在默认野餐时改判。"""
+        """「划船比赛！」贴在划船选项上 → 改判划船。"""
         self.assertEqual(self.pick(style="扭蛋流", race=True), "划船")
-        self.assertEqual(self.pick(style="扭蛋流", race=True,
-                                   config={"公园选项": "划船"}), "划船")
-        self.assertEqual(self.pick(style="扭蛋流", race=True,
-                                   config={"公园选项": "散步"}), "散步")
 
     def test_other_style_last_week_and_vacation(self):
         self.assertEqual(self.pick(style="扭蛋流", week=7, day="六"), "划船")

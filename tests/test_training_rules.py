@@ -3262,8 +3262,8 @@ class ConfigSpecRules(unittest.TestCase):
         self.assertEqual(task.config["允许进步行街"], True)
         self.assertNotIn("休息精力阈值", task.config)   # 已升为策略参数（params.json）
         self.assertEqual(task.config["扭蛋清空精力阈值"], 30)
-        self.assertEqual(task.config["周末野餐缺口"], 70)
-        self.assertEqual(task.config["周末划船缺口"], 30)
+        self.assertEqual(task.config["训练流-周末野餐缺口"], 70)
+        self.assertEqual(task.config["训练流-周末划船缺口"], 30)
         self.assertEqual(len(task.config), len(config_spec.ALL))
 
     def test_json_and_spec_agree(self):
@@ -3372,7 +3372,7 @@ class ConfigSpecRules(unittest.TestCase):
 
         self.assertNotIn("周末野餐阈值", saved)
         # 不搬值：新键由 verify_config 填默认 70（60 是绝对精力，不是缺口）
-        self.assertNotIn("周末野餐缺口", saved)
+        self.assertNotIn("训练流-周末野餐缺口", saved)
         self.assertEqual(saved["允许进步行街"], False)
 
 
@@ -3543,12 +3543,6 @@ class PlaceModulesRules(unittest.TestCase):
         """训练流缺口 110 ≥ 70 → 野餐；野餐队友多也不改成划船。"""
         task = self._park_task(mates={"划船": 0, "野餐": 2})
         self.assertEqual(task.park_order(task._texts, "训练流", day="六")[0], "野餐")
-
-    def test_park_keeps_configured_walk(self):
-        """配置里明确要「散步」的流派不受队友口径影响（只仲裁「野餐 vs 划船」）。"""
-        task = self._park_task(mates={"划船": 3, "野餐": 0}, style="扭蛋流")
-        task.config["公园选项"] = "散步"
-        self.assertEqual(task.park_order(task._texts, "扭蛋流", day="日")[0], "散步")
 
     def test_park_counts_faces_on_real_frame(self):
         """真帧（docs/shots/park_boat_mates.png，1549x871，第1周周日 40/130）：

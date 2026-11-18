@@ -224,17 +224,18 @@ class Style:
         return self.pick_park_normal(ctx)
 
     def pick_park_normal(self, ctx):
-        """③ 平时怎么选。基类 = 配置默认 + 队友 / 划船比赛改判。"""
-        pick = ctx.default_pick
-        if pick != "野餐":
-            return pick, f"公园：配置默认「{pick}」"
+        """③ 平时怎么选：划船比赛 / 划船队友多 → 划船；否则野餐补精力。
+
+        2026-11-18 起「公园选项」配置已删除，默认固定野餐；
+        只有这两条会改判（其它流派的队友优先口径不变）。
+        """
         if ctx.boat_race:
             return "划船", "公园：「划船比赛！」添头 → 划船（比普通划船多 +10 属性）"
         if ctx.mate_boats is None or ctx.mate_picnic is None:
-            return pick, "公园：没数到队友 → 按配置默认"
+            return "野餐", "公园：没数到队友 → 默认野餐"
         diff = ctx.mate_boats - ctx.mate_picnic
         if diff < self.MATE_MARGIN:
-            return pick, (
+            return "野餐", (
                 f"公园：野餐（队友按{ctx.mate_how}：划船 {ctx.mate_boats} / "
                 f"野餐 {ctx.mate_picnic}，只多 {diff} 人，"
                 f"不够 {self.MATE_MARGIN} 人）")
@@ -289,7 +290,7 @@ class TrainingStyle(Style):
         """训练流周末：按精力缺口选今天做什么。
 
         缺口 = 上限 − 当前：
-          < 周末划船缺口           → 餐厅 → 公园（打不了工还有公园兜底）
+          < 训练流-周末划船缺口           → 餐厅 → 公园（打不了工还有公园兜底）
           ≥ 缺口 · 周六            → 餐厅 → 公园（单卡队友 ≥3 人才真打工，分散回公园）
           ≥ 缺口 · 周日            → 公园（精力花光，下周训练日会少一天）
           第 7 周周六 · 钱 > 保留线 → 步行街 → 餐厅（刷最后一次彩卡）
@@ -323,7 +324,7 @@ class TrainingStyle(Style):
             "（零用钱留给商店的牛奶/秘籍，周末不去步行街/游戏厅）"), True
 
     def pick_park_normal(self, ctx):
-        """训练流按精力缺口选：≥ 周末野餐缺口 → 野餐，否则划船。
+        """训练流按精力缺口选：≥ 训练流-周末野餐缺口 → 野餐，否则划船。
 
         缺口读不到时返回 `(None, 理由)`，调用方走旧回退（周六划船 / 周日看精力）。
         """
@@ -340,7 +341,7 @@ class TrainingStyle(Style):
         条件（全部成立才退出餐厅）：
           - 主计划趟（急招插队趟不看，双倍工资本身就不亏）；
           - 第 7 周之前（最后一周没有下一次出行，打了也白打）；
-          - 缺口 ≥ 周末划船缺口（缺口小根本不会走「先看餐厅」这条路）；
+          - 缺口 ≥ 训练流-周末划船缺口（缺口小根本不会走「先看餐厅」这条路）；
           - 两张卡的队友都 <3 人（分散 2+2 = 普通工资）。
         """
         if not ctx.allow_fallback:

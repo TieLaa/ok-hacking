@@ -30,8 +30,7 @@ class ParkContext(NamedTuple):
     mate_picnic: int | None      # 野餐队友数
     mate_how: str                # 队友怎么数的（日志用：脸 / 深蓝）
     boat_race: bool              # 「划船比赛！」贴在划船选项上
-    default_pick: str            # 配置「公园选项」
-    eat_threshold: int           # 配置「周末野餐缺口」
+    eat_threshold: int           # 配置「训练流-周末野餐缺口」
 
 
 class WorkContext(NamedTuple):
@@ -41,7 +40,7 @@ class WorkContext(NamedTuple):
     allow_fallback: bool         # True = 主计划趟；False = 急招插队趟
     week: int | None
     gap: int                     # 精力缺口（上限−当前）；读不到按 0
-    row_gap: int                 # 配置「周末划船缺口」
+    row_gap: int                 # 配置「训练流-周末划船缺口」
     mate_counts: tuple[int, ...] # 两张卡的队友数
 
 
@@ -65,7 +64,7 @@ class WeekendContext(NamedTuple):
     stamina_max: int | None
     visited: frozenset[str]      # 今天去过哪些地点
     gacha_spent: bool            # 今天在步行街买到卡了没有
-    row_gap: int                 # 配置「周末划船缺口」
+    row_gap: int                 # 配置「训练流-周末划船缺口」
 
 
 class VenueContext(NamedTuple):
