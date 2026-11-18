@@ -90,10 +90,10 @@ class FakeTask(DryRunTask):
         # 缺键会拿到 **None**（falsy）→ 「允许进步行街」被当成 False，
         # 一批测试挂掉。**夹具必须和生产一样**，否则测的就不是真实行为。
         #
-        # 「无队长不接开局」关掉：测试测的是各 handler 的判据/顺序，
+        # 无队长闸门关掉：测试测的是各 handler 的判据/顺序，
         # 不是「无队长模式」这道闸门；不关掉的话所有开局页 handler
-        # 都会直接停手，测什么都没动作。
-        self.config["无队长不接开局"] = False
+        # 都会直接停手，测什么都没动作（2026-11-18 起是内部常量，不再是配置）。
+        self.NO_CAPTAIN_GUARD = False
         self.config.update(config or {})
         self._qualities = list(qualities or [])
         self._mates = list(mates or [])
@@ -2951,8 +2951,8 @@ class SubjectRanking(unittest.TestCase):
         self.assertIsNotNone(subject_priority(2.0, 1400, 1575, 100))
 
     def test_soft_cap_halves_score(self):
-        """2026-11-13：当前值 >= 1300 → score × 0.5。"""
-        low = subject_priority(2.0, 1200, 1575, 100)
+        """2026-11-13：当前值 >= 1200 → score × 0.5（2026-11-18 门槛 1300 → 1200）。"""
+        low = subject_priority(2.0, 1100, 1575, 100)
         high = subject_priority(2.0, 1400, 1575, 100)
         self.assertEqual(low[0], 2.0)
         self.assertEqual(high[0], 1.0)
@@ -2963,7 +2963,7 @@ class SubjectRanking(unittest.TestCase):
         r = {"mates": 2, "equip": 0, "manager": 0, "gold": 0, "color": 0}
         self.assertEqual(task.subject_score(r), 2.0)
         self.assertEqual(task.subject_score(r, required=True), 2.5)
-        # 过 1300 后：(2.5) × 0.5 = 1.25
+        # 过 1200 后：(2.5) × 0.5 = 1.25
         key = subject_priority(task.subject_score(r, required=True),
                                1400, 1575, 100)
         self.assertEqual(key[0], 1.25)

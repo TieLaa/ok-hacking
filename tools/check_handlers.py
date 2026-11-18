@@ -116,11 +116,11 @@ class DryRunTask(TrainingTask):
         # 缺键就会拿到 **None**（falsy）→ 「允许进步行街」被当成 False，
         # 25 条测试挂掉。**夹具必须和生产一样**，否则测的就不是真实行为。
         #
-        # 例外：`无队长不接开局` 关掉，否则空队长会触发「只跑已有局」的闸门，
-        # 开局页全部不再执行，回归就测不到启程/选人/笔记/器材。
+        # 例外：无队长闸门关掉，否则空队长会触发「只跑已有局」的闸门，
+        # 开局页全部不再执行，回归就测不到启程/选人/笔记/器材（2026-11-18 起是内部常量）。
         from src.tasks.training import config_spec
         self.config = dict(config_spec.build_default_config())
-        self.config["无队长不接开局"] = False
+        self.NO_CAPTAIN_GUARD = False
         self.actions = []
         self.logs = []
         # 被「让路闸门」拦下的点击（`click(..., skip=True)` 时记这里）。

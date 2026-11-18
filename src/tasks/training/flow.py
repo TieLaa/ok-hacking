@@ -98,6 +98,10 @@ def _stall_limits():
 
 class TrainingFlowMixin:
 
+    # 无队长时是否拦开局（2026-10-31 用户口径：默认拦，2026-11-18 起不暴露成配置）。
+    # 回归桩（FakeTask / DryRunTask）把它设成 False，否则空队长会触发「只跑已有局」闸门。
+    NO_CAPTAIN_GUARD = True
+
     def input_blocked(self):
         """输入层每一下动作前会问一次：现在该不该动手（True = 别动）。
 
@@ -1141,13 +1145,13 @@ class TrainingFlowMixin:
 
     @property
     def no_captain_mode(self):
-        """无队长模式：这次 run 没有「指定队长」（队列参数也算）且开关打开。
+        """无队长模式：这次 run 没有「指定队长」（队列参数也算）。
 
         用户 2026-10-31 口径：取消勾选队长 = 不接开局，只跑已经手动开好的局。
-        开关 `无队长不接开局` 默认 True；回归桩（tools/check_handlers.py）关掉它，
-        这样测试仍然按旧的「自动选第一个」流程跑。
+        2026-11-18：不再暴露成配置，**默认永远拦**（内部常量 `NO_CAPTAIN_GUARD`）；
+        回归桩把它设成 False，这样测试仍然按旧的「自动选第一个」流程跑。
         """
-        if not self.config.get("无队长不接开局"):
+        if not self.NO_CAPTAIN_GUARD:
             return False
         return not self.configured_captain()
 
