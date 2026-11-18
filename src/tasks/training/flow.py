@@ -1083,7 +1083,7 @@ class TrainingFlowMixin:
         # 顺序遍历里沉淀了踩坑的教训（「共用『下一步/确定』的必须排在专属
         # handler 之后」），所以分类器只当**加速器**，绝不排除任何 handler ——
         # 最坏情况 = 现在的行为（多跑几个 handler 的判据而已）。
-        if page is not None and self.config.get("页面分类路由"):
+        if page is not None:
             for first in self._routed_handlers(page):
                 if self._try_handler(first, texts, frame):
                     return True
