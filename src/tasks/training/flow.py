@@ -1058,7 +1058,8 @@ class TrainingFlowMixin:
 
         失败时只记 debug，绝不影响主流程。
         """
-        from src.tasks.training.pages import classify_page      # 局部导入，避开导入环
+        from src.tasks.training.pages import (classify_page,      # 局部导入，避开导入环
+                                              only_expected_overlaps)
 
         try:
             page, candidates = classify_page(self, texts)
@@ -1070,7 +1071,8 @@ class TrainingFlowMixin:
         if page != prev:
             self.log_info(f"页面分类：{prev or '?'} → {page or 'unknown'}"
                           f"（候选 {list(candidates)}）")
-        elif len(candidates) > 1 and candidates != getattr(self, "_page_conflict", ()):
+        elif (len(candidates) > 1 and candidates != getattr(self, "_page_conflict", ())
+              and not only_expected_overlaps(page, candidates)):
             self.log_warning(f"页面分类冲突：{list(candidates)} → 暂取 {page}")
         self._page_conflict = candidates
         return page

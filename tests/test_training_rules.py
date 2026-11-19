@@ -2071,6 +2071,18 @@ class EventCardChoices(unittest.TestCase):
 class PageRegistry(unittest.TestCase):
     """旁路页面分类（2026-11-13 阶段 1）：页面用 UI 锚点认，正文长句不参与。"""
 
+    def test_known_overlap_pairs_are_expected(self):
+        """已知「包含关系」不报冲突；新的重叠仍然要报。"""
+        from src.tasks.training.pages import only_expected_overlaps
+        self.assertTrue(only_expected_overlaps(
+            "register_player", ("register_player", "result")))
+        self.assertTrue(only_expected_overlaps(
+            "match_result", ("match_result", "popup")))
+        self.assertTrue(only_expected_overlaps(
+            "park", ("park", "park_detail")))
+        self.assertFalse(only_expected_overlaps(
+            "lobby", ("lobby", "popup")))
+
     def test_empty_page(self):
         from src.tasks.training.pages import classify_page
         task = FakeTask([])
