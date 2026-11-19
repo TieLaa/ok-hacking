@@ -497,11 +497,10 @@ class TrainingHandlers:
             self.log_warning("认不出任何训练科目")
             return False
 
-        # 候选科目 = 有橙色小人 **或** 按钮外圈已经亮（金框/彩框）**或** 当前已选。
-        # 2026-10-27 16:48 事故：当前已选「投射」预读 队友 2｜经理 1｜装备 3｜
-        # 满经验 1｜金框 1 = 8.30，但小人图标漏判 → 不在 with_team → 连候选都不是，
-        # 最后选了 1.00 的「防守」。用户指出：**金框已经识别到了，是筛选逻辑的锅**，
-        # 所以候选池必须把「圈已经亮了」的科目一起收进来，而不是只信小人图标。
+        # 候选科目 = 有橙色小人 **或** 按钮外圈已经亮（金框/彩框）。
+        # 2026-11-19 用户口径：`current` 不再单独拥有候选资格——没有队友标志的
+        # 当前科目不该靠“当前已选”进入比较。它仍会先读面板，但只有自己也在
+        # with_team / ring_hit 里时才参与选择。
         icons = self.find_teammate_icons()
         with_team = [n for n in boxes if self.has_teammate_icon(boxes[n], icons)]
         ring_hit = [n for n in boxes
@@ -509,7 +508,7 @@ class TrainingHandlers:
                     or self.has_crit_border(texts, subject=n, quiet=True)]
         current = self.current_subject(texts)
         candidates = [n for n in boxes
-                      if n in with_team or n in ring_hit or n == current]
+                      if n in with_team or n in ring_hit]
         self.log_info("候选科目（小人 " + ("、".join(with_team) if with_team else "无")
                       + "｜圈亮 " + ("、".join(ring_hit) if ring_hit else "无")
                       + "｜当前 " + (current or "无") + "）：" + "、".join(candidates))

@@ -5693,6 +5693,8 @@ class StylePlanRules(unittest.TestCase):
     def test_high_first_frame_fail_still_probes_and_trains_other_subject(self):
         """首帧投射 96% 也要先探完候选：分数最高的意识 0% 就练意识。"""
         task = self._subject_page_task({"投射": 96, "意识": 0})
+        # 当前科目也有队友标志：它仍要参与比较，但失败率 96% 不能拦住意识。
+        task.find_teammate_icons = lambda *a, **k: [(1820, 300), (1820, 420)]
         self.assertTrue(task.handle_subject_select(task._texts))
         self.assertFalse(task._force_rest)
         self.assertTrue(any("失败率：投射 96%、意识 0%" in m for m in task.logs),
@@ -5700,6 +5702,16 @@ class StylePlanRules(unittest.TestCase):
         self.assertTrue(any("训练「意识」（失败率 0%）" in m for m in task.logs),
                         task.logs)
         self.assertEqual(task.actions[-1], ("button", "decide"))
+
+    def test_current_without_teammate_is_not_candidate(self):
+        """2026-11-19：current 没有队友标志时，不再靠「当前已选」进候选池。"""
+        task = self._subject_page_task({"投射": 0, "意识": 0})
+        self.assertTrue(task.handle_subject_select(task._texts))
+        self.assertTrue(any(
+            "候选科目（小人 意识｜圈亮 无｜当前 投射）：意识" in m
+            for m in task.logs), task.logs)
+        self.assertFalse(any("探测「投射」" in m for m in task.logs))
+        self.assertFalse(any("训练「投射」" in m for m in task.logs))
 
     def test_best_subject_over_limit_forces_rest(self):
         """分数最高的科目超限 → 直接休息，不再退而求其次练低分科目。
