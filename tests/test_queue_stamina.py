@@ -615,6 +615,20 @@ class AttrPanelReading(unittest.TestCase):
         task = task_with(page, size=(1549, 871))
         self.assertNotIn("运控", task.read_attribute_values(page))
 
+    def test_subject_list_label_is_not_taken_as_panel_name(self):
+        """右侧科目按钮上的同名文字不能被当成本格名字（2026-11-19 实测）。
+
+        那一帧面板里是 `意识C280/1600`，右侧科目按钮上另有一个整词 `意识`，
+        而且 OCR 结果里排在前面。旧逻辑先命中按钮那个 → 去别的行找值 → 整格丢。
+        """
+        page = [
+            box(1134, 697, "意识", 88, 53),          # 科目按钮上的同名文字
+            box(630, 789, "意识C280/1600", 291, 58),  # 面板这一行（名字和数值黏连）
+            box(177, 673, "投射", 75, 44), box(308, 675, "710/2238", 157, 45),
+        ]
+        task = task_with(page, size=(1549, 871))
+        self.assertEqual(task.read_attribute_values(page).get("意识"), 280)
+
     def test_glitched_frame_leaves_that_cell_alone(self):
         page = self.panel(tinted=True)
         task = task_with(page, size=(1549, 871))
