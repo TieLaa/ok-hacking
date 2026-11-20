@@ -364,15 +364,15 @@ class TrainingFlowMixin:
                 self._last_click_at = 0.0
             self._tick_at = now
 
+            # 同一天计数器：读到新日期就归零（用户口径：「日期更新以后计数器重置」）
+            self.day_counter_step(texts)
+
             # 界面指纹：同一页面每拍都一样；用于 ①「3 秒无响应」判据 ② unknown 存证限流
             sig = self._signature(texts)
             changed = sig != last_sig
             if changed:
                 last_sig = sig
                 self._sig_changed_at = time.time()
-
-            # 同一天计数器：读到新日期就归零（用户口径：「日期更新以后计数器重置」）
-            self.day_counter_step(texts)
 
             # ---- 卡住就**立刻接管**（用户 2026-11-04 两条口径）----
             # ① 点击后 3 秒界面没变化；② 同一天点击超过 100 下。
@@ -864,6 +864,9 @@ class TrainingFlowMixin:
                     f"（上一天点击 {getattr(self, '_day_clicks', 0)} 下 / "
                     f"接管 {getattr(self, '_day_fixes', 0)} 次）")
             self._day_key = key
+            # 换天=新的训练日主界面。_hub_ticks 是「这页已经看到第几拍」，
+            # 不清零会让第一天的一拍被当成“不是第一拍”，直接在半黑画面上决策。
+            self._hub_ticks = 0
             self._day_clicks = 0
             self._day_fixes = 0
         return key

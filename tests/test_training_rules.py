@@ -6484,6 +6484,17 @@ class StuckTakeover(unittest.TestCase):
 
     # ---------- 判据②：同一天点击数 ----------
 
+    def test_day_change_resets_training_hub_ticks(self):
+        """换天要把训练日主界面的“第几拍”清零，否则第一拍会跳过等待。"""
+        task = self.make()
+        self.day_key(task)
+        task._hub_ticks = 5
+        texts = [box(40, 12, "第2周", 120, 40),
+                 box(190, 12, "星期三", 130, 40),
+                 box(1450, 950, "训练", 160, 60)]
+        self.assertEqual(self.day_key(task, texts), (2, "三"))
+        self.assertEqual(task._hub_ticks, 0)
+
     def test_click_count_resets_on_new_day(self):
         """日期更新以后计数器归零（用户口径）：第二天从头数。"""
         task = self.make()
