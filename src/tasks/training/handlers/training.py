@@ -497,18 +497,18 @@ class TrainingHandlers:
             self.log_warning("认不出任何训练科目")
             return False
 
-        # 候选科目 = 有橙色小人 **或** 按钮外圈已经亮（金框/彩框）。
-        # 2026-11-19 用户口径：`current` 不再单独拥有候选资格——没有队友标志的
-        # 当前科目不该靠“当前已选”进入比较。它仍会先读面板，但只有自己也在
-        # with_team / ring_hit 里时才参与选择。
+        # 候选科目 = **有橙色小人**（用户 2026-11-20 口径）。
+        # 队友数量（以及表情一致数量）才是倍率的基数；只有金框/彩框、没有队友，
+        # 等于光有乘数没有基数，拿不到高分 → 不能单独进候选。
+        # `current` 同样不单独拥有候选资格（2026-11-19 口径）。
         icons = self.find_teammate_icons()
         with_team = [n for n in boxes if self.has_teammate_icon(boxes[n], icons)]
+        # 圈亮只用来打日志（诊断「为什么这个科目被排除」），不再进候选池。
         ring_hit = [n for n in boxes
                     if self.has_gold_border(texts, subject=n, quiet=True)
                     or self.has_crit_border(texts, subject=n, quiet=True)]
         current = self.current_subject(texts)
-        candidates = [n for n in boxes
-                      if n in with_team or n in ring_hit]
+        candidates = list(with_team)
         self.log_info("候选科目（小人 " + ("、".join(with_team) if with_team else "无")
                       + "｜圈亮 " + ("、".join(ring_hit) if ring_hit else "无")
                       + "｜当前 " + (current or "无") + "）：" + "、".join(candidates))
@@ -598,7 +598,7 @@ class TrainingHandlers:
                 return None
             return (0, *pri)
 
-        # 候选池 = 小人 / 金边 / 彩边 / 当前已选（用户 2026-10-27：三种信号都算）
+        # 候选池 = **有队友的科目**（用户 2026-11-20：没有队友不能入选）。
         # 但只保留**真正探测过**的科目：探测失败的名字没有分数，留在池里等于按 0 分
         # 跟别人比，还可能被选去盲点；一个都没探到时退回当前已选，别乱点。
         pool = [n for n in candidates if n in results]

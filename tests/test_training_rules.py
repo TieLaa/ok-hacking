@@ -5725,6 +5725,16 @@ class StylePlanRules(unittest.TestCase):
         self.assertFalse(any("探测「投射」" in m for m in task.logs))
         self.assertFalse(any("训练「投射」" in m for m in task.logs))
 
+    def test_ring_only_subject_is_not_candidate(self):
+        """2026-11-20：只有金框、没有队友的科目不能入选（队友才是倍率基数）。"""
+        task = self._subject_page_task({"投射": 0, "意识": 0})
+        task.has_gold_border = lambda texts, subject=None, **k: subject == "投射"
+        self.assertTrue(task.handle_subject_select(task._texts))
+        self.assertTrue(any(
+            "候选科目（小人 意识｜圈亮 投射｜当前 投射）：意识" in m
+            for m in task.logs), task.logs)
+        self.assertFalse(any("训练「投射」" in m for m in task.logs))
+
     def test_best_subject_over_limit_forces_rest(self):
         """分数最高的科目超限 → 直接休息，不再退而求其次练低分科目。
 
