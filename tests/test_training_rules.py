@@ -7998,6 +7998,17 @@ class TalentStockEvent(unittest.TestCase):
         self.assertTrue(task.handle_event_choice(texts))
         self.assertEqual(task.actions[-1][1], "精力恢复")
 
+    def test_weekend_hub_after_rest_goes_out(self):
+        """2026-11-20：周末加训页没有休息，训练退出来后点出行，不能再点回训练。"""
+        texts = [box(69, 165, "校门口", 115, 34),
+                 box(686, 322, "出行", 176, 54),
+                 box(684, 434, "训练", 179, 56)]
+        task = FakeTask(texts)
+        task._force_rest = True
+        self.assertTrue(task.handle_event_choice(texts))
+        self.assertEqual(task.actions[-1][1], "出行")
+        self.assertFalse(task._force_rest)
+
     def test_three_choice_prefers_attribute_cap(self):
         """2026-11-20：精力恢复 / 属性上限 / 资金援助 → 先选属性上限。"""
         texts = [box(69, 165, "器材事件", 115, 34),

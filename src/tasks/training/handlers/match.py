@@ -1042,7 +1042,17 @@ class MatchHandlers:
             stamina_opt = next((t for t in group if "精力恢复" in t.name), None)
             money_opt = next((t for t in group if "资金援助" in t.name), None)
             limit_opt = next((t for t in group if "属性上限" in t.name), None)
-            if limit_opt is not None and (stamina_opt is not None or money_opt is not None):
+            names = [t.name.strip() for t in group]
+            weekend_hub = (any("出行" in n for n in names)
+                           and any("训练" in n for n in names)
+                           and not any("休息" in n for n in names))
+            if weekend_hub and getattr(self, "_force_rest", False):
+                # 2026-11-20 用户口径：周末加训页没有「休息」，科目页判失败率超限
+                # 退出来之后就直接「出行」；再点回「训练」会来回死循环。
+                self._force_rest = False
+                pick = next(t for t in group if "出行" in t.name)
+                why = "训练退出来 → 出行（周末没有休息）"
+            elif limit_opt is not None and (stamina_opt is not None or money_opt is not None):
                 # 2026-11-20 用户口径：这一组里有「属性上限」就先选上限，
                 # 不看精力（器材事件三选一：精力恢复 / 属性上限 / 资金援助）。
                 pick = limit_opt
