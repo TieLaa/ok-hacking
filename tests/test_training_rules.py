@@ -480,6 +480,21 @@ class GachaRules(unittest.TestCase):
         names = [i["name"] for i in task.read_shop_items(texts)]
         self.assertEqual(names, ["第一行左", "第一行右", "第二行左"])
 
+    def test_cash_item_survives_missing_zero_price(self):
+        """0 元价格框 OCR 漏读时，「老板的馈赠」不能被整件丢掉（2026-11-20 实跑）。"""
+        w, h = 1920, 1080
+        texts = [
+            box(int(w * 0.223) - 60, int(h * 0.277) - 20, "老板的馈赠", 120, 40),
+            box(int(w * 0.40) - 60, int(h * 0.277) - 20, "投射秘籍++", 120, 40),
+            box(int(w * 0.40) - 30, int(h * 0.479) - 15, "130", 60, 30),
+        ]
+        task = FakeTask(texts)
+        items = task.read_shop_items(texts)
+        names = [i["name"] for i in items]
+        self.assertIn("老板的馈赠", names)
+        gift = next(i for i in items if i["name"] == "老板的馈赠")
+        self.assertEqual(gift["price"], 0)
+
     def test_shop_detail_title_tolerates_one_wrong_char(self):
         """详情标题 OCR 差一个字也要认（大乐边 vs 大乐透）。"""
         from src.tasks.ui import labels
