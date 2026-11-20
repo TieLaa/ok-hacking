@@ -306,9 +306,9 @@ class MatchHandlers:
         这一页读不到 → **评分一次都没记**（队列里永远停在上一次的 7096）→
         一局结束后没人收账 → 大厅又开新局，表现就是「明明 7700 分了还在跑」。
 
-        用户的判定口径（`docs/RULES.md §12`）就是「这个球员的评分 ≥ 目标」，
-        所以这里读到分就立刻记进 `_run_score`，达标直接把本局标记为结束
-        （`_round_done`），让 `advance_queue_after_round` 去收账并提前终止。
+        用户的判定口径（`docs/RULES.md §12`）就是「这个球员的评分 ≥ 目标」。
+        2026-11-20 用户口径：**这一页就是最终得分页** —— 停 1 秒读到最终值后
+        写进 `_run_score`，局末由 `advance_queue_after_round` 收账。
         """
         score, rating = self.read_training_score(texts)
         if score is None:
@@ -317,16 +317,24 @@ class MatchHandlers:
             return True                          # 刚点过，等翻页
         if not getattr(self, "_round_score_seen", False):
             self._round_score_seen = True
+            # 用户 2026-11-20 口径（B）：**这一页就是最终得分页**，判分取它。
+            # 数字是滚动出来的（实测 5245→9016、6978→…），所以停 1 秒再读一次，
+            # 拿最终值；读不到就沿用第一拍，不空等。
+            self.sleep(1.0)
+            self.next_frame()
+            settled_texts = self._ocr_region()
+            settled, settled_rating = self.read_training_score(settled_texts)
+            if settled is not None:
+                texts, score, rating = settled_texts, settled, settled_rating
+            self._run_score = score
             queue = getattr(self, "_queue", None)
             target = queue.target if queue is not None else None
-            self.log_info(f"本局训练评分：{score}（评级 {rating or '?'}）/ 目标 {target}"
-                          "（仅参考，不入账；判分以注册球员页为准）",
-                          notify=True)
-            # 2026-11-06 口径修正：**这一页的分数不再写进 `_run_score`**。
-            # 用户口径的判分点是「恭喜获得/训练奖励」页上注册球员的球员评分
-            # （含累积加成，本局实测同局两个数：弹层 8026 vs 注册球员 8380）。
-            # 旧代码先到先得，弹层把注册球员页的分数短路掉，导致第 5 局
-            # 8380 已达标却按 7420 继续白跑了 9 局。这里只留日志和参考。
+            self.log_info(f"本局评分：{score}（评级 {rating or '?'}）/ 目标 {target}"
+                          "（训练评分页，停 1 秒后的最终值）", notify=True)
+            # 2026-11-06 曾把判分点改到注册球员页（弹层 8026 vs 注册球员 8380）；
+            # 2026-11-20 用户重新确认「这一页就是最终得分页」，且实测两页最终值一致
+            # （训练评分 5245→9016 / 注册球员 9016），所以判分回到这里：
+            # `note_run_score` 看到 `_run_score` 已有值就不再覆盖。
         self._score_click_at = time.time()
         # 推进这一页：优先点「点击屏幕继续」的文字框，认不出点屏幕中央（这页点哪都走）
         target_box = self.match_text(texts, labels.TAP_TO_CONTINUE_TEXTS)

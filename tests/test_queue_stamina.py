@@ -397,18 +397,27 @@ class TrainingScorePage(unittest.TestCase):
         task = self.make(texts)
         self.assertEqual(task.read_training_score(texts), (7728, "SS"))
 
-    def test_met_score_page_does_not_record(self):
-        """2026-11-06 口径：训练评分弹层的分数**不入账**（只参考）。
-
-        判分点 = 注册球员页的球员评分（含累积加成，同局实测弹层 8026 vs
-        注册球员 8380）；弹层先到先得会短路注册球员页，导致达标了还白跑。
-        """
+    def test_final_score_is_recorded(self):
+        """2026-11-20 口径：这一页就是最终得分页，读到最终值后写进 `_run_score`。"""
         texts = self.page()
         task = self.make(texts)
         self.assertTrue(task.handle_training_score(texts))
-        self.assertIsNone(task._run_score)         # 不入账
+        self.assertEqual(task._run_score, 7728)
         self.assertFalse(getattr(task, "_round_done", False))
         self.assertEqual(task.actions[-1][0], "click_box")  # 但要推进翻页
+
+    def test_reads_settled_value_not_first_frame(self):
+        """第一拍是滚动值（7728），停 1 秒后重读最终值（8870）。"""
+        first = self.page()
+        final = [box(600, 300, "训练评分", 200, 60),
+                 box(700, 400, "8870", 160, 70),
+                 box(760, 480, "SS", 90, 50),
+                 box(650, 700, "点击屏幕继续", 300, 50)]
+        task = self.make(first)
+        task._ocr_region = lambda *a, **k: final
+        self.assertTrue(task.handle_training_score(first))
+        self.assertEqual(task._run_score, 8870)
+        self.assertTrue(any("本局评分：8870" in m for m in task.logs), task.logs)
 
     def test_under_target_keeps_round_going(self):
         texts = [box(600, 300, "训练评分", 200, 60),
@@ -416,7 +425,15 @@ class TrainingScorePage(unittest.TestCase):
                  box(650, 700, "点击屏幕继续", 300, 50)]
         task = self.make(texts, target=7400)
         self.assertTrue(task.handle_training_score(texts))
-        self.assertIsNone(task._run_score)         # 弹层分数一律不入账
+        self.assertEqual(task._run_score, 6446)
+
+    def test_waits_one_second_before_click(self):
+        """2026-11-20：点之前停 1 秒（等数字滚完）。"""
+        task = self.make(self.page())
+        calls = []
+        task.sleep = lambda *a, **k: calls.append(a)
+        self.assertTrue(task.handle_training_score(self.page()))
+        self.assertEqual(calls, [(1.0,)])
 
     def test_other_pages_are_not_this_one(self):
         texts = [box(600, 300, "下一步", 200, 60)]
