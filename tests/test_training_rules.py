@@ -7987,6 +7987,40 @@ class TalentStockEvent(unittest.TestCase):
         self.assertTrue(task.handle_event_choice(texts))
         self.assertEqual(task.actions[-1][1], "资金援助")
 
+    def test_low_stamina_picks_recovery(self):
+        """2026-11-20：`精力恢复 / 资金援助` 看精力比例，低于一半选回精力。"""
+        texts = [box(69, 165, "器材事件", 115, 34),
+                 box(70, 206, "器材加成-70熟练度", 231, 36),
+                 box(686, 322, "精力恢复", 176, 54),
+                 box(684, 434, "资金援助", 179, 56)]
+        task = FakeTask(texts)
+        task.top_bar = lambda texts=None: {"stamina": 40, "stamina_max": 130}
+        self.assertTrue(task.handle_event_choice(texts))
+        self.assertEqual(task.actions[-1][1], "精力恢复")
+
+    def test_three_choice_prefers_attribute_cap(self):
+        """2026-11-20：精力恢复 / 属性上限 / 资金援助 → 先选属性上限。"""
+        texts = [box(69, 165, "器材事件", 115, 34),
+                 box(70, 206, "器材加成-70熟练度", 231, 36),
+                 box(686, 300, "精力恢复", 176, 54),
+                 box(686, 410, "获得属性上限", 196, 54),
+                 box(684, 520, "资金援助", 179, 56)]
+        task = FakeTask(texts)
+        task.top_bar = lambda texts=None: {"stamina": 10, "stamina_max": 130}
+        self.assertTrue(task.handle_event_choice(texts))
+        self.assertEqual(task.actions[-1][1], "获得属性上限")
+
+    def test_enough_stamina_picks_money(self):
+        """2026-11-20：精力够一半 → 仍然选资金援助。"""
+        texts = [box(69, 165, "器材事件", 115, 34),
+                 box(70, 206, "器材加成-70熟练度", 231, 36),
+                 box(686, 322, "精力恢复", 176, 54),
+                 box(684, 434, "资金援助", 179, 56)]
+        task = FakeTask(texts)
+        task.top_bar = lambda texts=None: {"stamina": 100, "stamina_max": 130}
+        self.assertTrue(task.handle_event_choice(texts))
+        self.assertEqual(task.actions[-1][1], "资金援助")
+
     def test_note_select_auto_then_next(self):
         """「选择笔记」：先自动选择，再点下一步（2026-10-30 口径，旧口径是不选直接过）。"""
         texts = [box(150, 80, "选择笔记", 300, 50),

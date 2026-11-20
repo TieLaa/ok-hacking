@@ -1037,13 +1037,32 @@ class MatchHandlers:
             # 2026-11-17 用户口径：纯回精力的选项先排掉（实拍器材事件
             # 「精力恢复 / 属性上限 / 资金援助」，满精力还选了恢复），
             # 剩下的仍按原来的「选第一个」。
-            non_stamina = [t for t in group
-                           if "精力恢复" not in t.name and "回复精力" not in t.name]
-            pick = min(non_stamina or group, key=lambda t: t.y)
+            # 2026-11-20 例外：「精力恢复 / 资金援助」这个二选一**不归通用规则管**，
+            # 看精力比例 —— 低于一半选精力恢复，否则选资金援助。
+            stamina_opt = next((t for t in group if "精力恢复" in t.name), None)
+            money_opt = next((t for t in group if "资金援助" in t.name), None)
+            limit_opt = next((t for t in group if "属性上限" in t.name), None)
+            if limit_opt is not None and (stamina_opt is not None or money_opt is not None):
+                # 2026-11-20 用户口径：这一组里有「属性上限」就先选上限，
+                # 不看精力（器材事件三选一：精力恢复 / 属性上限 / 资金援助）。
+                pick = limit_opt
+                why = "属性上限优先"
+            elif stamina_opt is not None and money_opt is not None:
+                bar = self.top_bar(texts) or {}
+                cur, mx = bar.get("stamina"), bar.get("stamina_max")
+                low = bool(cur is not None and mx and cur / float(mx) < 0.5)
+                pick = stamina_opt if low else money_opt
+                why = "精力不足一半 → 回精力" if low else "精力够用 → 资金援助"
+            else:
+                non_stamina = [t for t in group
+                               if "精力恢复" not in t.name and "回复精力" not in t.name]
+                pick = min(non_stamina or group, key=lambda t: t.y)
+                why = ""
             if os.environ.get("OK_DUMP_CHOICES"):
                 self.dump_unknown(texts, "choice_vertical")
             self.log_info("事件选项（竖向）：" + "、".join(t.name.strip() for t in group)
-                          + f" → 选第一个「{pick.name.strip()}」")
+                          + f" → 选第一个「{pick.name.strip()}」"
+                          + (f"（{why}）" if why else ""))
             self.click_box(pick, after_sleep=0.45)
             return True
 
