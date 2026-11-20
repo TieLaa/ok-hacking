@@ -165,12 +165,24 @@ class TrainingHandlers:
         if self.match_text(texts, labels.VACATION_TEXTS) is None:
             return False
 
+        # 底部成行黄框 = **通用事件页**（合宿事件这种「两张黄卡片」）。
+        # 用户 2026-11-20 口径：这类页面归 `handle_event_choice` 统一处理，
+        # 不要一个事件一个 handler。这里只放行，让全量遍历轮到它。
+        group, _kind = self._yellow_choice_group()
+        if len(group) >= 2:
+            return False
+
         confirm = self.match_text(self._ocr_region("confirm"), labels.CONFIRM_TEXTS)
         if confirm is not None:
             self.click_box(confirm, after_sleep=0.5)
             self.log_info("度假：决定")
             return True
-        if self.click_text(("开始训练", "出发", "训练"), after_sleep=0.5, must=False):
+        # 按钮必须**整词**：旁白「合宿训练恰逢…交叉训练」里也有「训练」，
+        # 子串匹配会点到旁白上（2026-11-20 实跑，页面 3 秒没变化）。
+        button = next((t for t in texts
+                       if t.name.strip() in ("开始训练", "出发", "训练")), None)
+        if button is not None:
+            self.click_box(button, after_sleep=0.5)
             self.log_info("度假：开始训练")
             return True
         self.click_main_action(after_sleep=0.5)

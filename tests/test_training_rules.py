@@ -7666,6 +7666,45 @@ class WeekendHomeDialogNotChoice(unittest.TestCase):
         self.assertEqual(task.actions, [])
 
 
+class VacationCampEvent(unittest.TestCase):
+    """合宿事件页（2026-11-20 实跑）：底部两张黄卡片，归通用事件处理。"""
+
+    def page(self):
+        return [box(37, 16, "第1周", 87, 35),
+                box(161, 16, "星期", 66, 37),
+                box(82, 207, "合宿区长", 95, 27),
+                box(416, 384, "合宿训练恰逢其他队伍也在合宿期间，交叉训练", 703, 37),
+                box(422, 437, "卓有成效，理事长决定延长合宿一周！", 546, 32),
+                box(374, 711, "抓紧时间好好练习", 332, 42),
+                box(864, 708, "观光计划加倍！", 273, 48),
+                box(471, 769, "精力+10", 134, 33),
+                box(938, 769, "获得意识", 142, 33)]
+
+    def task(self):
+        """带两张黄色卡片画面的 FakeTask（`_yellow_buttons` 读像素）。"""
+        from tools.check_handlers import _FakeMethod
+        texts = self.page()
+        img = np.zeros((871, 1548, 3), dtype=np.uint8)
+        cv2.rectangle(img, (374, 690), (706, 800), (0, 200, 240), -1)
+        cv2.rectangle(img, (864, 690), (1137, 800), (0, 200, 240), -1)
+        task = FakeTask(texts)
+        task._executor.frame = img
+        task._executor.method = _FakeMethod(img.shape[1], img.shape[0])
+        return task
+
+    def test_vacation_delegates_event_page(self):
+        """度假 handler 认到底部成行黄框 → 放行，不再点中间旁白。"""
+        task = self.task()
+        self.assertFalse(task.handle_vacation(task._texts))
+        self.assertEqual(task.actions, [])
+
+    def test_event_choice_picks_attribute_card(self):
+        """通用事件处理选给属性的那张（精力+10 是纯回精力，排掉）。"""
+        task = self.task()
+        self.assertTrue(task.handle_event_choice(task._texts))
+        self.assertEqual(task.actions[-1][1], "观光计划加倍！")
+
+
 class TalentStockEvent(unittest.TestCase):
     """2026-10-29 闪堂电天赋「股神!」事件：选项是整句，右上是灰的「跳过」。
 
