@@ -35,6 +35,10 @@
 - 踩到新坑时，把「下次该怎么说」补进 `docs/PROMPT_PLAYBOOK.md`，不要只改代码。
 - **同一件事实第二次写进代码时，先找它的家**：数值→`training/strategy/params.json`、文案→`src/tasks/ui/labels.py`、角色→`docs/roster`、页面判据→`training/pages.py`、日志目录→`retention.py`；找不到再新建，并在同一次提交里补来源检查。**只用一次的事实不建家**，写注释说明即可。
   <!-- 变更 2026-11-15 · opencode · 新增「事实先找家」 · 3 周内重复出现角色表 x3、属性名 x4、状态字典 x3；单靠重构会话收敛不住，必须在写入时归位 -->
+- **准备页三模式（自动选择/半自动/预配置）只在 `training/prep.py` 决策**，槽位空/满判据在 `training/prep_slots.py`（只看 `+` 形状，颜色不作判据）；三个 handler 只调 `prep_action()`，不许各写一套。预配置阶段 1 是占位（UI 置灰），完整度门禁阶段 2。
+  <!-- 变更 2026-11-22 · opencode · 新增准备页三模式归口 · 防止队友/笔记/器材三页各写一套判断 -->
+- **每局训练结果只在 `training/results.py` 记录**：每局即时落盘到 `logs/reports/training_results_*`，停止时汇总；不要在 handler 里各自写 JSON/弹窗。
+  <!-- 变更 2026-11-22 · opencode · 新增每局结果归口 · 2026-11-22 实跑发现关窗口会丢当前 run 的内存结果 -->
 - 被否决过的方案写进 `docs/decisions.md`（方案 / 原因 / 重提条件），不要再提第二遍。
   <!-- 变更 2026-11-15 · opencode · 新增 decisions.md 约定 · P1~P6 大重构被回滚但原因没记，下一轮 agent 会重提 -->
 
