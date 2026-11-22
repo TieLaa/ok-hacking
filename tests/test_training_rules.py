@@ -6409,6 +6409,115 @@ class ActivityMatchResume(unittest.TestCase):
         self.assertFalse(task.handle_event_choice(texts))
         self.assertEqual(task.actions, [])
 
+    RETRY_TEXTS = [box(658, 43, "失败", 234, 130),
+                   box(630, 237, "第三章第6关", 281, 53),
+                   box(543, 444, "提高球员评分后再来试试吧！", 437, 36),
+                   box(572, 695, "返回", 78, 40),
+                   box(858, 693, "重新挑战", 143, 45)]
+
+    def test_quick_match_retries_failed_event_stage(self):
+        """2026-11-21 用户截图：失败页只有「返回/重新挑战」，快速比赛点重新挑战。"""
+        from src.tasks.QuickMatchTask import QuickMatchTask
+        from src.tasks.training.handlers.match import MatchHandlers
+        handlers = list(QuickMatchTask.HANDLERS)
+        self.assertLess(handlers.index(MatchHandlers.handle_match_retry),
+                        handlers.index(MatchHandlers.handle_match_result),
+                        "重新挑战必须排在 handle_match_result 之前")
+        task = FakeTask(list(self.RETRY_TEXTS))
+        self.assertTrue(task.handle_match_retry(task._texts))
+        self.assertEqual(task.actions[-1][1], "重新挑战")
+
+    PREP_TEXTS = [box(42, 134, "完成条件", 114, 41),
+                  box(92, 211, "两场比赛净胜分总和≥7分", 250, 28),
+                  box(92, 250, "两场比赛净胜分总和≥20分", 266, 27),
+                  box(740, 319, "VS", 73, 59),
+                  box(1259, 756, "开始比赛", 149, 49)]
+
+    def test_quick_match_starts_event_prep(self):
+        """2026-11-21 用户截图：重新挑战后回到赛前准备，只有「开始比赛」。"""
+        from src.tasks.QuickMatchTask import QuickMatchTask
+        from src.tasks.training.handlers.match import MatchHandlers
+        handlers = list(QuickMatchTask.HANDLERS)
+        self.assertLess(handlers.index(MatchHandlers.handle_match_start),
+                        handlers.index(MatchHandlers.handle_event_choice),
+                        "开始比赛必须排在技能/事件 handler 之前")
+        task = FakeTask(list(self.PREP_TEXTS))
+        self.assertFalse(task.handle_prepare(task._texts))
+        self.assertTrue(task.handle_match_start(task._texts))
+        self.assertEqual(task.actions[-1][1], "开始比赛")
+
+
+class EventStarPage(unittest.TestCase):
+    """活动闯关星数页（2026-11-21 用户截图）。
+
+    页面：`胜利 / 第三章第6关 / 5 行条件 / 返回 / 重新挑战 / 继续`。
+    实心金色 = 已获得，灰色 = 未获得；文字过长会换行，所以只数星星。
+    """
+
+    TEXTS = [box(657, 46, "胜利", 232, 128),
+             box(632, 235, "第三章第6关", 279, 55),
+             box(705, 322, "获胜", 143, 57),
+             box(548, 396, "两场比赛净胜分总和≥7分", 457, 43),
+             box(542, 463, "两场比赛净胜分总和≥20分", 469, 43),
+             box(524, 530, "全队中投和三分命中总数≥16", 511, 43),
+             box(618, 602, "全队盖帽和抢断总数≥12", 377, 32),
+             box(413, 692, "返回", 82, 46),
+             box(698, 693, "重新挑战", 147, 45),
+             box(1048, 693, "继续", 82, 50)]
+
+    @staticmethod
+    def _star(cx, cy, r):
+        angles = [-np.pi / 2 + i * np.pi / 5 for i in range(10)]
+        radii = [r if i % 2 == 0 else r * 0.58 for i in range(10)]
+        return np.array([[cx + rr * np.cos(a), cy + rr * np.sin(a)]
+                         for a, rr in zip(angles, radii)], np.int32)
+
+    @classmethod
+    def _frame(cls, colors):
+        frame = np.full((871, 1548, 3), (235, 245, 250), np.uint8)
+        for i, color in enumerate(colors):
+            cv2.fillPoly(frame, [cls._star(700, 350 + i * 70, 26)], color)
+        return frame
+
+    def test_scan_counts_gold_and_gray_stars(self):
+        if cv2 is None:
+            self.skipTest("没有 cv2")
+        from src.tasks.training.handlers.match import MatchHandlers
+        task = MatchHandlers()
+        gold = (114, 195, 235)          # 实拍星形填充色（BGR）
+        gray = (139, 138, 118)
+        self.assertEqual(task.match_stars(self._frame([gold] * 4 + [gray])), (4, 1))
+        self.assertEqual(task.match_stars(self._frame([gold] * 5)), (5, 0))
+
+    def test_not_full_retries(self):
+        task = FakeTask(list(self.TEXTS))
+        task.match_stars = lambda: (4, 1)
+        self.assertTrue(task.handle_match_star_result(task._texts))
+        self.assertEqual(task.actions[-1][1], "重新挑战")
+
+    def test_full_continues(self):
+        task = FakeTask(list(self.TEXTS))
+        task.match_stars = lambda: (5, 0)
+        self.assertTrue(task.handle_match_star_result(task._texts))
+        self.assertEqual(task.actions[-1][1], "继续")
+
+
+class DrawMatchResult(unittest.TestCase):
+    """平局结算页（2026-11-22 用户截图）：21:21 + 统计表 + 下一步。"""
+
+    TEXTS = [box(414, 50, "21", 204, 134),
+             box(657, 46, "平局", 232, 128),
+             box(937, 54, "21", 180, 127),
+             box(600, 300, "得分", 80, 30),
+             box(700, 300, "篮板", 80, 30),
+             box(800, 300, "助攻", 80, 30),
+             box(900, 900, "下一步", 100, 40)]
+
+    def test_draw_clicks_next(self):
+        task = FakeTask(list(self.TEXTS))
+        self.assertTrue(task.handle_match_result(task._texts))
+        self.assertEqual(task.actions[-1][1], "下一步")
+
 
 class BoostTrainingClicks(unittest.TestCase):
     """加强训练：按 收益×成功率 的期望值选卡，再点「确定」（2026-10-26 用户口径）。"""

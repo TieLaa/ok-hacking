@@ -438,7 +438,7 @@ def _is_match_result(task, texts):
     """
     if task.match_text(texts, "失败率") is not None:
         return False
-    if task.match_text(texts, ("胜利", "失败", "结算", "目标达成")) is not None:
+    if task.match_text(texts, ("胜利", "失败", "平局", "结算", "目标达成")) is not None:
         return True
     if task.match_text(texts, "获得奖励") is not None:
         # 奖励弹窗要在**同时**有比分或统计表头才算比赛结算：
