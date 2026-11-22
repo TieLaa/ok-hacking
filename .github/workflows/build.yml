@@ -82,6 +82,21 @@ jobs:
           path.write_text(new_text, encoding='utf-8')
           print(f'version stamped: {tag}')
 
+      # 启动器只读**目标版本自己**的 CHANGELOG 段落；缺这一段就退回 sync 提交信息
+      # （v0.2.6 实况：更新成功弹窗里只有 sync v0.2.6 / sync v0.2.5）。
+      # 在打包前失败，避免发出去才发现更新日志没内容。
+      - name: Check changelog for tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: python
+        run: |
+          import os
+          import pathlib
+          tag = os.environ['GITHUB_REF_NAME']
+          for name in ('CHANGELOG.md', 'CHANGELOG.zh-CN.md'):
+              text = pathlib.Path(name).read_text(encoding='utf-8')
+              if f'## {tag}' not in text:
+                  raise SystemExit(f'{name} 缺少 {tag} 段落：启动器会退回显示提交信息')
+
       # 钉到 commit（2026-11-09 的 master），不用 @master 以免上游改动直接影响发布
       - name: Build with PyAppify Action
         id: build-app

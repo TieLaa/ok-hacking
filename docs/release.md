@@ -42,7 +42,7 @@
 - 拖不动、鼠标没反应，先怀疑窗口工具链而不是坐标：v1（拖边）和 v2（HighGUI 整块跟鼠标）都栽在
   OpenCV 的鼠标回调收不到事件上，v3 换成 PySide6 才稳。
 
-## 当前发布链路（2026-11-09 状态）
+## 当前发布链路（2026-11-22 状态）
 
 ```
 推 tag v*  ──► GitHub Actions (windows-latest)
@@ -50,7 +50,8 @@
                  ├─ pip install --no-deps -r requirements.txt
                  ├─ 跑 tests/*.py（任一文件失败即 fail）
                  ├─ Stamp version from tag   （把 tag 写进 src/config.py 的 version）
-                 ├─ pyappify-action（钉 commit + v1.2.4）→ 产出 pyappify_dist/*-setup.exe
+                 ├─ Check changelog for tag  （CHANGELOG 缺当前版本段落就 fail）
+                 ├─ pyappify-action（钉 commit + v1.2.7）→ 产出 pyappify_dist/*-setup.exe
                  └─ softprops/action-gh-release 把这些 exe 挂到 Release
 
 更新仓库（ok-hacking-update）由它自己的 workflow 反向拉取，不在本链路里 —— 见下一节。
@@ -58,6 +59,19 @@
 
 玩家只下 Release 里的 `*-setup.exe`；装好之后的更新由 launcher 去 `pyappify.yml` 的 `git_url` 拉增量。
 `pyappify.yml` 两个 profile 已按 region 分开指向（2026-11-10）：China → cnb.cool，Global → GitHub，见「国内更新源」一节。
+
+## 更新日志（CHANGELOG）
+
+安装版的「关于 / 更新成功」弹窗优先读**目标 tag 里**的 `CHANGELOG.zh-CN.md`（中文）和
+`CHANGELOG.md`（英文），不是 Release 正文，也不是源仓库的提交信息。
+
+- **发版前先在两个文件里加 `## vX.Y.Z` 段落**，再打 tag。目标版本没有这一段时，启动器会退回
+  显示更新仓库的提交信息，也就是 `sync vX.Y.Z`（2026-11-21 v0.2.6 实况：升级弹窗只有
+  `sync v0.2.6 / sync v0.2.5`）。
+- Build 的 `Check changelog for tag` 会检查两个文件都有当前 tag 的段落，缺了直接失败。
+- 更新仓库同步时只带 `deploy.txt` 里的文件；两个 CHANGELOG 已在清单里。
+- 旧版启动器（pyappify < v1.2.7）不读 CHANGELOG，升级后仍显示 sync 提交；这类用户
+  需要重新跑一次新版安装包换启动器。
 
 ## 本地先打一次包（不用等 CI）
 

@@ -45,6 +45,10 @@
 
 ## 发版（双重发布，顺序有依赖）
 
+**用户说发版 / 打 tag 时，先补 CHANGELOG 再 tag**：给 `CHANGELOG.md` 和 `CHANGELOG.zh-CN.md` 写当前版本的 `## vX.Y.Z` 段落并提交，然后才创建 tag。启动器只读目标 tag 里的这两个文件；缺段会退回显示 `sync vX`（v0.2.5 / v0.2.6 两次实况）。Build 的 `Check changelog for tag` 只是兜底，不要等它报错——那时 tag 已经推出去了。
+<!-- 变更 2026-11-22 · opencode · 新增 CHANGELOG 硬规则 · 更新弹窗连续两版只有 sync 提交；此前只写在 docs/release.md，会话不主动读 -->
+<!-- 变更 2026-11-22 · opencode · 改为「说发版先补 CHANGELOG 再 tag」 · 用户纠正：CI 在 tag 后才报错等于浪费时间，不能当主方案 -->
+
 **推 tag 之前必须先确认更新仓库已有这个 tag**，否则 pyappify 的 setup 步骤会失败。
 
 ```
