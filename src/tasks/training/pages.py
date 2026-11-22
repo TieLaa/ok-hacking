@@ -68,6 +68,10 @@ PRIORITY = {
     "manuscript_submit": 58,
     "training_entry": 59,
     "lobby": 61,
+    # 全国大赛：玩法目录（赛事入口）→ 关卡列表。都排在 lobby 前，
+    # 因为玩法目录页背后还能 OCR 到大厅底栏（2026-11-22 实拍）。
+    "national_menu": 60,
+    "national_stage_list": 60.5,
     # 度假页要在 story_arrow 之前 —— 它也有右下角 ▼，但要点的是主按钮
     "vacation": 62,
     "captain_filter": 63,
@@ -164,6 +168,28 @@ def _is_stage_list(task, texts):
     旧判据认不出来会被事件 handler 当成竖排选项。
     """
     return task.match_text(texts, labels.STAGE_LIST_MARKS) is not None
+
+
+def _is_national_menu(task, texts):
+    """赛事玩法目录：「玩法目录」标题（大厅 → 赛事 → 全国大赛/挑战赛/圣山）。
+
+    2026-11-22 实拍：标题「玩法目录」+ 四张模式卡。这一页背后还能 OCR 到
+    大厅底栏的「训练/赛事」，所以优先级要高于 `lobby`。
+    """
+    return task.match_text(texts, "玩法目录") is not None
+
+
+def _is_national_stage_list(task, texts):
+    """全国大赛关卡列表：左上「全国大赛」标题 + 右侧「前往挑战 / 对手实力」。
+
+    个人信息页的战绩栏也有「全国大赛」，玩法目录页有模式卡「全国大赛」，
+    都没有挑战按钮；用组合判据把这两页排除掉：
+      - 全国大赛页（2026-11-22 实拍）：`全国大赛 / 对手实力 46097 /
+        奖励预览 / 消耗： / 前往挑战`，左侧竖列关卡 `22-16 / 22-15 …`。
+    """
+    if task.exact_text(texts, ("全国大赛",)) is None:
+        return False
+    return task.match_text(texts, ("前往挑战", "对手实力")) is not None
 
 
 def _is_confirm_team(task, texts):
@@ -835,6 +861,8 @@ _ANCHORS = {
     "lobby": _is_lobby,
     "arcade": _is_arcade,
     "stage_list": _is_stage_list,
+    "national_menu": _is_national_menu,
+    "national_stage_list": _is_national_stage_list,
     "confirm_team": _is_confirm_team,
     "equipment": _is_equipment,
     "team": _is_team,

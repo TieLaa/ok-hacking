@@ -92,6 +92,7 @@ ESC → 放弃并存证 `recover_failed`。遇到比赛/小游戏标记（`VS`/`
 |---|---|---|
 | `tools/mcp/training.py` | TrainingTask | 跑完整一轮；`OK_MCP_STEPS` 可限步；**不支持删档**（见下方红线） |
 | `tools/mcp/quickmatch.py` | QuickMatchTask | 跑 N 拍（`OK_MCP_TICKS`，默认 10），不回大厅 |
+| `tools/mcp/national.py` | NationalCupTask | 回大厅 → 赛事 → 玩法目录 → 全国大赛关卡列表，识别页面（先不开打） |
 | `tools/mcp/input_test.py` | InputTestTask | 点一次并断言界面变化 |
 | `tools/mcp/probe.py` | — | 回大厅 + 报顶栏/OCR，改代码后的第一只探针 |
 | `tools/mcp/summarize_run.py` | — | 把一次 run 的 `run.log` 数成表（写运行记录用，只读；`-o` 写 UTF-8） |
