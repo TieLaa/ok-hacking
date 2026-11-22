@@ -2429,6 +2429,54 @@ class CaptainFilterFlow(unittest.TestCase):
         self.assertTrue(task._captain_filter_done)
         self.assertIsNone(task._captain_filter_stage)
 
+    def test_confirmed_filter_skips_scroll_to_top(self):
+        """用户 2026-11-22 口径：点完「确定」列表已归位第一屏，别再上翻一屏。
+
+        实跑 10:15:16 点确定 → 10:15:19「队长列表已翻到顶（往上翻 1 次）」，
+        白花 3 秒。
+        """
+        task = FakeTask(self._texts(), config={"指定队长": "春澄永远"})
+        task._captain_filter_stage = "confirm"
+        self.assertTrue(task.handle_captain_filter(task._texts))
+        self.assertTrue(task._captain_list_at_top)
+        scrolled = []
+        task._captain_scroll_to_top = lambda *a, **k: scrolled.append(1)
+        task.read_captain_name = lambda: "SR-春澄永远"
+        self.assertTrue(task.pick_captain_by_name("春澄永远"))
+        self.assertEqual(scrolled, [])
+
+    def test_plain_list_still_scrolls_to_top(self):
+        """没走筛选（接手/后续局）时照旧先上翻到顶，别漏掉列表上半部分。"""
+        task = FakeTask(self._texts(), config={"指定队长": "春澄永远"})
+        scrolled = []
+        task._captain_scroll_to_top = lambda *a, **k: scrolled.append(1)
+        task.read_captain_name = lambda: "SR-春澄永远"
+        self.assertTrue(task.pick_captain_by_name("春澄永远"))
+        self.assertEqual(scrolled, [1])
+
+    def test_merged_checkbox_label_clicks_fallback_point(self):
+        """OCR 把勾和标签连成「√SR」→ 走兜底坐标，而兜底点本身就是复选框中心。
+
+        2026-11-22 实跑：那一下又被减了 21px「文字→复选框」偏移，点在
+        (427,371)，真实复选框在 (440,334) → SR 没勾上，筛选没缩小、白翻 4 屏。
+        """
+        from src.tasks.ui import Defs
+        texts = [
+            box(131, 77, "显示设定", 166, 54),
+            box(121, 251, "稀有度", 106, 40),
+            box(202, 319, "R", 25, 30),
+            box(418, 311, "√SR", 90, 46),          # 勾和字连成一个框
+            box(711, 312, "SSR", 66, 42),
+            box(194, 557, "控卫", 74, 42),
+        ]
+        task = FakeTask(texts, config={"指定队长": "先斗月绮"})
+        task._choose_captain_filters(texts)
+        sr = next(a for a in task.actions
+                  if a[0] == "click_box" and a[1] == "SR兜底")
+        cx, cy = Defs.CAPTAIN_FILTER["rarity"]["SR"]
+        self.assertLessEqual(abs(sr[2] - task.width * cx), 2)
+        self.assertLessEqual(abs(sr[3] - task.height * cy), 2)
+
     def test_roster_has_rarity(self):
         from src.tasks.training import roster
         info = roster.lookup("春澄永远")
