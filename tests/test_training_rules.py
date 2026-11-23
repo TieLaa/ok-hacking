@@ -3433,6 +3433,35 @@ class ConfigSpecRules(unittest.TestCase):
         self.assertNotIn("自动恢复精力", saved)
         self.assertNotIn("恢复精力下限", saved)
 
+    def test_style_config_matches_monitor_options(self):
+        """2026-11-23：任务卡片和监控页对「未选择」同一口径。"""
+        from src.tasks.training import config_spec
+        from src.tasks.training.strategy import styles
+
+        spec = next(s for s in config_spec.ALL if s.key == "指定流派")
+        self.assertEqual(spec.default, styles.UNSET_STYLE)
+        self.assertIn(styles.UNSET_STYLE, spec.options)
+        self.assertEqual(list(spec.options)[1:], list(styles.STYLE_OPTIONS))
+
+    def test_old_save_gets_style_from_captain(self):
+        """2026-11-23：流派改成存储值；老存档没有该键时按「指定队长」补一次。"""
+        import json
+        import os
+        import tempfile
+        from src.tasks.training import config_spec
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "TrainingTask.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"指定队长": "野上泷"}, f, ensure_ascii=False)
+            self.assertTrue(config_spec.migrate_saved_config("TrainingTask", folder))
+            with open(path, encoding="utf-8") as f:
+                saved = json.load(f)
+            # 再跑一次不该有任何改动（幂等）
+            self.assertFalse(config_spec.migrate_saved_config("TrainingTask", folder))
+
+        self.assertEqual(saved["指定流派"], "扭蛋流")
+
     def test_legacy_shop_policy_is_migrated(self):
         """2026-11-08：旧的通用「购买策略」搬进「商店购买策略」，旧选项落到新顺序。"""
         import json
@@ -6152,10 +6181,19 @@ class CaptainRoster(unittest.TestCase):
             missing += [c["name"] for c in data if c["name"] not in known]
         self.assertEqual(missing, [], f"角色表缺: {missing}")
 
-    def test_monitor_style_from_config_handles_alias(self):
+    def test_monitor_style_from_config_is_stored_value(self):
+        """流派是存储值：只看「指定流派」，不再按队长名查表（2026-11-23）。"""
         from src.ui.MonitorTab import MonitorTab
-        self.assertEqual(MonitorTab._style_from_config({"指定队长": "羽漱川湊"}), "扭蛋流")
-        self.assertEqual(MonitorTab._style_from_config({"指定队长": "澪奈·贾妮丝"}), "训练流")
+        self.assertEqual(MonitorTab._style_from_config({"指定队长": "羽漱川湊"}), "未选择")
+        self.assertEqual(MonitorTab._style_from_config({"指定流派": "扭蛋流"}), "扭蛋流")
+
+    def test_monitor_explicit_style_wins_over_captain(self):
+        """监控页显示与业务同口径：配置里存了什么流派就显示什么。"""
+        from src.ui.MonitorTab import MonitorTab
+        cfg = {"指定队长": "真崎辉世", "指定流派": "扭蛋流"}
+        self.assertEqual(MonitorTab._style_from_config(cfg), "扭蛋流")
+        cfg["指定流派"] = ""
+        self.assertEqual(MonitorTab._style_from_config(cfg), "未选择")
 
 
 class QuickMatchRepeatGuard(unittest.TestCase):
@@ -8444,11 +8482,12 @@ class StyleResolution(unittest.TestCase):
         return task
 
     def test_configured_captain_wins_even_when_not_lobby(self):
-        """路径 A：配置里有队长 → 查表定流派（不管是不是大厅开局）。"""
+        """路径 A：配置里有队长 → 查表定流派（不管是不是大厅开局），并写死。"""
         task = self._task({"指定队长": "野上泷"})
         self.assertTrue(task.resolve_style_by_config())
         self.assertEqual(task.style, "扭蛋流")
         self.assertTrue(task.style_known)
+        self.assertEqual(task.config["指定流派"], "扭蛋流")
 
     def test_configured_train_captain(self):
         task = self._task({"指定队长": "真崎辉世"})
@@ -8471,11 +8510,47 @@ class StyleResolution(unittest.TestCase):
         self.assertFalse(task.resolve_style_by_config())
         self.assertFalse(task.style_known)
 
+    def test_explicit_style_wins_over_captain(self):
+        """2026-11-23：明确「指定流派」→ 直接用，不查队长、不点日历。"""
+        task = self._task({"指定队长": "真崎辉世", "指定流派": "扭蛋流"})
+        self.assertTrue(task.resolve_style_by_config())
+        self.assertEqual(task.style, "扭蛋流")
+        self.assertEqual(task._style_name, "真崎辉世")
+
+    def test_explicit_style_without_captain_needs_no_calendar(self):
+        """没指定队长也能定流派（接手局）：不弹窗、不回日历。"""
+        task = self._task({"指定队长": "", "指定流派": "商店流"})
+        self.assertTrue(task.resolve_style_by_config())
+        self.assertEqual(task.style, "商店流")
+        self.assertIsNone(task._style_name)
+
+    def test_style_change_applies_immediately(self):
+        """运行中改流派 → 立即换（用户 2026-11-23 口径）。"""
+        task = self._task({"指定队长": "真崎辉世", "指定流派": ""})
+        self.assertTrue(task.resolve_style_by_config())
+        self.assertEqual(task.style, "训练流")
+        task.config["指定流派"] = "扭蛋流"
+        self.assertTrue(task.apply_style_choice())
+        self.assertEqual(task.style, "扭蛋流")
+        # 改成别的流派也立即生效
+        task.config["指定流派"] = "商店流"
+        self.assertTrue(task.apply_style_choice())
+        self.assertEqual(task.style, "商店流")
+
+    def test_empty_style_without_captain_goes_to_calendar(self):
+        """流派为空且没有指定队长 → 回日历路径（接手局只认一次）。"""
+        task = self._task({"指定队长": "", "指定流派": "扭蛋流"})
+        task.apply_style_choice()
+        task.config["指定流派"] = ""
+        self.assertFalse(task.apply_style_choice())
+        self.assertTrue(task._style_pending)
+
     def test_calendar_path_resolves_captain(self):
-        """路径 B：从日历读到队长名 → 查表定流派。"""
+        """路径 B：从日历读到队长名 → 查表定流派，并写死进配置。"""
         task = self._task({"指定队长": ""})
         self.assertTrue(task.resolve_style_by_calendar_name("野上泷"))
         self.assertEqual(task.style, "扭蛋流")
+        self.assertEqual(task.config["指定流派"], "扭蛋流")
         self.assertTrue(task.style_known)
 
     def test_alert_when_captain_not_resolvable(self):
@@ -8566,20 +8641,49 @@ class StyleResolution(unittest.TestCase):
         self.assertFalse(task.style_pending())
 
 
+class QueueStyleSync(unittest.TestCase):
+    """队列换队长：只在**真的换了人**时带出新流派（2026-11-23）。
+
+    同一个队长再练一局也会走 `switch_captain`，不能把用户手改的流派顶掉。
+    """
+
+    def _task(self):
+        task = FakeTask([])
+        task.log_info = lambda *a, **k: None
+        task._queue = None
+        task.config["指定队长"] = "真崎辉世"
+        task.config["指定流派"] = "商店流"
+        task._style_name = "真崎辉世"
+        return task
+
+    def test_same_captain_keeps_manual_style(self):
+        task = self._task()
+        task.switch_captain("真崎辉世")
+        self.assertEqual(task.config["指定流派"], "商店流")
+
+    def test_new_captain_brings_out_style(self):
+        task = self._task()
+        task.switch_captain("野上泷")
+        self.assertEqual(task.config["指定流派"], "扭蛋流")
+
+
 class MonitorCaptainLogic(unittest.TestCase):
     """监控页「指定队长」勾选框 = 队长的唯一来源（用户 2026-11-01 口径）。
 
-    两条坑：
+    三条坑：
     1. 勾选框**默认是勾上的** → 用户一进页面就等于「指定了一个队长」，
        而下拉第 0 项是「── 训练流 ──」分组标题 → 流派被写成训练流。
-    2. 取消勾选必须**清空变量**（config 里的名字 **和** 运行期 `_style`），
-       否则旧的流派一直留着（界面显示的流派和实际跑的不一致）。
+    2. 2026-11-23 起队长和流派分开：改队长只负责**带出该队长的流派**（写配置），
+       取消队长不再清流派（流派是独立存储值）。
+    3. 运行中改队长也立即带出新流派（用户 2026-11-23 口径：只做显式改动）。
     """
 
     def _tab(self, captain=""):
         from src.ui.MonitorTab import MonitorTab
 
         class _FakeTask:
+            STYLES = {"野上泷": "扭蛋流", "真崎辉世": "训练流"}
+
             def __init__(self):
                 self.config = {"指定队长": captain}
                 self.enabled = False
@@ -8587,6 +8691,16 @@ class MonitorCaptainLogic(unittest.TestCase):
                 self.reset_calls = 0
 
             def reset_style(self):
+                self.reset_calls += 1
+
+            def sync_style_for_captain(self, name):
+                style = self.STYLES.get(name)
+                if not style:
+                    return False
+                self.config["指定流派"] = style
+                return True
+
+            def apply_style_choice(self):
                 self.reset_calls += 1
 
             def enable(self):
@@ -8604,23 +8718,50 @@ class MonitorCaptainLogic(unittest.TestCase):
         tab._update_data = lambda: None
         return tab, task
 
-    def test_uncheck_clears_config_and_style(self):
+    def test_uncheck_clears_style(self):
+        """取消队长 = 接手模式：流派也回到「未选择」（用户 2026-11-23 口径）。"""
+        from src.tasks.training.strategy import styles
+
         tab, task = self._tab("野上泷")
+        task.config["指定流派"] = "扭蛋流"
         tab.set_captain("")
         self.assertEqual(task.config["指定队长"], "")
-        self.assertEqual(task.reset_calls, 1)
+        self.assertEqual(task.config["指定流派"], styles.UNSET_STYLE)
+        self.assertEqual(task.reset_calls, 1)     # 空闲：运行期流派也清
 
-    def test_uncheck_clears_style_even_if_config_already_empty(self):
-        """配置本来就是空时也要清 `_style` —— 否则旧流派一直留着。"""
-        tab, task = self._tab("")
-        tab.set_captain("")
-        self.assertEqual(task.reset_calls, 1)
-
-    def test_select_captain_keeps_style(self):
+    def test_select_captain_brings_out_style(self):
+        """改队长 = 带出该队长的流派（写配置 + 立即生效）。"""
         tab, task = self._tab("")
         tab.set_captain("真崎辉世")
         self.assertEqual(task.config["指定队长"], "真崎辉世")
+        self.assertEqual(task.config["指定流派"], "训练流")
+        self.assertEqual(task.reset_calls, 1)
+
+    def test_paused_uncheck_keeps_running_style(self):
+        """暂停中取消队长：同样只改配置，本局 `_style` 不清。"""
+        from src.tasks.training.strategy import styles
+
+        tab, task = self._tab("野上泷")
+        task.paused = True
+        task.config["指定流派"] = "扭蛋流"
+        tab.set_captain("")
+        self.assertEqual(task.config["指定流派"], styles.UNSET_STYLE)
         self.assertEqual(task.reset_calls, 0)
+
+    def test_unknown_captain_keeps_style(self):
+        """队长不在角色表：流派保持不动，不瞎猜。"""
+        tab, task = self._tab("")
+        task.config["指定流派"] = "商店流"
+        tab.set_captain("查无此人")
+        self.assertEqual(task.config["指定流派"], "商店流")
+
+    def test_running_select_captain_also_switches_style(self):
+        """运行中改队长也立即带出新流派（本局队长身份不变，只切训练逻辑）。"""
+        tab, task = self._tab("")
+        task.running = True
+        tab.set_captain("野上泷")
+        self.assertEqual(task.config["指定流派"], "扭蛋流")
+        self.assertEqual(task.reset_calls, 1)
 
     def test_clear_captain_keeps_score_stop(self):
         """取消队长**不清**「刷到目标分」（用户 2026-11-11 口径）。
@@ -8640,15 +8781,19 @@ class MonitorCaptainLogic(unittest.TestCase):
 
 
     def test_running_uncheck_keeps_style(self):
-        """运行中取消队长不清流派：本局按内存里的队长继续跑（用户 2026-11-11 口径）。"""
+        """运行中取消队长：配置改回「未选择」，但本局 `_style` 不清（2026-11-23）。"""
         from unittest import mock
+
+        from src.tasks.training.strategy import styles
 
         tab, task = self._tab("野上泷")
         task.running = True
+        task.config["指定流派"] = "扭蛋流"
         task.config["刷到目标分"] = True
         with mock.patch("ok.core.notifications.alert_info"):
             tab.set_captain("")
         self.assertEqual(task.config["指定队长"], "")
+        self.assertEqual(task.config["指定流派"], styles.UNSET_STYLE)
         self.assertEqual(task.reset_calls, 0)
 
 
@@ -9191,11 +9336,16 @@ class MonitorButtons(unittest.TestCase):
                 if memory:
                     self.log.append(("captain_memory", memory))
 
+            def set_style(self, name):
+                self.log.append(("style", name))
+
             def set_score_target(self, target):
                 self.log.append(("target", target))
 
         actions = _Actions()
-        return MonitorView(layout, actions, captains=caps), actions
+        return MonitorView(layout, actions, captains=caps,
+                           style_options=["训练流", "商店流",
+                                          "扭蛋流", "小游戏流"]), actions
 
     @staticmethod
     def _data(**over):
@@ -9231,6 +9381,14 @@ class MonitorButtons(unittest.TestCase):
         self.assertFalse(view._captain_combo.isEnabled())
         view.update_data(self._data(captain="真崎辉世"))
         self.assertTrue(view._captain_combo.isEnabled())
+
+    def test_style_combo_syncs_and_emits_immediately(self):
+        """流派下拉：按配置回填；用户改 → 立即回调 set_style（2026-11-23）。"""
+        view, actions = self._view()
+        view.update_data(self._data(style_choice="扭蛋流"))
+        self.assertEqual(view._style_combo.currentData(), "扭蛋流")
+        view._style_combo.setCurrentIndex(view._style_combo.findData("商店流"))
+        self.assertIn(("style", "商店流"), actions.log)
 
     def test_score_target_editable_without_check(self):
         """目标分输入框始终可编辑：允许先填分、后勾「刷到目标分」。"""
