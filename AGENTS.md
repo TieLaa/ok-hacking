@@ -49,22 +49,28 @@
 <!-- 变更 2026-11-22 · opencode · 新增 CHANGELOG 硬规则 · 更新弹窗连续两版只有 sync 提交；此前只写在 docs/release.md，会话不主动读 -->
 <!-- 变更 2026-11-22 · opencode · 改为「说发版先补 CHANGELOG 再 tag」 · 用户纠正：CI 在 tag 后才报错等于浪费时间，不能当主方案 -->
 
-**推 tag 之前必须先确认更新仓库已有这个 tag**，否则 pyappify 的 setup 步骤会失败。
+**顺序：先推源仓库 tag → 立刻同步更新仓库 → Build 的 setup 才能检出 tag。**
 
 ```
-① 源仓库推 v* tag  →  ② CI 出包 + 建 Release  →  ③ 更新仓库 Sync from source（填同一个 tag）
+① 源仓库推 v* tag
+② 立刻触发更新仓库 sync：gh workflow run sync.yml --repo TieLaa/ok-hacking-update -f tag=vX.Y.Z
+③ 等 sync success（GitHub / cnb 更新仓库都有这个 tag）
+④ Build 的 setup 检出 tag；sync 慢于 setup 会报 Setup failed: Tag 'vX.Y.Z' not found locally after fetch
 ```
 
 - 更新仓库是 `TieLaa/ok-hacking-update`（`pyappify.yml` 的 `git_url` 指向它，不是源仓库）。
 - pyappify 的 setup 在**更新仓库的 clone** 里找 `refs/tags/<tag>`；更新仓库没这个 tag →
   `Setup failed: Tag 'vX.Y.Z' not found locally after fetch`。
-- 所以正确顺序是：**先手动触发更新仓库的 `sync.yml`**（`gh workflow run sync.yml --repo TieLaa/ok-hacking-update -f tag=vX.Y.Z`），
-  等它 success（更新仓库有了 tag），**再**去 CI 重跑 Build。
+- `sync.yml` 从 **GitHub 源仓库**读 tag；源 tag 没推上去，sync 看不到 → **不能「先 sync 再推 tag」**。
+- 如果 Build 已经因缺 tag 失败：等 sync 成功后 `gh run rerun <run-id> --failed`，不要重打/移动 tag。
+- **发版前在要打 tag 的提交上跑全量测试**：CI 的 `Run tests` 是最后门禁；v0.2.7 就是 `check_duplicates` 拦了 `NationalCupTask` / `QuickMatchTask` 重复的 `HANDLERS` 表（v0.2.8 改为 `NationalCupTask.HANDLERS = QuickMatchTask.HANDLERS`）。新任务复用现有 handler 顺序表时直接引用，不要复制。
 - 只推源仓库 tag 不动更新仓库 → 已安装的用户更新时会停在旧版本。
 - 国内安装包只放 cnb **Release 附件**（`TieLaa/ok-hacking-dist`），不要放 `dist` 分支：
   cnb raw 接口限制单文件 100 MiB，202 MiB 的包网页下载会 413。`Export release to cnb`
   在 Build 成功后自动跑；失败再手动填 tag 补跑，跑完确认附件存在。
 - 细节见 `docs/release.md`「更新仓库」「安装包镜像」两节。
+<!-- 变更 2026-11-23 · opencode · 修正发版顺序：先推源 tag 再 sync，删掉「推 tag 前确认更新仓库」旧说法 · sync.yml 从 GitHub 读 tag，旧顺序对新 tag 不成立；v0.2.8 按新顺序实测成功 -->
+<!-- 变更 2026-11-23 · opencode · 新增发版全量测试门禁 · v0.2.7 因 NationalCupTask/QuickMatchTask 重复 HANDLERS 卡在 check_duplicates；改成复用 QuickMatchTask.HANDLERS -->
 <!-- 变更 2026-11-14 · opencode · 新增「发版」一节 · v0.1.18 的 Build 就是因为更新仓库没有 v0.1.18 tag 而失败；原文只在 docs/release.md 里，会话不主动读 -->
 <!-- 变更 2026-11-18 · opencode · 新增国内安装包发布口径 · v0.2.4 实测 cnb raw 100 MiB 上限，分支里的安装包网页无法下载，改走 Release 附件 -->
 
