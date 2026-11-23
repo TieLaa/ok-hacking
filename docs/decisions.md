@@ -45,3 +45,15 @@
 | 参数进 `strategy/params.json`、角色进 `docs/roster` | **已验证收益**（改一处只改一处），但没配来源门禁 |
 | 谓词 + 排序键 | **未验证**；2026-11-15 基线发现 `pick_shop_item` 的排序已经是 **10 元组**（group/quality/0元/slot/attr_sub/known/target/-value/price/y），改成「键 ≤ 3」是重设计，不是重命名 → 等一次真实需求触发再动 |
 | 「第二次被追加分支且 return > 6」触发收敛 | **未验证**，先当约定用 |
+| 全局 Python 风格技能 `python-guidelines`（Google Python Style Guide + Brandon Rhodes 模式库，Ruff 管机械层） | **已装**（本地改 2 个文件、4 处）；lint 配置已验证，真实改动验收未做 |
+
+### python-guidelines 技能（2026-11-17 安装）
+
+- 位置 `C:\Users\tiela\.config\opencode\skills\python-guidelines`，上游 `youssef-tharwat/lang-guidelines@5f36c82`，1.94 MB。只装 Python 一份：本机没有自写 Rust，JS 项目（Endflow / indspectDuo）没有 lint 底座，装了只会每轮多一段 description。
+- 用途是「写新代码时不再制造新碎片」，**不解决已有碎片化**；已有部分仍按「ast-grep 查调用点约束 + import-linter 管模块边界」的路线走（见 `代码散落与堆叠 - pylint 路线评估`）。
+- 本地改动三处，重新拉取上游会覆盖：
+  1. `ruff.toml` 的 `[lint]` 加 `allowed-confusables`（19 个中文全角标点）。不加时 RUF001-003 在 `src tools` 上误报 17,617 条（占全量 18,805 的 94%）；加上后同一棵树降到 1,188 条。
+  2. `SKILL.md` 开头加「本地豁免」四条：`staticmethod`（仓库 42 处）、`from x import Class`（240 处）、中文注释用全角标点、`os.path` 不强制迁移 `pathlib`。
+  3. 两个文件头各留一行溯源注释。
+- 基线：`v0.2.4`（`5d511b2`）上 `ruff check --config <技能目录>\ruff.toml src tools` = **1,189 条诊断**，只许下降；日常只查被改的文件，不批量重写无关代码。
+- 验收方式：真实改一个 handler，看它会不会主动重写 `staticmethod` / import 写法，以及计数是否涨过 1,189。
