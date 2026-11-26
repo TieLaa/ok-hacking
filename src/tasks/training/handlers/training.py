@@ -1020,7 +1020,9 @@ class TrainingHandlers:
                 self.log_info(f"憋气难度页：选 {minutes} 分钟那档（时长最长）@({x},{y})")
                 # 卡片淡入：这一拍 OCR 已经读到卡，但按钮还在滑入，点早了会点空
                 # （2026-11-17 实跑：进来第一拍没点中左边金卡，之后一直空点确定）。
-                self.sleep(0.05)
+                # 0.05 秒不够：2026-11-26 11:41 又点空一次（4 分钟档 → 降成 0 消耗档），
+                # 实战经验 0.15 秒最合适。
+                self.sleep(0.15)
                 self.click(x, y, after_sleep=0.5)
                 picked = getattr(self, "_last_click_at", 0.0) != before
                 if not picked:
