@@ -407,9 +407,22 @@ class ShopPlace:
             return 0
         return 0 if any(t in item["name"] for t in targets) else 1
 
+    def shop_date(self):
+        """商店页的「第N周 星期X」：顶栏读不到时沿用当天状态。
+
+        商店内页顶栏不显示日期（只有专注/零花钱），`current_day()` 会读成
+        (None, None)。「前 6 周留钱 / 第 7 周规则 / 最后一场比赛」都靠日期判，
+        读不到就整条跳过（2026-11-27 实跑第 1 周扭蛋流买了 120 元器材）。
+        `DayState.date` 读不到新日期时沿用旧实例，和 `day_state()` 的常驻语义一致。
+        """
+        week, day = self.current_day()
+        if week is None or day is None:
+            week, day = getattr(getattr(self, "_day", None), "date", None) or (None, None)
+        return week, day
+
     def training_days_left(self):
         """本局剩余训练日（周一~周五）；读不到日期返回 None（不拦）。"""
-        week, day = self.current_day()
+        week, day = self.shop_date()
         idx = WEEKDAY_INDEX.get(day or "")
         if week is None or idx is None:
             return None
@@ -448,7 +461,7 @@ class ShopPlace:
         属性商品，**不分品质**（蓝/白也买）；器材、教科书、牛奶、精力都不买。
         属性缺口、`soft_cap` 减半、余额、0 元商品规则照旧。
         """
-        week, day = self.current_day()
+        week, day = self.shop_date()
         items = [i for i in items
                  if self.shop_category(i["name"]) != "never"
                  and not any(w in i["name"] for w in SHOP_NEVER_BUY)]

@@ -10,6 +10,7 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -28,7 +29,7 @@ class ShopTask(ShopPlace):
 
     def __init__(self, style="训练流", day=(8, "一")):
         self._style = style
-        self._day = day
+        self._day = SimpleNamespace(date=day)
         self.config = {}
         self.logs = []
 
@@ -41,10 +42,17 @@ class ShopTask(ShopPlace):
         return True
 
     def current_day(self, texts=None):
-        return self._day
+        return self._day.date
 
     def log_info(self, msg):
         self.logs.append(msg)
+
+
+class ShopPageShopTask(ShopTask):
+    """模拟商店内页：顶栏没有「第N周 星期X」，`current_day` 读不到。"""
+
+    def current_day(self, texts=None):
+        return (None, None)
 
 
 class ShopDecisionBaseline(unittest.TestCase):
@@ -85,6 +93,20 @@ class ShopDecisionBaseline(unittest.TestCase):
         # 训练流没有「留钱给周末」这条，进店就按顺序买。
         self.assertEqual(self.pick(
             [item("器材手册+", 100)], week=3), "器材手册+")
+
+    def test_gacha_style_before_week7_on_shop_page_without_date(self):
+        # 商店内页顶栏没有日期：current_day 读不到，沿用当天状态的日期。
+        task = ShopPageShopTask(style="扭蛋流", day=(1, "一"))
+        pick, _reason = task.pick_shop_item(
+            [item("器材指导教程", 120)], 250, POLICY)
+        self.assertIsNone(pick)
+
+    def test_training_style_on_shop_page_without_date(self):
+        # 同一页训练流不受「留钱」限制，仍按顺序买。
+        task = ShopPageShopTask(style="训练流", day=(1, "一"))
+        pick, _reason = task.pick_shop_item(
+            [item("器材指导教程", 120)], 250, POLICY)
+        self.assertEqual(pick["name"], "器材指导教程")
 
     # ---------- 最后一天之前留 120 给扭蛋（2026-11-15 用户口径） ----------
     def test_keeps_120_for_gacha_before_last_day(self):
