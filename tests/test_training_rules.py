@@ -13,7 +13,9 @@ import collections
 import glob
 import json
 import os
+import shutil
 import sys
+import tempfile
 import time
 import unittest
 
@@ -32,6 +34,7 @@ from tools.check_handlers import DryRunTask  # noqa: E402
 from src.tasks.training.parsers import (  # noqa: E402
     CRIT_RING_FACTOR, CRIT_RING_MIN, ring_is_border)
 from src.tasks.training import params  # noqa: E402
+from src.tasks.training import records  # noqa: E402
 from src.tasks.training.strategy.styles import style_spec  # noqa: E402
 
 # 门槛已进策略参数表：测试按当前值取边界，不写死 360/180。
@@ -373,31 +376,23 @@ class GachaRules(unittest.TestCase):
         self.assertEqual(task.actions[0][1], 1100)      # 中间那张全属性卡
 
     def test_other_style_card_is_excluded(self):
-        """2026-11-14 用户口径：别的流派的专属卡一律跳过。
-
-        实跑：小游戏强化+（金，100币）效果是「本局训练中，所有小游戏都可以
-        额外获得30点体能」—— 扭蛋流不去游戏厅，买了纯浪费。
-        器材暴击++ 按卡名归训练流，扭蛋流/小游戏流同样买了没收益 → 也跳过。
-        """
+        """别的流派的专属卡一律跳过（小游戏强化 / 必定成功）。"""
         from src.tasks.training.attributes import is_other_style_card
         effect = "本局训练中，所有小游戏都可以额外获得30点体能。队友属性大幅提升"
         self.assertTrue(is_other_style_card("小游戏强化+", effect, "扭蛋流"))
         self.assertFalse(is_other_style_card("小游戏强化+", effect, "小游戏流"))
-        # 器材暴击++ 归训练流：训练流该买，别的流派跳过
-        self.assertTrue(is_other_style_card(
-            "器材暴击++", "接下来的训练中，器材的暴击加成提高20%。队友属性中幅提升",
-            "扭蛋流"))
-        self.assertFalse(is_other_style_card(
-            "器材暴击++", "接下来的训练中，器材的暴击加成提高20%。队友属性中幅提升",
-            "训练流"))
+        # 必定成功（扭蛋卡）归训练流：训练流该买，别的流派跳过
+        self.assertTrue(is_other_style_card("必定成功", "2天内训练必定成功", "扭蛋流"))
+        self.assertFalse(is_other_style_card("必定成功", "2天内训练必定成功", "训练流"))
 
     def test_card_style_target_by_name(self):
-        """流派归属**先看卡名**：器材暴击/训练增强/教科书 → 训练流。"""
+        """流派归属先看卡名：只有小游戏强化 / 必定成功是专属。"""
         from src.tasks.training.attributes import card_style_target
-        self.assertEqual(card_style_target("器材暴击++", ""), "训练流")
-        self.assertEqual(card_style_target("训练增强++", ""), "训练流")
-        self.assertEqual(card_style_target("弹跳教科书+", ""), "训练流")
+        self.assertEqual(card_style_target("必定成功", ""), "训练流")
         self.assertEqual(card_style_target("小游戏强化+", ""), "小游戏流")
+        # 2026-11-24 按分类板：教科书/器材/暴击/训练增强/升级包 → 共享
+        for name in ("器材暴击++", "训练增强++", "弹跳教科书+", "投射升级包++"):
+            self.assertIsNone(card_style_target(name, ""), name)
         # 卡名认不出才看效果文本
         self.assertEqual(
             card_style_target("延迟满足", "本局训练中，所有小游戏都可以额外获得30点体能"),
@@ -405,16 +400,16 @@ class GachaRules(unittest.TestCase):
         self.assertIsNone(card_style_target("投射增加+", "主力投射+48，队友属性大幅提升"))
 
     def test_style_matching_card_wins_first(self):
-        """训练流里符合流派的专属卡（器材暴击++）排最前。"""
+        """训练流里符合流派的专属卡（必定成功）排最前。"""
         task = FakeTask(gacha_texts([
             ("投射增加+", "主力投射+48，队友属性大幅提升"),
-            ("器材暴击++", "接下来的训练中，器材的暴击加成提高20%。队友属性中幅提升"),
+            ("必定成功", "2天内训练必定成功，队友属性中幅提升"),
             ("意识增加+", "主力意识+48，队友属性中幅提升"),
         ], stamina="128/130", money="344", price="80"),
             qualities=["金", "金", "金"])
         task._style = "训练流"
         self.assertTrue(task.handle_street(task._texts))
-        self.assertEqual(task.actions[0][1], 1100)      # 中间那张器材暴击++
+        self.assertEqual(task.actions[0][1], 1100)      # 中间那张必定成功
 
     def test_gacha_style_skips_arcade_card(self):
         """扭蛋流遇到小游戏强化+ → 不买它，改选另一张。"""
@@ -527,8 +522,8 @@ class GachaRules(unittest.TestCase):
         self.assertTrue(task.handle_street(task._texts))
         self.assertEqual(task.actions[0][1], 1100)      # 中间那张额外零用钱+
 
-    def test_money_card_not_first_for_training_style(self):
-        """训练流不消费零用钱 → 零用钱卡不享受最高优先。"""
+    def test_money_card_first_for_all_styles(self):
+        """2026-11-24 分类板 essential：零用钱卡所有流派都优先。"""
         task = FakeTask(gacha_texts([
             ("器材暴击++", "全部器材熟练度+10"),
             ("额外零用钱+", "接下来每个周六开始前，获得80零用钱。"),
@@ -537,7 +532,33 @@ class GachaRules(unittest.TestCase):
             qualities=["金", "紫", "紫"])
         task._style = "训练流"
         self.assertTrue(task.handle_street(task._texts))
-        self.assertEqual(task.actions[0][1], 620)       # 左边那张金卡
+        self.assertEqual(task.actions[0][1], 1100)      # 零用钱卡跨流派优先
+
+    def test_chaoyue_blocked_before_week5(self):
+        """2026-11-27：超前消费第 5 周前不买（-60×5 次以上打工，净亏）。"""
+        texts = gacha_texts([
+            ("超前消费", "立刻获取300零用钱。所有打工的基础零用钱-60。队友属性大幅提升"),
+            ("投射增加+", "主力投射+48，队友属性大幅提升"),
+            ("意识增加+", "主力意识+48，队友属性中幅提升"),
+        ], stamina="128/130", money="344", price="80")
+        texts.append(box(30, 20, "第4周", 120, 40))
+        task = FakeTask(texts, qualities=["金", "金", "金"])
+        task._style = "训练流"
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertNotIn("选「超前消费」", "".join(task.logs))
+
+    def test_chaoyue_bought_from_week5(self):
+        """2026-11-27：第 5 周起买 —— 剩 5 次打工 × 60 = 300，正好抵平。"""
+        texts = gacha_texts([
+            ("超前消费", "立刻获取300零用钱。所有打工的基础零用钱-60。队友属性大幅提升"),
+            ("投射增加+", "主力投射+48，队友属性大幅提升"),
+            ("意识增加+", "主力意识+48，队友属性中幅提升"),
+        ], stamina="128/130", money="344", price="80")
+        texts.append(box(30, 20, "第5周", 120, 40))
+        task = FakeTask(texts, qualities=["金", "金", "金"])
+        task._style = "训练流"
+        self.assertTrue(task.handle_street(task._texts))
+        self.assertIn("选「超前消费」", "".join(task.logs))
 
     def test_money_card_names(self):
         from src.tasks.training.attributes import item_attr_target, is_money_card
@@ -2624,6 +2645,100 @@ class TapToContinue(unittest.TestCase):
         self.assertEqual(task.actions, [])
 
 
+class BoostRecord(unittest.TestCase):
+    """倍率破纪录：>500% 且超过上一次才存图到 newrecord/（用户 2026-11-24）。
+
+    - 门槛和“破上一次”合成一条判据：best 初始 500，`v > best` 才记录；
+    - 读不准的数字不猜（`1309` 这种 4 位直接判失败）；
+    - 数字始终保存；开关 `自动存图` 只控制截图。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="ok-newrecord-")
+        self._folder = records.FOLDER
+        self._path = records.RECORD_PATH
+        records.FOLDER = self.tmp
+        records.RECORD_PATH = os.path.join(self.tmp, "boost_records.json")
+
+    def tearDown(self):
+        records.FOLDER = self._folder
+        records.RECORD_PATH = self._path
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    @staticmethod
+    def texts(value, bonus=True, split=False):
+        out = [box(180, 207, "倍率加成", 198, 60),
+               box(181, 312, "额外队友", 201, 61)]
+        if split:
+            out += [box(120, 200, str(value), 90, 50),
+                    box(216, 202, "%", 30, 40)]
+        else:
+            out.append(box(120, 200, f"{value}%", 120, 50))
+        if bonus:
+            out.append(box(120, 260, "Bonus:", 90, 30))
+        return out
+
+    def _json(self):
+        with open(records.RECORD_PATH, encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_reads_percent_box_and_split_boxes(self):
+        texts = self.texts(560)
+        task = FakeTask(texts)
+        self.assertEqual(task.read_training_multiplier(texts), 560)
+        split = self.texts(560, split=True)
+        self.assertEqual(task.read_training_multiplier(split), 560)
+
+    def test_rejects_four_digits_and_frames_without_bonus(self):
+        task = FakeTask(self.texts(1309))
+        self.assertIsNone(task.read_training_multiplier(self.texts(1309)))
+        no_bonus = self.texts(560, bonus=False)
+        self.assertIsNone(task.read_training_multiplier(no_bonus))
+
+    def test_only_new_records_above_floor_are_saved(self):
+        task = FakeTask(self.texts(560))
+        self.assertTrue(task.handle_boost_status(self.texts(560)))
+        self.assertEqual(self._json()["best"], 560)
+        self.assertTrue(any(n.endswith(".jpg") for n in os.listdir(self.tmp)))
+
+        # 同分 / 更低：不存
+        task.handle_boost_status(self.texts(560))
+        task.handle_boost_status(self.texts(520))
+        self.assertEqual(len(self._json()["records"]), 1)
+
+        # 更高：再存一条
+        task.handle_boost_status(self.texts(600))
+        self.assertEqual(self._json()["best"], 600)
+        self.assertEqual(len(self._json()["records"]), 2)
+
+    def test_five_hundred_is_not_a_record(self):
+        task = FakeTask(self.texts(500))
+        task.handle_boost_status(self.texts(500))
+        self.assertFalse(os.path.exists(records.RECORD_PATH))
+
+    def test_switch_off_still_saves_number_without_image(self):
+        task = FakeTask(self.texts(560), config={"自动存图": False})
+        self.assertTrue(task.handle_boost_status(self.texts(560)))
+        self.assertEqual(self._json()["best"], 560)
+        self.assertFalse([n for n in os.listdir(self.tmp) if n.endswith(".jpg")])
+
+    def test_corrupt_file_is_kept_aside(self):
+        os.makedirs(self.tmp, exist_ok=True)
+        with open(records.RECORD_PATH, "w", encoding="utf-8") as f:
+            f.write("{not json")
+        task = FakeTask(self.texts(600))
+        task.handle_boost_status(self.texts(600))
+        self.assertTrue([n for n in os.listdir(self.tmp) if ".corrupt-" in n])
+        self.assertEqual(self._json()["best"], 600)
+
+    def test_captain_page_is_not_this_page(self):
+        texts = [box(500, 300, "训练加成", 200, 40),
+                 box(800, 300, "扭蛋加成", 200, 40)]
+        task = FakeTask(texts)
+        self.assertFalse(task.handle_boost_status(texts))
+        self.assertFalse(os.path.exists(records.RECORD_PATH))
+
+
 class ArcadeRules(unittest.TestCase):
     """游戏厅：「自动」= 打过的小游戏，只能买带它那几张（用户 2026-10-27）。"""
 
@@ -3902,8 +4017,9 @@ class PlaceModulesRules(unittest.TestCase):
             "器材手册++": "equipment_boost",
             "奇妙防守秘籍+": "attribute",
             "全能饮料++": "attribute",
-            "苦味饮料++": "never",
-            "神之庇佑++": "never",
+            "苦味饮料++": "stamina",
+            "神之庇佑++": "training",
+            "同心护符": "training",
         }
         for name, want in cases.items():
             self.assertEqual(task.shop_category(name), want, name)
@@ -3927,8 +4043,10 @@ class PlaceModulesRules(unittest.TestCase):
             "全属性+6": "attribute",
             "两个推荐属性+10": "attribute",
             "随机一个属性+20": "attribute",
-            "精力+80，随机属性-10": "never",         # 苦味饮料
-            "精力+60，或是什么都没发生": "never",     # 怪味饮料
+            "精力+80，随机属性-10": "stamina",       # 苦味饮料
+            "精力+60，或是什么都没发生": "stamina",   # 怪味饮料
+            "2天内训练必定成功": "training",          # 神之庇佑
+            "队友训练表现+5%": "training",            # 同心护符
             "3天内，训练精力消耗+10%，器材暴击训练收益+40%": "equipment_boost",
         }
         for text, want in cases.items():
@@ -3960,10 +4078,10 @@ class PlaceModulesRules(unittest.TestCase):
         task = FakeTask([])
         yogurt_plus = {"name": "酸奶+", "price": 130, "quality": "金"}
         self.assertIn("溢出", task.shop_stamina_gate(yogurt_plus, 130, 130))
-        # 基础款精力饮料：图鉴没数据 → 按 SHOP_STAMINA_UNKNOWN_ASSUME(45) 估
-        unknown = {"name": "精力饮料", "price": 30, "quality": "蓝"}
-        self.assertIn("溢出", task.shop_stamina_gate(unknown, 100, 130))
-        self.assertIsNone(task.shop_stamina_gate(unknown, 80, 130))
+        # 基础款精力饮料：图鉴实抓精力+20（2026-11-24），缺口 ≥20 才能喝
+        drink = {"name": "精力饮料", "price": 30, "quality": "蓝"}
+        self.assertIn("溢出", task.shop_stamina_gate(drink, 115, 130))
+        self.assertIsNone(task.shop_stamina_gate(drink, 110, 130))
         # 酸奶 +60：缺口 50 会溢出，缺口 60 刚好不溢出
         yogurt = {"name": "酸奶", "price": 100, "quality": "紫"}
         self.assertIn("溢出", task.shop_stamina_gate(yogurt, 80, 130))
@@ -7332,26 +7450,32 @@ class PurchaseRules(unittest.TestCase):
         self.assertTrue(task.handle_shop(texts))
         self.assertNotIn("买「大乐透」", "".join(task.logs))
 
-    def test_shop_never_buys_negative_drinks(self):
-        """2026-11-08 用户口径：苦味/怪味饮料带负面/随机效果，一律不买。
+    def test_shop_negative_drinks_use_stamina_gate(self):
+        """2026-11-24 用户口径：苦味/怪味归「有条件优先」，按精力缺口判。
 
-        苦味饮料+ = 精力+120、随机属性-10；怪味饮料 = 精力+30 或什么都没发生。
-        连 0 元免费也不拿；同屏还有正常商品时照常买正常的。
+        精力 <30 时买；满精力时立刻量溢出 → 不买。负面效果照旧（苦味 -10 属性）。
         """
-        for name in ("苦味饮料+", "苦味饮料", "怪味饮料", "怪味饮料+"):
-            task, texts = self._shop([(name, 100)], money=500)
+        for name in ("苦味饮料+", "苦味饮料", "怪味饮料+", "怪味饮料++"):
+            task, texts = self._shop([(name, 100)], money=500, stamina="5/130")
+            self.assertTrue(task.handle_shop(texts))
+            self.assertIn(f"买「{name}」", "".join(task.logs))
+        for name in ("苦味饮料+", "苦味饮料", "怪味饮料+", "怪味饮料++"):
+            task, texts = self._shop([(name, 100)], money=500, stamina="130/130")
             self.assertTrue(task.handle_shop(texts))
             self.assertNotIn(f"买「{name}」", "".join(task.logs))
-        # 0 元免费也不拿
-        task, texts = self._shop([("苦味饮料", "免费")], money=500)
+
+    def test_shop_training_buff_only_training_style(self):
+        """2026-11-24：神之庇佑/同心护符是训练流专属，最后一周也不买。"""
+        task, texts = self._shop([("神之庇佑", 70)], money=500, style="训练流")
         self.assertTrue(task.handle_shop(texts))
-        self.assertNotIn("买「苦味饮料」", "".join(task.logs))
-        # 同屏有正常商品 → 买正常的，不买苦味
-        task, texts = self._shop([("苦味饮料+", 100), ("弹跳秘籍", 60)],
-                                 money=500)
+        self.assertIn("买「神之庇佑」", "".join(task.logs))
+        task, texts = self._shop([("神之庇佑", 70)], money=500, style="商店流")
         self.assertTrue(task.handle_shop(texts))
-        self.assertIn("买「弹跳秘籍」", "".join(task.logs))
-        self.assertNotIn("苦味饮料", "".join(task.logs).split("商店：买")[-1])
+        self.assertNotIn("买「神之庇佑」", "".join(task.logs))
+        task, texts = self._shop([("神之庇佑", 70)], money=500,
+                                 week=7, style="训练流")
+        self.assertTrue(task.handle_shop(texts))
+        self.assertNotIn("买「神之庇佑」", "".join(task.logs))
 
     def test_shop_attribute_drinks_are_buyable(self):
         """2026-11-11 用户口径：全能/专属/偶然是属性类，不再是永不买。"""
@@ -7452,12 +7576,17 @@ class PurchaseRules(unittest.TestCase):
         白白溢出。现在按 `SHOP_STAMINA_UNKNOWN_ASSUME`(45) 保守估算 ——
         满精力拒买，缺口 ≥ 45 才买。
         """
-        task, texts = self._shop([("精力饮料", 50)], money=200, stamina="130/130")
-        self.assertTrue(task.handle_shop(texts))
-        self.assertIn("恢复量未登记按 45 估", "".join(task.logs))
-        task, texts = self._shop([("精力饮料", 50)], money=200, stamina="70/130")
-        self.assertTrue(task.handle_shop(texts))
-        self.assertIn("买「精力饮料」", "".join(task.logs))
+        from src.tasks.training.constants import SHOP_STAMINA_ITEMS
+        SHOP_STAMINA_ITEMS["测试精力饮料"] = ("immediate", None)
+        try:
+            task, texts = self._shop([("测试精力饮料", 50)], money=200, stamina="130/130")
+            self.assertTrue(task.handle_shop(texts))
+            self.assertIn("恢复量未登记按 45 估", "".join(task.logs))
+            task, texts = self._shop([("测试精力饮料", 50)], money=200, stamina="70/130")
+            self.assertTrue(task.handle_shop(texts))
+            self.assertIn("买「测试精力饮料」", "".join(task.logs))
+        finally:
+            del SHOP_STAMINA_ITEMS["测试精力饮料"]
 
     def test_shop_buys_affordable_purple_without_gate(self):
         """2026-10-29 实跑回归：钱够就买，没有 300 那种余额门槛。
@@ -9339,6 +9468,9 @@ class MonitorButtons(unittest.TestCase):
             def set_style(self, name):
                 self.log.append(("style", name))
 
+            def set_auto_save(self, enabled):
+                self.log.append(("auto_save", enabled))
+
             def set_score_target(self, target):
                 self.log.append(("target", target))
 
@@ -9389,6 +9521,14 @@ class MonitorButtons(unittest.TestCase):
         self.assertEqual(view._style_combo.currentData(), "扭蛋流")
         view._style_combo.setCurrentIndex(view._style_combo.findData("商店流"))
         self.assertIn(("style", "商店流"), actions.log)
+
+    def test_auto_save_switch_defaults_on_and_saves(self):
+        """赛事卡第一行「自动存图」：默认开，拨动写配置（落盘）。"""
+        view, actions = self._view()
+        view.update_data(self._data(auto_save=True))
+        self.assertTrue(view._switch_auto_save.isChecked())
+        view._switch_auto_save.setChecked(False)
+        self.assertIn(("auto_save", False), actions.log)
 
     def test_score_target_editable_without_check(self):
         """目标分输入框始终可编辑：允许先填分、后勾「刷到目标分」。"""
