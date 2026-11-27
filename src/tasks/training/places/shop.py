@@ -99,8 +99,8 @@ class ShopPlace:
         ("器材手册", 1),
         ("教科书", 2),
     )
-    SHOP_SLOT_BY_CATEGORY = {"textbook": 2, "equipment_boost": 1,
-                             "attribute": 3}
+    SHOP_SLOT_BY_CATEGORY = {"training": 0, "textbook": 2,
+                             "equipment_boost": 1, "attribute": 3}
 
     # ---------- 详情面板效果文本（2026-11-12） ----------
     # 商品卡只显示「名字 + 价格 + 品质底色」，**效果要选中卡片后看右侧详情**。
@@ -114,10 +114,10 @@ class ShopPlace:
     #   - 「训练消耗精力-40%」（牛奶）不能命中「训练精力消耗+10%」（器材教程）。
     SHOP_EFFECT_RULES = (
         ("零用钱", "cash"),
-        ("必定成功", "never"),            # 神之庇佑
-        ("队友训练", "never"),            # 同心护符
-        ("随机属性-", "never"),           # 苦味饮料：拿属性换精力
-        ("什么都没发生", "never"),        # 怪味饮料：可能白花钱
+        ("必定成功", "training"),          # 神之庇佑：训练流专属
+        ("队友训练", "training"),          # 同心护符：训练流专属
+        ("随机属性-", "stamina"),          # 苦味饮料：回精力，随机属性-10
+        ("什么都没发生", "stamina"),       # 怪味饮料：回精力，可能白花钱
         ("训练消耗精力-", "milk"),        # 特训牛奶：训练消耗精力-40%
         ("训练等级", "textbook"),         # 投射训练等级+1
         ("器材熟练度", "equipment_boost"),  # 全部器材熟练度+10
@@ -500,7 +500,7 @@ class ShopPlace:
                      if i["price"] == 0
                      or self.item_category(i) not in ("equipment_boost",
                                                       "textbook", "milk",
-                                                      "stamina")]
+                                                      "stamina", "training")]
             if not items:
                 return None, "最后一周：店里只剩器材/教科书/牛奶/精力，关店"
         if final_match:
@@ -602,6 +602,9 @@ class ShopPlace:
         caps = caps or {}
         for i in affordable:
             cat = self.item_category(i)
+            # 训练流专属（神之庇佑 / 同心护符）：别的流派不买
+            if cat == "training" and self.style != "训练流":
+                continue
             slot = self.shop_slot(i["name"], cat)
             group = self.SHOP_GROUP.get(cat, 2)
             quality = (0 if group != 2

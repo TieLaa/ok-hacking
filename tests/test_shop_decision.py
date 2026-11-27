@@ -153,8 +153,9 @@ class ShopDecisionBaseline(unittest.TestCase):
     def test_free_ignores_money(self):
         self.assertEqual(self.pick([item("赠品", 0)], money=0), "赠品")
 
-    def test_never_buy_list_filtered_even_if_free(self):
-        self.assertIsNone(self.pick([item("苦味饮料", 0)]))
+    def test_free_negative_drink_now_buyable(self):
+        # 2026-11-24：苦味/怪味不再在永不买名单；0 元免费照拿（不触发精力门槛）
+        self.assertEqual(self.pick([item("苦味饮料", 0)]), "苦味饮料")
 
     # ---------- 最后一周 / 最后一场 ----------
     def test_final_week_no_milk(self):

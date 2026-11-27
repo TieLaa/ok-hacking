@@ -6,22 +6,28 @@ runtime 里，`self.click` 才真的点得动。
 
 用法：
     1. （管理员）启动 runtime：tools\\restart_mcp_runtime.ps1
-    2. 游戏里打开 图鉴 →「商品」页、窗口在前台
+    2. 游戏里打开 图鉴 →「商品」页、窗口在前台，并停在第一页
+       （脚本不再自动回顶）
     3. python tools/mcp/client.py tools/mcp/codex_harvest.py
 
 产物：logs/captures/codex/codex_items.tsv
-      每行 `页码\t格子\t名字\t详情(用 | 连接)`——由会话读它建商店登记表。
+      每行 `页码\t格子\t名字\t详情`——详情里的换行用 `\n` 转义
+      （单元格不能含真换行；老文件仍是 ` | ` 拼接，读取时两种都认）。
 
 2026-11-11 重写（旧版是「盲拖 + 连续两次空页就停」，实跑 53/192 就收工，
 到顶和到底分不出来，还会空拖）：
-- 几何实测（1548×871 客户区）：卡片 140×139、行距/列距 165、
-  行心 y=314/479/644/773（第 4 行只露上半截，点可见中心）、
-  列心 x=157/322/487/653/818/983；
-- **每拖一次都抓帧**，用像素级模板匹配量出实际位移：
-  位移 ≈ 0 → 到顶/到底，立刻停，不再空拖；
-- 拖动固定给 330px（2 行），实测位移带小数时用「内容行号 + 累计位移」定位，
-  只点没点过的行；小数位移也能点回卡片中心；
-- 整屏都是灰色占位箱（未解锁）→ 到底，停；占位屏拖不动时切页签复位；
+2026-11-24 修正（用户实机确认）：
+- 一页只有 **3 行 × 6 列 = 18 张**可点卡片；第 4 行只是底部预览，点不中；
+- 列坐标固定 x=157/322/487/653/818/983；行中心每次点击前按卡片底色
+  重新扫描（卡片约 139~140px、间隙 25~26px），不再写死屏幕 y：
+  点击/翻页都会让列表相对屏幕偏移，写死会逐页累积误差；
+- **每拖一次都抓帧**，只用来判断「有没有动」：位移 ≈ 0 → 到顶/到底，立刻停；
+- 翻页固定 495px（3 行）：下一页从第 4 行开始，两页不重叠；
+  拖动用「拖-停-放」：连续拖 495px，停 0.2s 再松手，松手后等列表停住；
+  **列坐标固定，行中心按当前帧量到的卡片行取**；
+- 每次点击后必须确认**详情首行变了**才算成功：点不中就重试一次，
+  仍不变就留到下一页重试，不再把「读到旧详情」当成成功；
+- 详情面板出现「继续训练有机会解锁更多商品」/灰色占位箱 → 扫完了，停；
 - 「点亮 / 占位 / 空格」判据：点亮卡有品质底色，饱和度均值 27~114；
   灰占位箱饱和度 1.2；纯空格 1.5。用饱和度做闸门，占位箱和空格都不点。
 """
@@ -35,39 +41,59 @@ from ok import BaseTask
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUT_DIR = os.path.join(ROOT, "logs", "captures", "codex")
 
-# ---- 实测几何（1548×871，2026-11-11）----
+
+def join_detail(lines):
+    """详情行写进 TSV 单元格：单元格不能含真换行，用 `\\n` 转义。"""
+    return "\\n".join(lines)
+
+
+def split_detail(detail):
+    """兼容两种历史格式：新数据 `\\n` 转义，老数据 ` | ` 拼接。"""
+    if "\\n" in detail:
+        return detail.split("\\n")
+    return detail.split(" | ")
+
+# ---- 实测几何（1548×871，2026-11-24 用户确认）----
+# 图鉴「商品」页一页只有 3 行 × 6 列 = 18 张可点卡片；
+# 第 4 行只是底部露出的预览，点不中，不能算进识别区域。
+# 每张卡只有**正中心**可靠：黄色选中框的中心。
 COLS = (157, 322, 487, 653, 818, 983)      # 6 列中心
-# 每行**可交互矩形的上下沿**（不是卡片几何中心）：第 4 行被面板裁在 741..805，
-# 点它的几何中心 809 会落到面板外，必须点可见矩形的中心 773。
-ROW_BANDS = ((245, 383), (410, 548), (575, 714), (741, 805))
-ROW_CLICK_Y = tuple((a + b) // 2 for a, b in ROW_BANDS)   # 314 / 479 / 644 / 773
-PANEL_BOTTOM = ROW_BANDS[-1][1]            # 805，面板可视下沿
+ROW_CLICK_Y = (314, 479, 644)              # 3 行中心（选中框中心，不是卡片底色中心）
 ROW_PITCH = 165                            # 行距 = 列距
-CARD_HW, CARD_HH = 70, 69                  # 卡片半宽/半高（140×139）
-GRID = (88, 245, 1053, PANEL_BOTTOM)       # 网格区域 x1,y1,x2,y2
+GRID = (88, 245, 1053, 714)                # 3 行可交互区 x1,y1,x2,y2
+PANEL_BOTTOM = GRID[3]                     # 714，第 4 行预览不参与
 GAP_POINT = (240, 390)                     # 行列间隙里的一点，取面板底色
 DETAIL = (0.70, 0.22, 1.00, 0.92)          # 右侧详情面板（相对坐标）
-# 一次滚 2 行（330px）：可视 3 个整行 + 1 个半行，留 1 行重叠防漏。
-DRAG_ROWS = 2
+# 一次翻 3 行：495px（3 × 165）；不用 650，650 会过 4 行。
+DRAG_ROWS = 3
 DRAG_PX = ROW_PITCH * DRAG_ROWS
+DRAG_HOLD = 0.2                             # 到位置停 0.2s 再松手
 DRAG_X = COLS[2]                           # 拖动落在第 3 列卡片中心线上
-DRAG_FROM_Y = ROW_CLICK_Y[2]               # 644
-DRAG_TO_Y = DRAG_FROM_Y - DRAG_PX          # 314
-MAX_PAGES = 64                             # 只看防死循环；到底由位移/空屏判
-EMPTY_STOP = 3                             # 连续几屏没新品才判到底（旧版 2 太急）
-NO_MOVE_PX = 25                            # 位移小于这么多 = 拖不动
-TAB_Y = 167
-TAB_NUGGET = 650                           # 「扭蛋」页签
-TAB_ITEM = 430                             # 「商品」页签
+DRAG_UP_FROM_Y = ROW_CLICK_Y[2]            # 644，向上翻页的起点
+MAX_PAGES = 64                             # 只看防死循环；到底由位移/空页判
+EMPTY_STOP = MAX_PAGES                       # 不再按 3 页早停；只由末尾灰框/拖不动停
+MOVE_DIFF = 2.0                            # 前后帧平均差超过它 = 列表真的动了
+END_MARKS = ("继续训练有机会", "解锁更多")   # 图鉴末尾灰框的提示文案
 
 
 class Task(BaseTask):
+    # 子类可覆盖：页签 x 坐标 / 输出文件名（扭蛋页复用同一套采集逻辑）。
+    TAB_X = 430
+    OUT_NAME = "codex_items.tsv"
 
     def reset_to_start(self):
         return True
 
     def verify_start_state(self):
         return True
+
+    def _codex_open(self):
+        """当前是不是「图鉴详情」页；不是就拒绝采集，避免把剧情文字当卡片。"""
+        boxes = self.ocr(x=0.0, y=0.0, to_x=1.0, to_y=1.0) or []
+        text = "".join(getattr(b, "name", "").strip() for b in boxes)
+        if "事件播放确认" in text or "确定要播放此事件吗" in text:
+            return False
+        return "图鉴详情" in text
 
     # ---------- 画面 ----------
 
@@ -82,30 +108,64 @@ class Task(BaseTask):
             roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         return cv2.resize(roi, (96, 112), interpolation=cv2.INTER_AREA)
 
-    def _measure_shift(self, prev, cur):
-        """cur 相对 prev 的位移（正 = 内容向上移）。返回 (px, 匹配误差)。"""
-        if prev is None or cur is None:
-            return 0, 1e9
-        h = prev.shape[0]
-        scale = (GRID[3] - GRID[1]) / float(h)
-        # d=0 必须参与比较，否则「没动」会被硬凑成某个位移
-        best = (0, np.abs(cur.astype(np.int16)
-                          - prev.astype(np.int16)).mean())
-        for d in range(1, int(h * 0.9)):
-            up = np.abs(cur[0:h - d].astype(np.int16)
-                        - prev[d:h].astype(np.int16)).mean()
-            if up < best[1]:
-                best = (d * scale, up)
-            down = np.abs(cur[d:h].astype(np.int16)
-                          - prev[0:h - d].astype(np.int16)).mean()
-            if down < best[1]:
-                best = (-d * scale, down)
-        return best
+    def _wait_still(self, frames=60):
+        """等列表真正停住：连续两帧的网格差 < 0.5 才返回。
 
-    def _bg_color(self):
+        松手后列表还会滑；不等它停就拖下一次，第二次的前一段会被余滑吃掉。
+        这里按画面状态等，不设固定延迟。
+        """
+        prev = self._grid_gray()
+        if prev is None:
+            return
+        for _ in range(frames):
+            self.next_frame()
+            cur = self._grid_gray()
+            if cur is None:
+                return
+            diff = float(np.abs(cur.astype(np.int16)
+                                - prev.astype(np.int16)).mean())
+            if diff < 0.5:
+                return
+            prev = cur
+
+    def _row_centers(self):
+        """扫描卡片底色，返回当前 3 行卡片的实际中心 y；失败回退固定值。
+
+        每页/每次点击都可能让列表相对屏幕移动几像素；固定 y=314/479/644
+        只在列表不动时成立。这里在左列卡片底色上找连续的 3 段（卡片约
+        139~140px、间隙 25~26px），取中间一段的中心，再 ±165。
+        """
+        frame = self.frame
+        if frame is None:
+            return ROW_CLICK_Y
+        sat = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)[:, :, 1]
+        for x in (100, 265, 430, 595, 760, 925):
+            strip = sat[220:730, max(0, x - 4):x + 4].mean(axis=1)
+            on = strip > 12
+            runs = []
+            start = None
+            for i, v in enumerate(on):
+                if v and start is None:
+                    start = i
+                elif not v and start is not None:
+                    if i - start >= 20:
+                        runs.append((start + 220, i - 1 + 220))
+                    start = None
+            if start is not None:
+                runs.append((start + 220, 729))
+            full = [(a, b) for a, b in runs if b - a >= 100]
+            mids = [round((a + b) / 2) for a, b in full]
+            mid = next((m for m in mids if 380 <= m <= 580), None)
+            if mid is not None:
+                return (mid - ROW_PITCH, mid, mid + ROW_PITCH)
+        return ROW_CLICK_Y
+
+    def _bg_color(self, rows=None):
         """面板底色：取行列间隙里的一小块，取中位色。"""
         frame = self.frame
         x, y = GAP_POINT
+        if rows:
+            y = int((rows[0] + rows[1]) / 2)
         patch = frame[y - 6:y + 6, x - 6:x + 6]
         return np.median(patch.reshape(-1, patch.shape[-1]), axis=0)
 
@@ -139,57 +199,123 @@ class Task(BaseTask):
         boxes.sort(key=lambda b: b.y)
         return [b.name.strip() for b in boxes]
 
+    def _end_marker(self):
+        """详情面板是不是「继续训练有机会解锁更多商品」的末尾提示。"""
+        text = "".join(self._detail_lines())
+        return any(mark in text for mark in END_MARKS)
+
+    def _is_placeholder(self, cx, cy, bg):
+        """这一格是不是灰色未解锁占位箱（不是点亮卡，也不是空格）。"""
+        frame = self.frame
+        y1, y2 = max(0, cy - 30), min(PANEL_BOTTOM, cy + 30)
+        x1, x2 = max(0, cx - 30), min(self.width, cx + 30)
+        patch = frame[y1:y2, x1:x2]
+        if patch.size == 0 or patch.ndim != 3:
+            return False
+        sat = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)[:, :, 1]
+        if float(sat.mean()) >= 15:
+            return False
+        dist = np.abs(patch.astype(np.int16)
+                     - bg.reshape(1, 1, -1)).sum(axis=2)
+        return float((dist > 45).mean()) >= 0.20
+
+    def _check_page_end(self, rows, bg):
+        """扫到末尾灰框提示就停：先看当前详情，再点第一个灰框确认。"""
+        if self._end_marker():
+            self.log_info("详情面板已是末尾提示 → 扫完了")
+            return True
+        cells = [(cy, cx) for cy in rows for cx in COLS]
+        first = None
+        for i, (cy, cx) in enumerate(cells):
+            if self._is_placeholder(cx, cy, bg):
+                first = (cy, cx)
+                # 灰框后面还有点亮卡 → 只是中间的未解锁格，不是末尾。
+                if any(self._has_card(x, y, bg)
+                       for y, x in cells[i + 1:]):
+                    return False
+                break
+        if first is None:
+            return False
+        cy, cx = first
+        self.click(cx, cy, after_sleep=0.5)
+        if self._end_marker():
+            self.log_info("扫到「继续训练有机会解锁更多商品」→ 扫完了，停止")
+            return True
+        return False
+
     # ---------- 拖动 ----------
 
-    def _drag(self, up=True, distance=None):
-        """拖一行，返回实际位移（px，正 = 内容上移）。"""
+    def _drag(self, distance=None):
+        """向上拖一页，返回前后帧的平均差（> MOVE_DIFF = 列表确实动了）。
+
+        连续拖 495px 到目标，停 DRAG_HOLD 秒再松开；松手后等列表停住。
+        """
         x = DRAG_X
         dist = DRAG_PX if distance is None else int(round(distance))
-        if up:
-            start, end = DRAG_FROM_Y, DRAG_FROM_Y - dist
-        else:
-            start, end = DRAG_TO_Y, DRAG_TO_Y + dist
+        start = DRAG_UP_FROM_Y
+        end = start - dist
         before = self._grid_gray()
-        self.swipe(x, start, x, end, duration=1.0, after_sleep=0.6)
+        # 拖-停-放：连续拖到目标，停 0.2s 再松手；松手后等列表停住。
+        self.swipe(x, start, x, end, duration=1.0,
+                   settle_time=DRAG_HOLD, after_sleep=0)
+        self._wait_still()
+        self.next_frame()
         after = self._grid_gray()
-        shift, err = self._measure_shift(before, after)
-        self.log_info("拖动：目标 %dpx，实测 %.0fpx（%.2f 行，匹配误差 %.1f）"
-                      % (dist, shift, shift / float(ROW_PITCH), err))
-        return shift
-
-    def _lit_count(self):
-        """当前屏有几格是点亮的（占位箱/空格都算 0）。"""
-        bg = self._bg_color()
-        return sum(1 for y in ROW_CLICK_Y for x in COLS
-                   if self._has_card(x, y, bg))
-
-    def _tab_reset(self):
-        """切到「扭蛋」再切回「商品」——实机验证会把列表重新从顶部渲染。
-
-        2026-11-11 实测：滚到占位屏（未解锁的灰箱）之后，任何点位的拖拽
-        和滚轮都不生效（四个点位都只有 ±15px），只有切页签能复位。
-        """
-        self.click(TAB_NUGGET, TAB_Y, after_sleep=0.9)
-        self.click(TAB_ITEM, TAB_Y, after_sleep=0.9)
-        self.log_info("切页签复位 → 点亮格 %d" % self._lit_count())
-
-    def _scroll_to_top(self):
-        """拖到顶：位移为 0 立刻停；如果当前屏压根没有点亮商品（占位屏），
-        先切页签复位。"""
-        if self._lit_count() == 0:
-            self.log_info("当前屏没有点亮商品（占位/空白）→ 切页签复位")
-            self._tab_reset()
-        for _ in range(MAX_PAGES):
-            if abs(self._drag(up=False)) < NO_MOVE_PX:
-                self.log_info("已经到顶")
-                return
-        self.log_warning("拖了很多次都没到顶，按当前位置继续")
+        if before is None or after is None:
+            return 0.0
+        diff = float(np.abs(after.astype(np.int16)
+                            - before.astype(np.int16)).mean())
+        self.log_info("拖动：内容变化 %.1f（%s）"
+                      % (diff, "有移动" if diff >= MOVE_DIFF else "没动"))
+        return diff
 
     # ---------- 主流程 ----------
 
+    def _select_card(self, cx, cy):
+        """点卡片正中心，返回详情行；详情首行没变 = 没点中，返回 None。
+
+        旧版只看 len(lines) >= 2 就算成功，点不中时读到的是上一张卡的详情，
+        会把整行标成已扫。这里必须看到详情首行变化才认。
+        """
+        prev = self._detail_lines()
+        prev_name = prev[0] if len(prev) >= 2 else None
+        # 当前详情有效时只点一次：详情没变通常表示这一格本来就是选中状态，
+        # 留给本页最后的 pending 再补点；不要在这里立刻重复点。
+        attempts = 2 if prev_name is None else 1
+        for attempt in range(attempts):
+            self.click(cx, cy, after_sleep=0.45 if attempt == 0 else 0.75)
+            cur = self._detail_lines()
+            if len(cur) >= 2 and cur[0] != prev_name:
+                return cur
+        return None
+
+    @staticmethod
+    def _append_row(path, row):
+        """每采一条立刻落盘：中途停/异常不丢本次结果。"""
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write("%s\t%s\t%s\t%s\n" % row)
+
+    def _record(self, lines, page, ri, ci, seen, rows, path):
+        """记录一条；同名已采过返回 0。"""
+        name = lines[0]
+        if any(mark in name for mark in END_MARKS):
+            return 0
+        if name in seen:
+            return 0
+        seen[name] = lines
+        row = (page, "r%d-c%d" % (ri, ci), name, join_detail(lines))
+        rows.append(row)
+        self._append_row(path, row)
+        self.log_info("第 %d 页 r%d-c%d：%s" % (page + 1, ri, ci, name))
+        return 1
+
     def run(self):
+        if not self._codex_open():
+            self.log_warning(
+                "当前不是「图鉴详情」页 → 不采集；请先打开 图鉴 → 商品/扭蛋")
+            return {"items": 0, "out": None}
         os.makedirs(OUT_DIR, exist_ok=True)
-        path = os.path.join(OUT_DIR, "codex_items.tsv")
+        path = os.path.join(OUT_DIR, self.OUT_NAME)
         # 续采：上一次已经抓到的不丢（老值先读进来，按名字去重后一起写回）。
         seen, rows = {}, []
         if os.path.isfile(path):
@@ -199,77 +325,69 @@ class Task(BaseTask):
                     if len(parts) != 4:
                         continue
                     page_s, cell, name, detail = parts
-                    seen[name] = detail.split(" | ")
+                    # 旧文件里可能残留「继续训练有机会解锁更多」这行末尾提示，
+                    # 它不是商品，读入时丢掉。
+                    if any(mark in name for mark in END_MARKS):
+                        continue
+                    seen[name] = split_detail(detail)
                     rows.append((page_s, cell, name, detail))
             self.log_info("续采：已有 %d 条" % len(rows))
 
-        self._scroll_to_top()
-        # 用「内容行号」做唯一坐标：total_shift = 第一屏顶行滚过的总像素。
-        # 第 r 行的屏幕中心 = 314 + r*165 - offset，offset = total_shift % 165。
-        # 这样小数位移也能点回卡片中心，不会落到行间隙。
-        total_shift = 0.0
-        clicked = set()                  # 已经点过的内容行号
-        drag_px = float(DRAG_PX)
-        for screen in range(MAX_PAGES):
-            bg = self._bg_color()
-            first = int(total_shift // ROW_PITCH)
-            offset = total_shift - first * ROW_PITCH
-            visible = []                 # [(内容行号, 可点击的屏幕 y)]
-            for i in range(6):           # 最多 6 行会和可视区有交集
-                y = ROW_CLICK_Y[0] + i * ROW_PITCH - offset
-                y1, y2 = max(245, y - CARD_HH), min(PANEL_BOTTOM, y + CARD_HH)
-                if y2 - y1 < 40:         # 露出太少，点了也容易点到面板外
-                    continue
-                visible.append((first + i, int((y1 + y2) // 2)))
-
-            screen_lit = any(self._has_card(cx, cy, bg)
-                             for _, cy in visible for cx in COLS)
-            if not screen_lit:
-                self.log_info("整屏都是空图鉴 → 到底了")
-                break
-
+        # 开始前请把列表放在第一页（不再自动回顶）。
+        # 一页固定 3×6 = 18 个中心；翻页固定 3 行（495px），
+        # 下一页从第 4 行开始，点击坐标不参与位移修正。
+        empty_pages = 0
+        for page in range(MAX_PAGES):
             new_this = 0
-            for row_idx, cy in visible:
-                if row_idx in clicked:   # 上一屏已经扫过的重叠行，跳过
+            pending = []
+            self.log_info("第 %d 页行中心 %s"
+                          % (page + 1, self._row_centers()))
+            order = [(ri, ci) for ri in range(len(ROW_CLICK_Y))
+                     for ci in range(len(COLS))]
+            if page == 0:
+                # 第一页开局时 r0c0 往往已经是选中状态，先点别的格，
+                # 把它放到最后点，避免同一张卡连点两次/翻页前补点。
+                order = order[1:] + order[:1]
+            for ri, ci in order:
+                cx = COLS[ci]
+                # 每次点击前重新量行中心：选中/详情刷新会让列表抖几像素。
+                row_y = self._row_centers()
+                bg = self._bg_color(row_y)
+                cy = row_y[ri]
+                if (self._is_placeholder(cx, cy, bg)
+                        or not self._has_card(cx, cy, bg)):
                     continue
-                lit = [(ci, cx) for ci, cx in enumerate(COLS)
-                       if self._has_card(cx, cy, bg)]
-                if not lit:              # 整行都是占位/空格，没什么可采
-                    clicked.add(row_idx)
+                lines = self._select_card(cx, cy)
+                if lines is None:
+                    # 可能这一格本来就是选中状态（点它详情不变），
+                    # 先记下来，等本页其他格点完再补点一次。
+                    pending.append((ri, ci, cx))
                     continue
-                got = False
-                for ci, cx in lit:
-                    self.click(cx, cy, after_sleep=0.30)
-                    lines = self._detail_lines()
-                    if len(lines) < 2:
-                        continue
-                    got = True
-                    name = lines[0]
-                    if name in seen:
-                        continue
-                    seen[name] = lines
-                    rows.append((screen, "r%d-c%d" % (row_idx, ci),
-                                 name, " | ".join(lines)))
-                    new_this += 1
-                # 有卡片却一条详情都没读出来（点歪/OCR 抖了）→ 不标记已扫，
-                # 让它留在重叠区，下一屏再试一次。
-                if got:
-                    clicked.add(row_idx)
-                else:
-                    self.log_warning("第 %d 行有卡片但没读到详情，下一屏重试"
-                                     % row_idx)
-            self.log_info("第 %d 屏 +%d 条（累计 %d，行 %d~%d，偏移 %.0fpx）"
-                          % (screen + 1, new_this, len(rows),
-                             visible[0][0], visible[-1][0], offset))
-
-            shift = self._drag(up=True, distance=drag_px)
-            if abs(shift) < NO_MOVE_PX:
-                self.log_info("拖不动了 → 到底（本屏已采完）")
+                new_this += self._record(
+                    lines, page, ri, ci, seen, rows, path)
+            for ri, ci, cx in pending:
+                row_y = self._row_centers()
+                lines = self._select_card(cx, row_y[ri])
+                if lines is None:
+                    self.log_warning("第 %d 页 r%d-c%d 重试仍没变，跳过"
+                                     % (page + 1, ri, ci))
+                    continue
+                new_this += self._record(
+                    lines, page, ri, ci, seen, rows, path)
+            self.log_info("第 %d 页 +%d 条（累计 %d）"
+                          % (page + 1, new_this, len(rows)))
+            row_y = self._row_centers()
+            if self._check_page_end(row_y, self._bg_color(row_y)):
                 break
-            total_shift += shift
-            # 自适应：这次多滑了就少拖一点，让实测位移收敛到 2 行
-            drag_px = min(620.0, max(180.0,
-                                     drag_px + (DRAG_PX - shift) * 0.8))
+            empty_pages = empty_pages + 1 if new_this == 0 else 0
+            if empty_pages >= EMPTY_STOP:
+                self.log_info("连续 %d 页没有新品 → 到底" % EMPTY_STOP)
+                break
+
+            diff = self._drag()
+            if diff < MOVE_DIFF:
+                self.log_info("拖不动了 → 到底（本页已采完）")
+                break
 
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             for page, cell, name, detail in rows:
