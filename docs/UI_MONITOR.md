@@ -35,7 +35,7 @@
 | `connection` | `height` `title` `meta` `show_run` `run_text` `stop_text`（`starting_text` 已是遗留键，不再使用） |
 | `captain` | `height` `label` `hint` `show_quick_match` `quick_label` `show_auto_training` `start_text` `pause_text` `show_stop` `stop_size` `show_score_stop` `show_stamina_toggle` `target_width` `combo_width` |
 | `hero` | `height` `kicker` `title` `fallback` `right_ratio` `stats[]`（`label`/`value`/`suffix`/`bar`/`bar_key`/`bar_width`） |
-| `cards` | `height` `items[]`（`id`/`title`/`rows[]`，每行 `[标签, 模板]`） |
+| `cards` | `height` `items[]`（`id`/`title`（可省略，省略则不占表头行）/`rows[]`，每行 `[标签, 模板]`/`controls[]`） |
 | `timeline` | `title` `max_rows` `time_width` `event_width` |
 
 文案里的 `{key}` 是数据占位符（见下方「可用字段」）；`fallback` 是整句兜底，
@@ -140,11 +140,12 @@ task._paused = False     # 只清暂停标志：不能调 task.unpause()，它�
 - 流派未选择 + 没指定队长 + 勾了「刷到目标分」：日历认出队长前读不到位置/评分，
   只能跑一局；开局会提示「刷到目标分需要勾选队长」。
 
-## 快速比赛 / 刷到目标分 / 允许吃专注药
+## 快速比赛 / 自动存图 / 刷到目标分 / 允许吃专注药
 
 | 控件 | 作用 |
 | --- | --- |
-| 快速比赛 | 位置在第二栏右侧「赛事」卡（2026-11-22 从队长栏移过来）。只管 `QuickMatchTask`（全国大赛/圣山战/竞技场）。开＝只 enable（**执行器停着只提示「按第一栏【启动】后生效」，不替你启动**，2026-11-10 改）；关＝只 disable，绝不动执行器。开关状态落盘 |
+| 自动存图 | 卡片区第一行（原「赛事」卡，默认勾选）。训练倍率 **>500% 且破上一次纪录**时，把数字追加到 `newrecord/boost_records.json`；勾选时同时存当时的画面 `newrecord/boost_<v>_<时间>.jpg`。关闭后只记数字、不存截图。状态落盘（配置键 `自动存图`） |
+| 快速比赛 | 位置在卡片区最右那张（原「赛事」卡，2026-11-24 去掉表头后无标题）。只管 `QuickMatchTask`（全国大赛/圣山战/竞技场）。开＝只 enable（**执行器停着只提示「按第一栏【启动】后生效」，不替你启动**，2026-11-10 改）；关＝只 disable，绝不动执行器。开关状态落盘 |
 | 全国大赛 | 「赛事」卡里的【开始】：启动 `NationalCupTask`，自动进赛事 → 玩法目录 → 全国大赛，连续挑战到挑战券用完（能跳过就跳过，跳不了进比赛快进） |
 | 刷到目标分 | 勾上＝练到某局结束评分 ≥ 目标分。没选队长时**允许勾**（接手模式）：日历认出队长后自动填「指定队长」再继续。**一局结束**读一次勾选，中途取消＝这局跑完停；运行中才勾且本局没有队列＝下次【开始】生效（界面提示，不补建）。目标分输入停 0.5 秒自动保存，不用等失焦 |
 | 允许吃专注药 | 映射到配置项 `自动恢复专注`：勾上＝专注低于开一局所需 30 时进恢复页喝 +30/+60 饮料（**绝不用钻石**）；取消＝不进恢复页，宁停不耗 |
@@ -164,6 +165,7 @@ task._paused = False     # 只清暂停标志：不能调 task.unpause()，它�
 | `captain` `captain_memory` `style` | 勾选/下拉记忆/当前流派 |
 | `paused` | **执行器**是否暂停（第一栏判据） |
 | `training_running` `training_active` `training_paused` `training_enabled` | 任务状态（第二栏判据；`training_enabled` 管【■】显隐） |
+| `auto_save` `quick_enabled` | 卡片区两个开关的勾选状态（配置键 `自动存图` / `QuickMatchTask._enabled`） |
 | `attrs` `score` | 六维 / 分数预测（六维不齐时 `score` 为 `None`） |
 | `skill_color` `skill_gold` `skill_white` `skill_gained` `skill_last` | 技能数（配置里是开局自带，`gained` 是本局三选一累加） |
 | `quick_enabled` `score_stop` `score_target` `stamina_allowed` | 第二栏设置的回填值 |

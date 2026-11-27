@@ -14,6 +14,7 @@
 | `src/tasks/training/flow.py` | 单拍状态机、卡死检测、存证 | 业务判据 |
 | `src/tasks/training/parsers.py` | 只读解析：OCR 文本 → 结构化数据、帧取色 | 点击、等待 |
 | `src/tasks/training/scoring.py` | 纯打分（输入 dict / 文本，输出数字） | 任何 `self.click` |
+| `src/tasks/training/records.py` | **跨局长期纪录**：倍率 best + 每次破纪录的图/条目，写 `newrecord/` | 局内调试存证（那走 `evidence`） |
 | `src/tasks/training/daycycle.py` | **全局日期 + 两个新一天入口 + 当天状态**（唯一读顶栏日期的地方） | 具体业务的判据 |
 | `src/tasks/training/systemui.py` | **系统级固定控件**（返回 / 倍速 / 历史记录 / 菜单 / 快进） | 任何业务判断 |
 | `src/tasks/training/interactions.py` | **通用交互层**：选选项 / 按确定 / 按坐标退出 / 购买成交判定（**零地点知识**） | 地点知识、业务判断 |

@@ -20,5 +20,6 @@
 move_back = None
 
 # base.py:34  def swipe(self, from_x, from_y, to_x, to_y, duration, settle_time=0)
-# 本项目的 GirlsInteraction.swipe 按毫秒解析 duration，settle_time 保留给基类契约。
+# 本项目的 GirlsInteraction.swipe 按毫秒解析 duration；settle_time 现在用于
+# 「拖-停-放」松手前停顿（2026-11-24 图鉴翻页）。
 settle_time = None

@@ -54,19 +54,28 @@ def _hot_reload():
     import src.tasks.training.parsers as parsers_mod
     import src.tasks.training.scoring as scoring_mod
     import src.tasks.training.handlers as handlers_mod
+    import src.tasks.training.handlers.training as handler_mod
     import src.tasks.ui.labels as labels_mod      # noqa: F401  （先刷常量）
 
     old_base = base_mod.BaseGirlsTask
     old_parsers = parsers_mod.TrainingParsersMixin
     old_scoring = scoring_mod.TrainingScoringMixin
+    old_handlers = handler_mod.TrainingHandlers
 
     importlib.reload(labels_mod)
     importlib.reload(base_mod)
     importlib.reload(parsers_mod)
     importlib.reload(scoring_mod)
+    # handler 子模块必须显式 reload：handlers/__init__.py 的 HANDLERS 才会引用新方法。
+    importlib.reload(handler_mod)
     importlib.reload(handlers_mod)
 
     patched = []
+    new_handlers = handler_mod.TrainingHandlers
+    # 新方法要 setattr 回**旧类**：TrainingTask 的 MRO 指向旧类，不 patch 就是旧行为。
+    for name in ("handle_breath_difficulty", "pick_breath_card", "breath_card_cost"):
+        setattr(old_handlers, name, getattr(new_handlers, name))
+        patched.append(name)
     for name in ("card_quality_color", "quality_cards"):
         setattr(old_parsers, name, getattr(parsers_mod.TrainingParsersMixin, name))
         patched.append(name)

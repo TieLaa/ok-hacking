@@ -77,3 +77,5 @@ _game_data_/
 
 # agent / 临时对比目录（.cache/ok304 之类）
 .cache/
+# 训练倍率纪录（长期保存的用户数据，不进版本库）
+newrecord/

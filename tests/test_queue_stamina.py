@@ -565,6 +565,74 @@ class BreathDifficultyPage(unittest.TestCase):
         self.assertEqual(len(clicks), 1, "应该**重新选卡**，不是直接点确定")
         self.assertTrue(getattr(task, "_breath_picked", False))
 
+    def page_with_stamina(self, stamina="16/130"):
+        """2026-11-25 实跑帧（logs/1125-093234_野上泷/debug/1125-094543_nochange3）。
+
+        三张卡各带体力消耗：4分钟⚡20（红，买不起）、2分钟⚡0、3分钟⚡10；
+        顶栏体力 16/130、零花钱 441。中间那张的「0」OCR 读不出来。
+        """
+        return [
+            box(35, 16, "第5周", 94, 40),
+            box(163, 18, "星期四", 85, 35),
+            box(305, 13, stamina, 172, 45),
+            box(848, 18, "441", 58, 35),
+            box(676, 136, "选择憋气难度", 192, 39),
+            box(372, 336, "进阶", 68, 37),
+            box(269, 391, "4分钟", 76, 35),
+            box(252, 477, "更高概率获得大量零用钱", 309, 27),
+            box(361, 567, "B 20", 90, 54),
+            box(742, 335, "进阶", 69, 41),
+            box(635, 387, "2分钟", 83, 40),
+            box(635, 474, "随机获得属性或零用钱", 284, 32),
+            box(1114, 336, "进阶", 68, 37),
+            box(1008, 387, "3分钟", 82, 40),
+            box(1006, 474, "有机会获得大量零用钱", 286, 32),
+            box(1105, 567, "B10", 88, 54),
+            box(732, 769, "确定", 77, 41),
+        ]
+
+    def test_skips_card_that_costs_more_stamina(self):
+        """体力 16 时不能选 ⚡20 的 4 分钟档：点了游戏只弹「请选择一个选项」。
+
+        2026-11-25 实跑：handler 只按「时长最长」选 4 分钟档，
+        「确定」连点无效 → noresp3s / nochange3 看门狗接管。
+        """
+        page = self.page_with_stamina()
+        task = task_with(page)
+        self.assertTrue(task.handle_breath_difficulty(page))
+        clicks = [a for a in task.actions if a[0] == "click"]
+        self.assertEqual(len(clicks), 1)
+        self.assertGreater(clicks[0][1], 900, "应该选右边的 3 分钟档（⚡10）")
+        self.assertTrue(any("体力 16" in msg for msg in task.logs))
+
+    def test_falls_back_to_cheapest_when_stamina_is_low(self):
+        """体力连 ⚡10 都不够时，落到 ⚡0 的 2 分钟档。"""
+        page = self.page_with_stamina("5/130")
+        task = task_with(page)
+        self.assertTrue(task.handle_breath_difficulty(page))
+        clicks = [a for a in task.actions if a[0] == "click"]
+        self.assertEqual(len(clicks), 1)
+        self.assertTrue(700 < clicks[0][1] < 850, "应该落到中间的 2 分钟档（⚡0）")
+
+    def test_lowers_tier_after_two_dead_confirms(self):
+        """点卡后确定连点两次没反应 → 换下一档，不是重选同一张。
+
+        2026-11-25 实跑就是这个死循环：重选同一张 ⚡20 的卡，
+        每次都被游戏拒绝，直到看门狗接管。
+        """
+        page = self.page_with_stamina()
+        task = task_with(page)
+        self.assertTrue(task.handle_breath_difficulty(page))
+        task._breath_confirms = 2            # 之后连点两次「确定」都没翻页
+        task._breath_picked = True
+        self.assertTrue(task.handle_breath_difficulty(page))   # 这一拍只重置状态
+        self.assertEqual(task._breath_rank, 1)
+        task.actions.clear()
+        self.assertTrue(task.handle_breath_difficulty(page))   # 这一拍重新选卡
+        clicks = [a for a in task.actions if a[0] == "click"]
+        self.assertEqual(len(clicks), 1, "应该重新选卡（降一档），不是点确定")
+        self.assertTrue(700 < clicks[0][1] < 850, "降档后落到 2 分钟档（⚡0）")
+
     def test_not_this_page(self):
         texts = [box(600, 300, "训练剧本", 160, 40)]
         task = task_with(texts)
